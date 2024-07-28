@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "tkc-lvlab"
+version = "0.1.0"
+description = ""
+authors = ["Chris Row <1418370+memblin@users.noreply.github.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+click = "^8.1.7"
+pyyaml = "^6.0.1"
+tqdm = "^4.66.4"
+requests = "^2.32.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+lvlab = "tkc_lvlab.cli:run"

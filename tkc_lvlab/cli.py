@@ -264,9 +264,19 @@ def status():
 
     environment, images, config_defaults, machines = parse_config()
 
+    conn = connect_to_libvirt()
+
+    # Get a list of current VMs
+    current_vms = [dom.name() for dom in conn.listAllDomains()]
+
     print("Machines Defined:\n")
-    for vm in machines:
-        print(f"  - { vm['hostname'] }")
+    for machine in machines:
+        if machine["hostname"] in current_vms:
+            vm = conn.lookupByName(machine["hostname"])
+            vm_status, vm_status_reason = get_domain_state_string(vm.state())
+            print(f"  - { machine['hostname'] } is {vm_status} ({vm_status_reason})")
+        else:
+            print(f"  - { machine['hostname'] } is undeployed")
 
     print()
 

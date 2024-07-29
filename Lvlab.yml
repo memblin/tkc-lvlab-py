@@ -32,6 +32,12 @@ environment:
           - name: eth0
             ip4: 192.168.122.16/24
             ip4gw: 192.168.122.1
+      - hostname: ghar.local
+        os: fedora40
+        interfaces:
+          - name: eth0
+            ip4: 192.168.122.17/24
+            ip4gw: 192.168.122.1
 
 images:
   - name: fedora40

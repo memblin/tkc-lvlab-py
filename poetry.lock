@@ -147,6 +147,16 @@ files = [
 ]
 
 [[package]]
+name = "libvirt-python"
+version = "10.5.0"
+description = "The libvirt virtualization API python binding"
+optional = false
+python-versions = ">=3.6"
+files = [
+    {file = "libvirt-python-10.5.0.tar.gz", hash = "sha256:785023500f58d3e8e829af98647d43eee97e517aacc9d9e7ded43594ea52d032"},
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.1"
 description = "YAML parser and emitter for Python"
@@ -267,4 +277,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "d4e067befe40f14399beffd724dd29dddda4d004597265fb954ba15ac64192cb"
+content-hash = "ea1ee587df2184c0fd45a3a46b98f8c06ebdf04e21a4b9077ef1ed4782250326"

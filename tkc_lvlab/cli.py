@@ -1,10 +1,23 @@
 import click
+import libvirt
 import os
 import requests
 import yaml
 
 from tqdm import tqdm
 from urllib.parse import urlparse
+from tkc_lvlab.utils.libvirt import get_domain_state_string
+
+def connect_to_libvirt(uri=None):
+    """Connect to Hypervisor"""
+    if uri == None:
+        uri = "qemu:///system"
+
+    conn = libvirt.open(uri)
+    if not conn:
+        raise SystemExit(f"Failed to open connection to {uri}")
+    
+    return conn
 
 
 def download_file(url, destination):
@@ -25,6 +38,14 @@ def download_file(url, destination):
 
     if total_size != 0 and progress_bar.n != total_size:
         raise RuntimeError(f"Could not download file: {url}")
+
+
+def get_machine_by_hostname(machines, hostname):
+    """Get a machine by hostname from the machines list"""
+    for machine in machines:
+        if machine.get("hostname", None) == hostname:
+            return machine
+    return None
 
 
 def parse_config(fpath=None):
@@ -48,7 +69,7 @@ def parse_config(fpath=None):
     else:
         print(f"{fpath} not found. Please create enviornment definition.")
 
-        return (None, None, None, None)
+    return (None, None, None, None)
 
 
 def parse_file_from_url(url):
@@ -69,8 +90,55 @@ def run():
 @click.command()
 @click.argument("vm_name")
 def up(vm_name):
-    """Start a VM."""
-    click.echo(f"Starting VM: {vm_name}")
+    """Start a machine defined in the Lvlab.yml manifest."""
+    environment, images, config_defaults, machines = parse_config()
+
+    cloud_image_dir = config_defaults.get(
+        "cloud_image_base_dir", "/var/lib/libvirt/cloud-images"
+    )
+
+    # Lookup our machine config from the Lvlab.yml manifest
+    machine = get_machine_by_hostname(machines, vm_name)
+    if machine:
+        # Connect to Libvirt
+        conn = connect_to_libvirt()
+
+        # Get a list of current VMs
+        current_vms = [dom.name() for dom in conn.listAllDomains()]
+
+        if vm_name in current_vms:
+            print(f"The VM, {vm_name}, already exists.")
+
+            vm = conn.lookupByName(machine["hostname"])
+            vm_status, vm_status_reason = get_domain_state_string(vm.state())
+            print(f"Status: {vm_status}, {vm_status_reason}")
+
+            # If VM is shutdown, start it up
+            if vm_status in ["Shut Off", "Crashed"]:
+                print(f"Trying to start {vm_name}...")
+                if vm.create() > 0:
+                    raise SystemExit(f"Cannot boot VM {vm_name}")
+                
+                cur_vm_status, cur_vm_status_reason = get_domain_state_string(vm.state())
+                print(f"Status: {cur_vm_status}, {cur_vm_status_reason}")
+
+            elif vm_status in ["Running"]:
+                print(f"The VM {vm_name} is running already.")    
+
+        else:
+            print(f"The VM {vm_name}, doesn't exist yet.")
+            print(f"Creating VM: {vm_name}.")
+
+        #     # TODO: Create disk images backed by cloud image
+        #     # TODO: Create cloud-init data and iso
+        #     # TODO: virt-install the VM and check status
+
+        conn.close()
+
+    else:
+        click.echo(f"Machine not found:  {vm_name}")
+    
+    print()
 
 
 @click.command()
@@ -78,6 +146,55 @@ def up(vm_name):
 def destroy(vm_name):
     """Destroy a VM."""
     click.echo(f"Destroying VM: {vm_name}")
+
+
+@click.command()
+@click.argument("vm_name")
+def down(vm_name):
+    """Shutdown a machine defined in the Lvlab.yml manifest."""
+    click.echo(f"Shutting down VM: {vm_name}")
+    environment, images, config_defaults, machines = parse_config()
+
+    # Lookup our machine config from the Lvlab.yml manifest
+    machine = get_machine_by_hostname(machines, vm_name)
+    if machine:
+        # Connect to Libvirt
+        conn = connect_to_libvirt()
+
+        # Get a list of current VMs
+        current_vms = [dom.name() for dom in conn.listAllDomains()]
+
+        if vm_name in current_vms:
+            print(f"The VM {vm_name} exists.")
+
+            vm = conn.lookupByName(machine["hostname"])
+            vm_status, vm_status_reason = get_domain_state_string(vm.state())
+            print(f"Status: {vm_status}, {vm_status_reason}")
+
+            # If VM is shutdown, start it up
+            if vm_status in ["Running"]:
+                print(f"Trying to Shutdown {vm_name}...")
+                if vm.shutdown() > 0:
+                    raise SystemExit(f"Cannot shutdown VM {vm_name}")
+                
+            elif vm_status in ["Shut Off", "Crashed"]:
+                print(f"The VM {vm_name} is not Running.")    
+
+        else:
+            print(f"The VM {vm_name}, doesn't exist")
+
+        #     # TODO: Create disk images backed by cloud image
+        #     # TODO: Create cloud-init data and iso
+        #     # TODO: virt-install the VM and check status
+
+        conn.close()
+
+    else:
+        click.echo(f"Machine not found:  {vm_name}")
+    
+    print()
+
+
 
 
 @click.command()
@@ -130,6 +247,17 @@ def init():
 
 
 @click.command()
+def capabilities():
+    """Hypervisor Capabilities"""
+    conn = connect_to_libvirt()
+
+    caps = conn.getCapabilities()
+    print("Capabilities:\n" + caps)
+
+    conn.close()
+
+
+@click.command()
 def status():
     """Show the status of the environment."""
     print()
@@ -151,9 +279,11 @@ def status():
 
 # Bulid the CLI
 run.add_command(up)
+run.add_command(down)
 run.add_command(destroy)
 run.add_command(init)
 run.add_command(status)
+run.add_command(capabilities)
 
 
 if __name__ == "__main__":

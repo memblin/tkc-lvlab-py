@@ -4,9 +4,10 @@ import os
 import requests
 import yaml
 
-from tqdm import tqdm
 from urllib.parse import urlparse
 from tkc_lvlab.utils.libvirt import get_domain_state_string
+from tkc_lvlab.utils.images import download_file
+
 
 def connect_to_libvirt(uri=None):
     """Connect to Hypervisor"""
@@ -16,28 +17,8 @@ def connect_to_libvirt(uri=None):
     conn = libvirt.open(uri)
     if not conn:
         raise SystemExit(f"Failed to open connection to {uri}")
-    
+
     return conn
-
-
-def download_file(url, destination):
-    """Download a file via requests library"""
-
-    # Streaming, so we can iterate over the response.
-    response = requests.get(url, stream=True)
-
-    # Sizes in bytes.
-    total_size = int(response.headers.get("content-length", 0))
-    block_size = 1024
-
-    with tqdm(total=total_size, unit="B", unit_scale=True) as progress_bar:
-        with open(destination, "wb") as file:
-            for data in response.iter_content(block_size):
-                progress_bar.update(len(data))
-                file.write(data)
-
-    if total_size != 0 and progress_bar.n != total_size:
-        raise RuntimeError(f"Could not download file: {url}")
 
 
 def get_machine_by_hostname(machines, hostname):
@@ -118,12 +99,14 @@ def up(vm_name):
                 print(f"Trying to start {vm_name}...")
                 if vm.create() > 0:
                     raise SystemExit(f"Cannot boot VM {vm_name}")
-                
-                cur_vm_status, cur_vm_status_reason = get_domain_state_string(vm.state())
+
+                cur_vm_status, cur_vm_status_reason = get_domain_state_string(
+                    vm.state()
+                )
                 print(f"Status: {cur_vm_status}, {cur_vm_status_reason}")
 
             elif vm_status in ["Running"]:
-                print(f"The VM {vm_name} is running already.")    
+                print(f"The VM {vm_name} is running already.")
 
         else:
             print(f"The VM {vm_name}, doesn't exist yet.")
@@ -137,7 +120,7 @@ def up(vm_name):
 
     else:
         click.echo(f"Machine not found:  {vm_name}")
-    
+
     print()
 
 
@@ -176,9 +159,9 @@ def down(vm_name):
                 print(f"Trying to Shutdown {vm_name}...")
                 if vm.shutdown() > 0:
                     raise SystemExit(f"Cannot shutdown VM {vm_name}")
-                
+
             elif vm_status in ["Shut Off", "Crashed"]:
-                print(f"The VM {vm_name} is not Running.")    
+                print(f"The VM {vm_name} is not Running.")
 
         else:
             print(f"The VM {vm_name}, doesn't exist")
@@ -191,10 +174,8 @@ def down(vm_name):
 
     else:
         click.echo(f"Machine not found:  {vm_name}")
-    
+
     print()
-
-
 
 
 @click.command()
@@ -231,12 +212,18 @@ def init():
                 download_file(image["checksum_url"], checksum_url_fpath)
 
         if image.get("checksum_url_gpg", None):
-            print("Checksum URL GPG is set, this is normally to validate the checksum_url content.")
+            print(
+                "Checksum URL GPG is set, this is normally to validate the checksum_url content."
+            )
             checksum_url_gpg_fname = parse_file_from_url(image["checksum_url_gpg"])
-            checksum_url_gpg_fpath = os.path.join(cloud_image_dir, checksum_url_gpg_fname)
+            checksum_url_gpg_fpath = os.path.join(
+                cloud_image_dir, checksum_url_gpg_fname
+            )
 
             if os.path.isfile(checksum_url_gpg_fpath):
-                print(f"The image checksum GPG file {checksum_url_gpg_fpath} already exists.")
+                print(
+                    f"The image checksum GPG file {checksum_url_gpg_fpath} already exists."
+                )
             else:
                 print(
                     f"The image checksum GPG file {checksum_url_gpg_fpath} does not exist, attempting to download."

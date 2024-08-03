@@ -125,7 +125,7 @@ def up(vm_name):
             vdisk_backing_fpath = cloud_image_dir + "/" + backing_image_name
 
             if os.path.isfile(vdisk_fpath):
-                raise SystemExit(f"{vdisk_fpath} already exists. May need to clean-up a previous deployment.\n")
+                raise SystemExit(f"The vDisk {vdisk_fpath} already exists. May need to clean-up a previous deployment.\n")
 
             if not os.path.exists(os.path.dirname(vdisk_fpath)):
                 os.makedirs(os.path.dirname(vdisk_fpath))
@@ -138,7 +138,7 @@ def up(vm_name):
         conn.close()
 
     else:
-        click.echo(f"Machine not found:  {vm_name}")
+        click.echo(f"Machine not found: {vm_name}")
 
     print()
 

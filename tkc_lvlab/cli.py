@@ -185,10 +185,6 @@ def down(vm_name):
         else:
             print(f"The VM {vm_name}, doesn't exist")
 
-        #     # TODO: Create disk images backed by cloud image
-        #     # TODO: Create cloud-init data and iso
-        #     # TODO: virt-install the VM and check status
-
         conn.close()
 
     else:

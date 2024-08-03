@@ -6,6 +6,7 @@ import yaml
 from urllib.parse import urlparse
 from tkc_lvlab.utils.libvirt import get_domain_state_string
 from tkc_lvlab.utils.images import checksum_verify_file, download_file, gpg_verify_file
+from tkc_lvlab.utils.vdisk import create_vdisk
 
 
 def connect_to_libvirt(uri=None):
@@ -74,8 +75,14 @@ def up(vm_name):
     environment, images, config_defaults, machines = parse_config()
 
     cloud_image_dir = config_defaults.get(
-        "cloud_image_base_dir", "/var/lib/libvirt/cloud-images"
+        "cloud_image_base_dir", "/var/lib/libvirt"
     )
+    cloud_image_dir += "/cloud-images"
+
+    disk_image_dir = config_defaults.get(
+        "disk_image_base_dir", "/var/lib/libvirt"
+    )
+    disk_image_dir += f"/{environment.get("name", "lvlab_noname")}"
 
     # Lookup our machine config from the Lvlab.yml manifest
     machine = get_machine_by_hostname(machines, vm_name)
@@ -110,10 +117,23 @@ def up(vm_name):
         else:
             print(f"The VM {vm_name}, doesn't exist yet.")
             print(f"Creating VM: {vm_name}.")
+            
+            vdisk_fpath = os.path.join(disk_image_dir, machine.get('hostname'), "disk0.qcow2")
 
-        #     # TODO: Create disk images backed by cloud image
-        #     # TODO: Create cloud-init data and iso
-        #     # TODO: virt-install the VM and check status
+            backing_image = [img for img in images if img['name'] == environment.get("os", config_defaults.get("os", "fedora40"))][0]
+            backing_image_name = parse_file_from_url(backing_image["image_url"])
+            vdisk_backing_fpath = cloud_image_dir + "/" + backing_image_name
+
+            if os.path.isfile(vdisk_fpath):
+                raise SystemExit(f"{vdisk_fpath} already exists. May need to clean-up a previous deployment.\n")
+
+            if not os.path.exists(os.path.dirname(vdisk_fpath)):
+                os.makedirs(os.path.dirname(vdisk_fpath))
+
+            create_vdisk(vdisk_fpath, machine.get("disk", config_defaults.get("disk", "15GB")), vdisk_backing_fpath)
+
+            # TODO: Create cloud-init data and iso
+            # TODO: virt-install the VM and check status
 
         conn.close()
 

@@ -1,7 +1,10 @@
+"""Module for libvirt related functions and classes"""
+
 import libvirt
 
 
 def get_domain_state_string(state):
+    """Humanize the current state of the domain."""
 
     vir_domain_state = {
         libvirt.VIR_DOMAIN_NOSTATE: "No State",

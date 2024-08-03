@@ -23,7 +23,9 @@ def download_file(url, destination):
                 file.write(data)
 
     if total_size != 0 and progress_bar.n != total_size:
-        raise RuntimeError(f"Could not download file: {url}")
+        #raise RuntimeError(f"Could not download file: {url}")
+        print(f"Failed to download {url}, try init again. If issue continues validate remote file accessibility.")
+
 
 
 def gpg_verify_file(keyring_fpath=None, verify_fpath=None):
@@ -111,9 +113,9 @@ def checksum_verify_file(checksum_fpath=None, verify_fpath=None, checksum_type=N
             caclulated_checksum =  sha.hexdigest()
 
         if caclulated_checksum == expected_checksum:
-            print(f"Calculated checksum for {verify_fpath} matches expected checksum from {checksum_fpath}.")
+            print(f"Calculated checksum OK for {verify_fpath} matches expected checksum from {checksum_fpath}.")
         else:
-            print(f"Calculated checksum for {verify_fpath} does not match expected checksum from {checksum_fpath}!!")
+            print(f"Calculated checksum BAD for {verify_fpath} does not match expected checksum from {checksum_fpath}!!")
             print(f"Calculated Cheksum: {caclulated_checksum}")
 
     else:

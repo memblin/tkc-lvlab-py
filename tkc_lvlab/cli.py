@@ -1,12 +1,11 @@
 import click
 import libvirt
 import os
-import requests
 import yaml
 
 from urllib.parse import urlparse
 from tkc_lvlab.utils.libvirt import get_domain_state_string
-from tkc_lvlab.utils.images import download_file
+from tkc_lvlab.utils.images import checksum_verify_file, download_file, gpg_verify_file
 
 
 def connect_to_libvirt(uri=None):
@@ -48,7 +47,7 @@ def parse_config(fpath=None):
         return (environment, images, config_defaults, machines)
 
     else:
-        print(f"{fpath} not found. Please create enviornment definition.")
+        raise SystemExit(f"{fpath} not found. Please create enviornment definition.\n")
 
     return (None, None, None, None)
 
@@ -198,23 +197,7 @@ def init():
             print(f"The image {image_fpath} does not exist, attempting to download.")
             download_file(image["image_url"], image_fpath)
 
-        if image["checksum_url"]:
-            print("Checksum URL is set, validating checksum of existing cloud image")
-            checksum_url_fname = parse_file_from_url(image["checksum_url"])
-            checksum_url_fpath = os.path.join(cloud_image_dir, checksum_url_fname)
-
-            if os.path.isfile(checksum_url_fpath):
-                print(f"The image checksum file already exists.")
-            else:
-                print(
-                    f"The image checksum file {checksum_url_fpath} does not exist, attempting to download."
-                )
-                download_file(image["checksum_url"], checksum_url_fpath)
-
         if image.get("checksum_url_gpg", None):
-            print(
-                "Checksum URL GPG is set, this is normally to validate the checksum_url content."
-            )
             checksum_url_gpg_fname = parse_file_from_url(image["checksum_url_gpg"])
             checksum_url_gpg_fpath = os.path.join(
                 cloud_image_dir, checksum_url_gpg_fname
@@ -229,6 +212,24 @@ def init():
                     f"The image checksum GPG file {checksum_url_gpg_fpath} does not exist, attempting to download."
                 )
                 download_file(image["checksum_url_gpg"], checksum_url_gpg_fpath)
+
+        if image.get("checksum_url", None):
+            checksum_url_fname = parse_file_from_url(image["checksum_url"])
+            checksum_url_fpath = os.path.join(cloud_image_dir, checksum_url_fname)
+
+            if os.path.isfile(checksum_url_fpath):
+                print(f"The image checksum file {checksum_url_fpath} already exists.")
+            else:
+                print(
+                    f"The image checksum file {checksum_url_fpath} does not exist, attempting to download."
+                )
+                download_file(image["checksum_url"], checksum_url_fpath)
+
+        if image.get("checksum_url_gpg", None):
+            gpg_verify_file(checksum_url_gpg_fpath, checksum_url_fpath)
+
+        if image.get("checksum_url", None):
+            checksum_verify_file(checksum_url_fpath, image_fpath, image["checksum_type"])
 
         print()
 

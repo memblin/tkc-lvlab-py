@@ -12,6 +12,7 @@ pyyaml = "^6.0.1"
 tqdm = "^4.66.4"
 requests = "^2.32.3"
 libvirt-python = "^10.5.0"
+python-gnupg = "^0.5.2"
 
 [build-system]
 requires = ["poetry-core"]

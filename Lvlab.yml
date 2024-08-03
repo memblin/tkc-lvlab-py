@@ -43,9 +43,11 @@ images:
   - name: fedora40
     image_url: https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2
     checksum_url: https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-40-1.14-x86_64-CHECKSUM
+    checksum_type: sha256
     checksum_url_gpg: https://fedoraproject.org/fedora.gpg
     cloud_init_network_version: 2
   - name: debian12
     image_url: https://cloud.debian.org/images/cloud/bookworm/20240717-1811/debian-12-generic-amd64-20240717-1811.qcow2
     checksum_url: https://cloud.debian.org/images/cloud/bookworm/20240717-1811/SHA512SUMS
+    checksum_type: sha512
     cloud_init_network_version: 2

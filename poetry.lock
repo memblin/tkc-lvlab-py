@@ -157,6 +157,17 @@ files = [
 ]
 
 [[package]]
+name = "python-gnupg"
+version = "0.5.2"
+description = "A wrapper for the Gnu Privacy Guard (GPG or GnuPG)"
+optional = false
+python-versions = "*"
+files = [
+    {file = "python-gnupg-0.5.2.tar.gz", hash = "sha256:01d8013931c9fa3f45824bbea7054c03d6e11f258a72e7e086e168dbcb91854c"},
+    {file = "python_gnupg-0.5.2-py2.py3-none-any.whl", hash = "sha256:72ce142af6da7f07e433fef148b445fb3e07854acd2f88739008838745c0e9f5"},
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.1"
 description = "YAML parser and emitter for Python"
@@ -277,4 +288,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "ea1ee587df2184c0fd45a3a46b98f8c06ebdf04e21a4b9077ef1ed4782250326"
+content-hash = "a56a74b0e0a55b82c0e948e4cdfa3a985c91ab5dd6be5d2bf6faac8b1ef54517"

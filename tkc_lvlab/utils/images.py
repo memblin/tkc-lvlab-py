@@ -5,13 +5,10 @@ import os
 import re
 from urllib.parse import urlparse
 
+import click
 import gnupg
 import requests
 from tqdm import tqdm
-from tkc_lvlab.logging import get_logger
-
-
-logger = get_logger(__name__)
 
 
 # pylint: disable=too-many-instance-attributes
@@ -71,7 +68,6 @@ class CloudImage:
                     progress_bar.update(len(data))
                     file.write(data)
 
-        # if total_size != 0 and progress_bar.n != total_size:
         if total_size not in (0, progress_bar.n):
             return False
 
@@ -80,7 +76,7 @@ class CloudImage:
     def _manage_image_dir(self):
         """Ensure the environments cloud-image directory exists"""
         if not os.path.isdir(self.image_dir):
-            logger.info("CloudImage creating image directory: %s", self.image_dir)
+            click.echo(f"CloudImage creating image directory: {self.image_dir}")
             os.makedirs(self.image_dir, exist_ok=True)
 
     def download_image(self) -> bool:
@@ -124,8 +120,8 @@ class CloudImage:
         if os.path.isfile(self.checksum_gpg_fpath) and os.path.isfile(
             self.checksum_fpath
         ):
-            logger.info(
-                "CloudImage Attepting GPG verification of %s", self.checksum_fpath
+            click.echo(
+                f"CloudImage {self.name} GPG verification of {self.checksum_fpath}"
             )
 
             gpg = gnupg.GPG()

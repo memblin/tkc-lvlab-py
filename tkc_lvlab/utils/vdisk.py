@@ -3,10 +3,7 @@
 import os
 import subprocess
 
-from tkc_lvlab.logging import get_logger
-
-
-logger = get_logger(__name__)
+import click
 
 
 def create_vdisk(vdisk_fpath, vdisk_size, vdisk_backing_image):
@@ -25,21 +22,21 @@ def create_vdisk(vdisk_fpath, vdisk_size, vdisk_backing_image):
     ]
 
     if os.path.isfile(vdisk_fpath):
-        print(
+        click.echo(
             f"vDisk {vdisk_fpath} already exists, May need to clean-up previous deployment."
         )
         return
 
     if not os.path.exists(os.path.dirname(vdisk_fpath)):
-        logger.info("vDisk path doesn't exist, attempting to create.")
+        click.echo("vDisk path doesn't exist, attempting to create.")
         try:
             os.makedirs(os.path.exists(os.path.dirname(vdisk_fpath)))
         except Exception as e:  # pylint: disable=broad-except
-            print(e)
+            click.echo(e)
             return
     else:
         try:
             subprocess.run(command, check=True)
-            print("vDisk image created successfully.")
+            click.echo("vDisk image created successfully.")
         except subprocess.CalledProcessError as e:
-            print(f"An error occurred creating vDisk image: {e}")
+            click.echo(f"An error occurred creating vDisk image: {e}")

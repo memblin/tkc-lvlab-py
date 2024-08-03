@@ -1,18 +1,14 @@
 """A CLI for deploying lab VMs on Libvirt"""
 
-import click
-import libvirt
 import os
 import sys
 
+import click
+import libvirt
 from tkc_lvlab.config import parse_config, parse_file_from_url
-from tkc_lvlab.logging import get_logger
 from tkc_lvlab.utils.libvirt import get_domain_state_string
 from tkc_lvlab.utils.images import CloudImage
 from tkc_lvlab.utils.vdisk import create_vdisk
-
-
-logger = get_logger(__name__)
 
 
 def connect_to_libvirt(uri=None):
@@ -44,67 +40,73 @@ def run():
 @click.command()
 def init():
     """Initialize the environment."""
-    environment, images, config_defaults, machines = parse_config()
+    try:
+        environment, images, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit()
 
-    logger.info(f'Initializing Libvirt Lab Environment: {environment["name"]}')
-    logger.info("")
+    click.echo()
+    click.echo(f'Initializing Libvirt Lab Environment: {environment["name"]}\n')
 
     for image_config in images:
         image = CloudImage(image_config, environment, config_defaults)
 
         if image.exists_locally("image"):
-            logger.info(f"CloudImage {image.name} exists locally: {image.image_fpath}")
+            click.echo(f"CloudImage {image.name} exists locally: {image.image_fpath}")
         else:
-            logger.info(f"Attempting to download image: {image.image_url}")
+            click.echo(f"Attempting to download image: {image.image_url}")
             if image.download_image():
-                logger.info(f"CloudImage downloaded to {image.image_fpath}")
+                click.echo(f"CloudImage downloaded to {image.image_fpath}")
             else:
-                logger.error("CloudImage download failed")
+                click.echo("CloudImage download failed")
 
         if image.checksum_url_gpg is not None:
             if image.exists_locally(file_type=("checksum_gpg")):
-                logger.info(
+                click.echo(
                     f"CloudImage {image.name} checksum GPG file exists locally: {image.checksum_gpg_fpath}"
                 )
             else:
                 if image.download_checksum_gpg():
-                    logger.info(
+                    click.echo(
                         f"CloudImage checksum GPG file downloaded to {image.checksum_gpg_fpath}"
                     )
                 else:
-                    logger.error(f"CloudImage checksum GPG file download failed")
+                    click.echo(f"CloudImage checksum GPG file download failed")
 
         if image.checksum_url is not None:
             if image.exists_locally(file_type="checksum"):
-                logger.info(
+                click.echo(
                     f"CloudImage {image.name} checksum file exists locally: {image.checksum_fpath}"
                 )
             else:
-                logger.info(
+                click.echo(
                     f"Attempting to download checksum file URL: {image.checksum_url}"
                 )
                 if image.download_checksum():
-                    logger.info(
-                        f"CloudImage checksum file downloaded to {image.checksum_fpath}"
+                    click.echo(
+                        f"CloudImage {image.name} checksum file downloaded to {image.checksum_fpath}"
                     )
                 else:
-                    logger.error("CloudImage checksum file download failed")
+                    click.echo("CloudImage {image.name} checksum file download failed")
 
         if image.checksum_url_gpg is not None and image.exists_locally(
             file_type=("checksum_gpg")
         ):
             if image.gpg_verify_checksum_file():
-                logger.info(f"CloudImage checksum file GPG validation OK")
+                click.echo(f"CloudImage {image.name} checksum file GPG validation OK")
             else:
-                logger.error(f"CloudImage checksum file GPG validation BAD")
+                click.echo(f"CloudImage {image.name} checksum file GPG validation BAD")
 
         if image.checksum_url is not None and image.exists_locally(
             file_type=("checksum")
         ):
             if image.checksum_verify_image():
-                logger.info(f"CloudImage checksum verification OK")
+                click.echo(f"CloudImage {image.name} checksum verification OK")
             else:
-                logger.error(f"CloudImage checksum verification BAD")
+                click.echo(f"CloudImage {image.name} checksum verification BAD")
+
+        click.echo()
 
 
 @click.command()
@@ -188,8 +190,6 @@ def up(vm_name):
     else:
         click.echo(f"Machine not found: {vm_name}")
 
-    print()
-
 
 @click.command()
 @click.argument("vm_name")
@@ -238,8 +238,6 @@ def down(vm_name):
     else:
         click.echo(f"Machine not found:  {vm_name}")
 
-    print()
-
 
 @click.command()
 def capabilities():
@@ -247,7 +245,7 @@ def capabilities():
     conn = connect_to_libvirt()
 
     caps = conn.getCapabilities()
-    print("Capabilities:\n" + caps)
+    click.echo("Capabilities:\n" + caps)
 
     conn.close()
 
@@ -255,25 +253,36 @@ def capabilities():
 @click.command()
 def status():
     """Show the status of the environment."""
-    environment, images, config_defaults, machines = parse_config()
+    try:
+        environment, images, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit()
 
-    # conn = connect_to_libvirt()
+    click.echo()
+    click.echo(f'LvLab Environment Name: {environment.get("name", "no-name-lvlab")}\n')
+    conn = connect_to_libvirt()
 
-    # # Get a list of current VMs
-    # current_vms = [dom.name() for dom in conn.listAllDomains()]
+    # Get a list of current VMs
+    current_vms = [dom.name() for dom in conn.listAllDomains()]
 
-    # print("Machines Defined:\n")
-    # for machine in machines:
-    #     if machine["hostname"] in current_vms:
-    #         vm = conn.lookupByName(machine["hostname"])
-    #         vm_status, vm_status_reason = get_domain_state_string(vm.state())
-    #         print(f"  - { machine['hostname'] } is {vm_status} ({vm_status_reason})")
-    #     else:
-    #         print(f"  - { machine['hostname'] } is undeployed")
+    click.echo("Machines Defined:\n")
+    for machine in machines:
+        if machine["hostname"] in current_vms:
+            vm = conn.lookupByName(machine["hostname"])
+            vm_status, vm_status_reason = get_domain_state_string(vm.state())
+            click.echo(
+                f"  - { machine['hostname'] } is {vm_status} ({vm_status_reason})"
+            )
+        else:
+            click.echo(f"  - { machine['hostname'] } is undeployed")
 
-    # print("Images Used:\n")
-    # for img in images:
-    #     print(f"  - { img['name'] }")
+    click.echo()
+    click.echo("Images Used:\n")
+    for img in images:
+        click.echo(f"  - { img['name'] }")
+
+    click.echo()
 
 
 # Bulid the CLI

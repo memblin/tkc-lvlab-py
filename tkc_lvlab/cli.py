@@ -255,7 +255,7 @@ def status():
 
     click.echo()
     click.echo(f'LvLab Environment Name: {environment.get("name", "no-name-lvlab")}\n')
-    conn = connect_to_libvirt()
+    conn = connect_to_libvirt(environment.get("libvirt_uri", None))
 
     # Get a list of current VMs
     current_vms = [dom.name() for dom in conn.listAllDomains()]
@@ -263,7 +263,7 @@ def status():
     click.echo("Machines Defined:\n")
     for machine in machines:
         if machine["vm_name"] in current_vms:
-            vm = conn.lookupByName(machine["hostname"])
+            vm = conn.lookupByName(machine["vm_name"])
             vm_status, vm_status_reason = get_domain_state_string(vm.state())
             click.echo(
                 f"  - { machine['vm_name'] } is {vm_status} ({vm_status_reason})"

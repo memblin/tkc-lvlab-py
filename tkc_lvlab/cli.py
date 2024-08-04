@@ -109,63 +109,35 @@ def up(vm_name):
     machine = Machine(get_machine_by_vm_name(machines, vm_name), config_defaults)
 
     if machine:
-        conn = connect_to_libvirt()
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
 
-        if vm_name in current_vms:
-            click.echo(f"The virtual machine {vm_name} already exists.")
-            vm = conn.lookupByName(machine.vm_name)
-            vm_status, vm_status_reason = get_domain_state_string(vm.state())
-            click.echo(f"Status: {vm_status}, {vm_status_reason}")
+        config_fpath = os.path.expanduser(os.path.join(
+            os.path.expanduser(config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images/lvlab")),
+            environment.get("name", "LvLabEnvironment"),
+            machine.hostname,
+        ))
 
-            # If VM is shutdown, start it up
-            if vm_status in ["Shut Off", "Crashed"]:
+        exists, status, status_reason = machine.exists_in_libvirt(environment.get("libvirt_uri", None))
+
+        if exists:
+            click.echo(f"The virtual machine {vm_name} exists in Libvirt")
+            click.echo(f"Status: {status}, {status_reason}")
+
+            if status in ["Shut Off", "Crashed"]:
                 click.echo(f"Trying to start {vm_name}...")
-                if vm.create() > 0:
-                    raise SystemExit(f"Cannot boot VM {vm_name}")
-
-                cur_vm_status, cur_vm_status_reason = get_domain_state_string(
-                    vm.state()
-                )
-                click.echo(f"Status: {cur_vm_status}, {cur_vm_status_reason}")
-
-            elif vm_status in ["Running"]:
+                if machine.poweron() > 0:
+                    click.echo(f"Cannot boot VM {vm_name}")
+            elif status in ["Running"]:
                 click.echo(f"The virtual machine {vm_name} is running already")
 
         else:
-            click.echo(f"The virtual machine {vm_name} doesn't exist yet")
             click.echo(f"Creating virtual machine: {vm_name}")
 
             cloud_image = CloudImage(
                 machine.os, images.get(machine.os), environment, config_defaults
             )
 
-            # Create Virtual Disks
-            for index, disk in enumerate(machine.disks):
-                vdisk = VirtualDisk(
-                    machine.hostname,
-                    disk,
-                    index,
-                    cloud_image,
-                    environment,
-                    config_defaults,
-                )
-
-                if vdisk.exists():
-                    click.echo(f"Virtual Disk: {vdisk.name} exists at {vdisk.fpath}")
-                else:
-                    click.echo(f"Creating Virtual Disk: {vdisk.fpath} at {vdisk.size}")
-                    if vdisk.create():
-                        if vdisk.exists():
-                            click.echo(f"Virtual Disk Created Successfully")
-                    else:
-                        click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
-
-            config_fpath = os.path.join(
-                config_defaults.get("disk_image_basedir", "~/.local/lvlab"),
-                environment.get("name", "LvLabEnvironment"),
-                machine.hostname,
-            )
+            # TODO: Check if vdisks exist before trying to create
+            machine.create_vdisks(environment, config_defaults, cloud_image)
 
             # Render and write cloud-init: network-config
             network_config = NetworkConfig(
@@ -216,8 +188,6 @@ def up(vm_name):
                 click.echo(f"Virtual machine deployment complete.")
             else:
                 click.echo(f"Virtual machine installation failed.")
-
-        conn.close()
 
     else:
         click.echo(f"Machine not found: {vm_name}")
@@ -292,14 +262,14 @@ def status():
 
     click.echo("Machines Defined:\n")
     for machine in machines:
-        if machine["hostname"] in current_vms:
+        if machine["vm_name"] in current_vms:
             vm = conn.lookupByName(machine["hostname"])
             vm_status, vm_status_reason = get_domain_state_string(vm.state())
             click.echo(
-                f"  - { machine['hostname'] } is {vm_status} ({vm_status_reason})"
+                f"  - { machine['vm_name'] } is {vm_status} ({vm_status_reason})"
             )
         else:
-            click.echo(f"  - { machine['hostname'] } is undeployed")
+            click.echo(f"  - { machine['vm_name'] } is undeployed")
 
     click.echo()
     click.echo("Images Used:\n")

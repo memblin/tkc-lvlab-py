@@ -12,8 +12,8 @@ environment:
           size: 25G
       interfaces:
           network: default
-      # cloud_image_basedir: /tmp
-      # disk_image_basedir: /tmp
+      # cloud_image_basedir: /var/lib/libvirt/images/lvlab
+      # disk_image_basedir: /var/lib/libvirt/images/lvlab
       shared_directories:
         # requires mounting in guest like:
         # mount -t virtiofs gitrepos /srv/git

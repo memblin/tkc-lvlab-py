@@ -34,7 +34,7 @@ class CloudImage:
         self.network_version = config.get("network_version", 1)
         self.filename = os.path.basename(urlparse(self.image_url).path)
         self.image_dir = os.path.join(
-            config_defaults.get("cloud_image_basedir", "~/.cache/lvlab"),
+            config_defaults.get("cloud_image_basedir", "/var/lib/libvirt/images/lvlab"),
             "cloud-images",
         )
         self.image_fpath = os.path.join(os.path.expanduser(self.image_dir), self.filename)

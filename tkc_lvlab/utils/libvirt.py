@@ -5,6 +5,8 @@ import click
 import libvirt
 import subprocess
 
+from .vdisk import VirtualDisk
+
 
 class Machine:
     """Libvirt Lab Virtual Machine"""
@@ -43,9 +45,32 @@ class Machine:
         self.interfaces = machine.get("interfaces", [])
         self.disks = machine.get("disks", [])
 
-    # virt-install --name=ns02.tkclabs.io --memory 4096 --vcpus=2 --import --disk path=/var/lib/libvirt/images/ns02.tkclabs.io/disk0.qcow2 \
-    # --disk path=/var/lib/libvirt/images/ns02.tkclabs.io/cidata.iso,device=cdrom --os-variant=fedora40 --network network=vlan10,model=virtio \
-    # --graphics vnc,listen=0.0.0.0 --noautoconsole
+
+    def create_vdisks(self, environment={}, config_defaults={}, cloud_image=None):
+        """Create all machine virtual disks"""
+
+        for index, disk in enumerate(self.disks):
+            vdisk = VirtualDisk(
+                self.hostname,
+                disk,
+                index,
+                cloud_image,
+                environment,
+                config_defaults,
+            )
+
+            if vdisk.exists():
+                click.echo(f"Virtual Disk: {vdisk.name} exists at {vdisk.fpath}")
+            else:
+                click.echo(f"Creating Virtual Disk: {vdisk.fpath} at {vdisk.size}")
+                if vdisk.create():
+                    if vdisk.exists():
+                        click.echo(f"Virtual Disk Created Successfully")
+                else:
+                    click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
+
+
+
     def deploy(self, config_path, uri):
         """Use virt-install to create a virtual machine"""
         command = [
@@ -111,7 +136,21 @@ class Machine:
         conn.close()
 
 
+    def exists_in_libvirt(self, uri):
+        """Virtual machine existance and status"""
+        conn = connect_to_libvirt(uri)
+        current_vms = [dom.name() for dom in conn.listAllDomains()]
+        if self.vm_name in current_vms:
+            vm = conn.lookupByName(self.vm_name)
+            status, status_reason = get_domain_state_string(vm.state)
+            conn.close()
+            return True, status, status_reason
+
+        conn.close()
+        return False, None, None
+
     def shutdown(self, uri):
+        """Shutdown the virtual machine"""
         conn = connect_to_libvirt(uri)
 
         # Get a list of current VMs
@@ -139,7 +178,6 @@ class Machine:
             click.echo(f"The virtual machine {self.vm_name} does not exist in this Libvirt URI")
 
         conn.close()
-
 
 
 
@@ -189,7 +227,6 @@ def get_domain_state_string(state):
 
 def get_machine_by_vm_name(machines, vm_name):
     """Get a machine by vm_name from the machines list"""
-    click.echo(f"Looking for machine {vm_name}")
     for machine in machines:
         if machine.get("vm_name", None) == vm_name:
             return machine

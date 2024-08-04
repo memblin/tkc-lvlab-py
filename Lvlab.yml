@@ -1,6 +1,7 @@
 ---
 environment:
   - name: libvirt-salt-dev
+    libvirt_uri: qemu:///system
     config_defaults:
       domain: local
       os: debian12
@@ -25,7 +26,8 @@ environment:
         shell: /bin/bash
 
     machines:
-      - hostname: salt
+      - vm_name: salt.local
+        hostname: salt
         os: debian12
         disks:
           - name: primary
@@ -34,19 +36,22 @@ environment:
           - name: enp1s0
             ip4: 192.168.122.12/24
             ip4gw: 192.168.122.1
-      - hostname: vault
+      - vm_name: vault.local
+        hostname: vault
         os: fedora40
         interfaces:
           - name: eth0
             ip4: 192.168.122.16/24
             ip4gw: 192.168.122.1
-      - hostname: ghar.local
+      - vm_name: ghar.local
+        hostname: ghar
         os: fedora40
         interfaces:
           - name: eth0
             ip4: 192.168.122.17/24
             ip4gw: 192.168.122.1
-      - hostname: dhcp-config.local
+      - vm_name: dhcp-config.local
+        hostname: dhcp-config
         os: fedora40
         interfaces:
           - name: eth0

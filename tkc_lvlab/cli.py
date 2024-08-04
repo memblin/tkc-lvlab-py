@@ -9,7 +9,7 @@ from .utils.cloud_init import CloudInitIso, MetaData, NetworkConfig, UserData
 from .utils.libvirt import (
     connect_to_libvirt,
     get_domain_state_string,
-    get_machine_by_hostname,
+    get_machine_by_vm_name,
     Machine,
 )
 from .utils.vdisk import VirtualDisk
@@ -104,7 +104,7 @@ def up(vm_name):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(get_machine_by_hostname(machines, vm_name), config_defaults)
+    machine = Machine(get_machine_by_vm_name(machines, vm_name), config_defaults)
 
     if machine:
         conn = connect_to_libvirt()
@@ -112,7 +112,7 @@ def up(vm_name):
 
         if vm_name in current_vms:
             click.echo(f"The virtual machine {vm_name} already exists.")
-            vm = conn.lookupByName(machine.hostname)
+            vm = conn.lookupByName(machine.vm_name)
             vm_status, vm_status_reason = get_domain_state_string(vm.state())
             click.echo(f"Status: {vm_status}, {vm_status_reason}")
 
@@ -209,6 +209,11 @@ def up(vm_name):
                 sys.exit(1)
 
             # TODO: virt-install the VM and check status
+            click.echo(f"Attempting to start virtual maching: {machine.hostname}.{machine.domain}")
+            if machine.deploy(config_fpath, environment.get('libvirt_uri', 'qemu:///session')):
+                click.echo(f"Virtual machine deployment complete.")
+            else:
+                click.echo(f"Virtual machine installation failed.")
 
         conn.close()
 
@@ -219,47 +224,39 @@ def up(vm_name):
 @click.command()
 @click.argument("vm_name")
 def destroy(vm_name):
-    """Destroy a VM."""
-    click.echo(f"Destroying VM: {vm_name}")
+    """Destroy a Virtual machine listed in the LvLab manifest"""
+    try:
+        environment, images, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
+
+    machine = Machine(get_machine_by_vm_name(machines, vm_name), config_defaults)
+
+    if machine:
+        click.echo(f"Destroying virtual machine: {vm_name}")
+        if machine.destroy(environment.get('libvirt_uri', 'qemu:///session')):
+            click.echo(f"Destruction appears successful.")
+    else:
+        click.echo(f"Machine not found:  {vm_name}")
 
 
 @click.command()
 @click.argument("vm_name")
 def down(vm_name):
     """Shutdown a machine defined in the Lvlab.yml manifest."""
-    click.echo(f"Shutting down VM: {vm_name}")
-    environment, images, config_defaults, machines = parse_config()
+    try:
+        environment, images, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
 
-    # Lookup our machine config from the Lvlab.yml manifest
-    machine = get_machine_by_hostname(machines, vm_name)
+    machine = Machine(get_machine_by_vm_name(machines, vm_name), config_defaults)
+
     if machine:
-        # Connect to Libvirt
-        conn = connect_to_libvirt()
-
-        # Get a list of current VMs
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
-
-        if vm_name in current_vms:
-            print(f"The VM {vm_name} exists.")
-
-            vm = conn.lookupByName(machine["hostname"])
-            vm_status, vm_status_reason = get_domain_state_string(vm.state())
-            print(f"Status: {vm_status}, {vm_status_reason}")
-
-            # If VM is shutdown, start it up
-            if vm_status in ["Running"]:
-                print(f"Trying to Shutdown {vm_name}...")
-                if vm.shutdown() > 0:
-                    raise SystemExit(f"Cannot shutdown VM {vm_name}")
-
-            elif vm_status in ["Shut Off", "Crashed"]:
-                print(f"The VM {vm_name} is not Running.")
-
-        else:
-            print(f"The VM {vm_name}, doesn't exist")
-
-        conn.close()
-
+        click.echo(f"Shutting down virtual machine: {vm_name}")
+        if machine.shutdown(environment.get('libvirt_uri', 'qemu:///session')):
+            click.echo(f"Shutdown appears successful. The virtual machine may take a short time to complete shutdown.")
     else:
         click.echo(f"Machine not found:  {vm_name}")
 

@@ -106,31 +106,22 @@ def up(vm_name):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(get_machine_by_vm_name(machines, vm_name), config_defaults)
+    machine = Machine(get_machine_by_vm_name(machines, vm_name), environment, config_defaults)
 
     if machine:
-
-        config_fpath = os.path.expanduser(os.path.join(
-            os.path.expanduser(config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images/lvlab")),
-            environment.get("name", "LvLabEnvironment"),
-            machine.hostname,
-        ))
 
         exists, status, status_reason = machine.exists_in_libvirt(environment.get("libvirt_uri", None))
 
         if exists:
-            click.echo(f"The virtual machine {vm_name} exists in Libvirt")
-            click.echo(f"Status: {status}, {status_reason}")
-
             if status in ["Shut Off", "Crashed"]:
-                click.echo(f"Trying to start {vm_name}...")
-                if machine.poweron() > 0:
-                    click.echo(f"Cannot boot VM {vm_name}")
+                click.echo(f"Virtual machine exists, trying to start {machine.vm_name}")
+                if machine.poweron(environment.get("libvirt_uri", None)) > 0:
+                    click.echo(f"Problem powering on VM {machine.vm_name}")
             elif status in ["Running"]:
-                click.echo(f"The virtual machine {vm_name} is running already")
+                click.echo(f"The virtual machine {machine.vm_name} is running already")
 
         else:
-            click.echo(f"Creating virtual machine: {vm_name}")
+            click.echo(f"Creating virtual machine: {machine.vm_name}")
 
             cloud_image = CloudImage(
                 machine.os, images.get(machine.os), environment, config_defaults
@@ -144,7 +135,7 @@ def up(vm_name):
                 cloud_image.network_version, machine.interfaces
             )
             rendered_network_config = network_config.render_config()
-            network_config_fpath = os.path.join(config_fpath, "network-config")
+            network_config_fpath = os.path.join(machine.config_fpath, "network-config")
             click.echo(f"Writing cloud-init network config file {network_config_fpath}")
             with open(
                 network_config_fpath, "w", encoding="utf-8"
@@ -154,7 +145,7 @@ def up(vm_name):
             # Render and write cloud-init: meta-data
             metadata_config = MetaData(machine.hostname)
             rendered_metadata_config = metadata_config.render_config()
-            metadata_config_fpath = os.path.join(config_fpath, "meta-data")
+            metadata_config_fpath = os.path.join(machine.config_fpath, "meta-data")
             click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
             with open(
                 metadata_config_fpath, "w", encoding="utf-8"
@@ -166,7 +157,7 @@ def up(vm_name):
                 config_defaults.get("cloud_init", {}), machine.hostname, machine.domain
             )
             rendered_userdata_config = userdata_config.render_config()
-            userdata_config_fpath = os.path.join(config_fpath, "user-data")
+            userdata_config_fpath = os.path.join(machine.config_fpath, "user-data")
             click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")
             with open(
                 userdata_config_fpath, "w", encoding="utf-8"
@@ -174,17 +165,17 @@ def up(vm_name):
                 userdata_config_file.write(rendered_userdata_config)
 
             # Write cloud-init config files to ISO to mount during launch
-            iso = CloudInitIso(metadata_config_fpath, userdata_config_fpath, network_config_fpath)
-            click.echo(f"Writing cloud-init config ISO file {os.path.join(config_fpath, 'cidata.iso')}")
-            if iso.write(config_fpath):
+            iso = CloudInitIso(metadata_config_fpath, userdata_config_fpath, network_config_fpath, os.path.join(machine.config_fpath, 'cidata.iso'))
+            click.echo(f"Writing cloud-init config ISO file {iso.fpath}")
+            if iso.write(iso.fpath):
                 click.echo(f'Writing cloud-init config ISO successful')
             else:
                 click.echo(f'Writing cloud-init config ISO failed.')
                 sys.exit(1)
 
-            # TODO: virt-install the VM and check status
-            click.echo(f"Attempting to start virtual maching: {machine.hostname}.{machine.domain}")
-            if machine.deploy(config_fpath, environment.get('libvirt_uri', 'qemu:///session')):
+            # virt-install the VM and check status
+            click.echo(f"Attempting to start virtual maching: {machine.vm_name}")
+            if machine.deploy(machine.config_fpath, environment.get('libvirt_uri', 'qemu:///session')):
                 click.echo(f"Virtual machine deployment complete.")
             else:
                 click.echo(f"Virtual machine installation failed.")
@@ -203,11 +194,11 @@ def destroy(vm_name):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(get_machine_by_vm_name(machines, vm_name), config_defaults)
+    machine = Machine(get_machine_by_vm_name(machines, vm_name), environment, config_defaults)
 
     if machine:
         click.echo(f"Destroying virtual machine: {vm_name}")
-        if machine.destroy(environment.get('libvirt_uri', 'qemu:///session')):
+        if machine.destroy(machine.config_fpath, environment.get('libvirt_uri', 'qemu:///session')):
             click.echo(f"Destruction appears successful.")
     else:
         click.echo(f"Machine not found:  {vm_name}")
@@ -223,11 +214,14 @@ def down(vm_name):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(get_machine_by_vm_name(machines, vm_name), config_defaults)
+    machine = Machine(get_machine_by_vm_name(machines, vm_name), environment, config_defaults)
 
     if machine:
         click.echo(f"Shutting down virtual machine: {vm_name}")
-        if machine.shutdown(environment.get('libvirt_uri', 'qemu:///session')):
+        if machine.shutdown(environment.get('libvirt_uri', 'qemu:///session')) > 0:
+            click.echo(f"Shutdown appears to have failed.")
+
+        else:
             click.echo(f"Shutdown appears successful. The virtual machine may take a short time to complete shutdown.")
     else:
         click.echo(f"Machine not found:  {vm_name}")
@@ -251,7 +245,7 @@ def status():
         environment, images, config_defaults, machines = parse_config()
     except TypeError as e:
         click.echo("Could not parse config file.")
-        sys.exit()
+        sys.exit(1)
 
     click.echo()
     click.echo(f'LvLab Environment Name: {environment.get("name", "no-name-lvlab")}\n')

@@ -117,10 +117,11 @@ class UserData:
 class CloudInitIso:
     """A Cloud init ISO"""
 
-    def __init__(self, meta_data_fpath: str, user_data_fpath: str, network_config_fpath: str):
+    def __init__(self, meta_data_fpath: str, user_data_fpath: str, network_config_fpath: str, iso_fpath: str):
         self.meta_data_fpath = meta_data_fpath
         self.user_data_fpath = user_data_fpath
         self.network_config_fpath = network_config_fpath
+        self.fpath = iso_fpath
 
     def write(self, config_fpath):
         """Add the cloud-init config files and write our cloud-init data ISO"""
@@ -147,9 +148,8 @@ class CloudInitIso:
                 rr_name='network-config',
                 joliet_path='/network-config',
             )
-            iso.write(os.path.join(config_fpath,'cidata.iso'))
+            iso.write(self.fpath)
             iso.close()
-
             return True
         
         except Exception as e:

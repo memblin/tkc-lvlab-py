@@ -1,5 +1,6 @@
 """Module for libvirt related functions and classes"""
 
+import glob
 import os
 import click
 import libvirt
@@ -11,7 +12,7 @@ from .vdisk import VirtualDisk
 class Machine:
     """Libvirt Lab Virtual Machine"""
 
-    def __init__(self, machine, config_defaults):
+    def __init__(self, machine, environment, config_defaults):
 
         # Apply interface defaults
         for index, iface in enumerate(machine.get("interfaces", [])):
@@ -35,7 +36,16 @@ class Machine:
         # Apply machine defaults
         machine = {**config_defaults, **machine}
 
-        self.vm_name = machine.get("vm_name", machine.get("hostname", None) + machine.get("domain", None))
+        # Setup a maching file path to contain all of the files associated
+        # with the instance of a machine.
+        vm_name = machine.get("vm_name", machine.get("hostname", None) + machine.get("domain", None))
+        config_fpath = os.path.expanduser(os.path.join(
+            os.path.expanduser(config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images/lvlab")),
+            environment.get("name", "LvLabEnvironment"),
+            vm_name
+        ))
+
+        self.vm_name = vm_name
         self.hostname = machine.get("hostname", None)
         self.domain = config_defaults.get("domain", None)
         # If we don't have an os by now set a default of Generic Linux 2022
@@ -44,6 +54,7 @@ class Machine:
         self.memory = machine.get("memory", config_defaults.get("memory", 2024))
         self.interfaces = machine.get("interfaces", [])
         self.disks = machine.get("disks", [])
+        self.config_fpath = config_fpath
 
 
     def create_vdisks(self, environment={}, config_defaults={}, cloud_image=None):
@@ -51,7 +62,7 @@ class Machine:
 
         for index, disk in enumerate(self.disks):
             vdisk = VirtualDisk(
-                self.hostname,
+                self.vm_name,
                 disk,
                 index,
                 cloud_image,
@@ -69,6 +80,29 @@ class Machine:
                 else:
                     click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
 
+
+    def delete_vdisks(self, environment={}, config_defaults={}, cloud_image=None):
+        """Delete all machine virtual disks"""
+
+        for index, disk in enumerate(self.disks):
+            vdisk = VirtualDisk(
+                self.hostname,
+                disk,
+                index,
+                cloud_image,
+                environment,
+                config_defaults,
+            )
+
+            if vdisk.exists():
+                click.echo(f"Virtual Disk: {vdisk.name} exists at {vdisk.fpath}")
+                if vdisk.delete():
+                    if vdisk.exists():
+                        click.echo(f"Deletion of virtual disk appears to have failed.")
+                    else:
+                        click.echo(f"Deletion of virtual disk successful.")
+            else:
+                click.echo(f"Virtual Disk: {vdisk.name} does not exist at {vdisk.fpath}")
 
 
     def deploy(self, config_path, uri):
@@ -106,79 +140,102 @@ class Machine:
             return False
 
 
-    def destroy(self, uri):
+    def destroy(self, config_path, uri):
+        """Destroy a machine by shutting it down, undefining it, and deleting the directory"""
         conn = connect_to_libvirt(uri)
 
-        # Get a list of current VMs
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
         if self.vm_name in current_vms:
-            click.echo(f"Found virtual machine {self.vm_name} ")
-
             vm = conn.lookupByName(self.vm_name)
-            vm_status, vm_status_reason = get_domain_state_string(vm.state())
-            click.echo(f"Current Status: {vm_status}\nCurrent Status Reason: {vm_status_reason}")
+            vm_status, _ = get_domain_state_string(vm.state())
 
             if vm_status in ["Running"]:
                 click.echo(f"Destroying {self.vm_name}")
                 if vm.destroy() > 0:
                     click.echo(f"Failed to destroy (forcefully shutdown) {self.vm_name}")
+                vm_status, _ = get_domain_state_string(vm.state())
 
             if vm_status in ["Shut Off", "Crashed"]:
-                click.echo(f"The virtual machine {self.vm_name} is not running, removing it from Libvirt")
                 if vm.undefine() > 0:
-                    return False
-                return True
+                    click.echo(f"Failed to undefine (remove from Libvirt) {self.vm_name} ")
+                else:
+                    try:
+                        machine_files = glob.glob(os.path.join(self.config_fpath, "*"))
+                        for file in machine_files:
+                            if os.path.isfile(file):
+                                os.remove(file)
+                            elif os.path.isdir(file):
+                                os.rmdir(file)
 
+                    except Exception as e:
+                        click.echo(f"Exception when deleting: {e}")
         else:
             click.echo(f"The virtual machine {self.vm_name} does not exist in this Libvirt URI")
 
         conn.close()
 
 
-    def exists_in_libvirt(self, uri):
-        """Virtual machine existance and status"""
+    def poweron(self, uri):
+        """Powreon a virtual machine"""
+        create_status = 0
         conn = connect_to_libvirt(uri)
         current_vms = [dom.name() for dom in conn.listAllDomains()]
+
         if self.vm_name in current_vms:
             vm = conn.lookupByName(self.vm_name)
-            status, status_reason = get_domain_state_string(vm.state)
-            conn.close()
-            return True, status, status_reason
+            vm_status, _ = get_domain_state_string(vm.state())
+
+            if vm_status in ["Shut Off", "Crashed"]:
+                create_status = vm.create()
+                vm_status, _ = get_domain_state_string(vm.state())
+
+        else:
+            click.echo(f"The virtual machine {self.vm_name} does not exist in this Libvirt URI")
 
         conn.close()
-        return False, None, None
+        return create_status
+
+
+    def exists_in_libvirt(self, uri):
+        """Virtual machine existance and status"""
+        exists, status, status_reason = (False, 0, 0)
+
+        conn = connect_to_libvirt(uri)
+        current_vms = [dom.name() for dom in conn.listAllDomains()]
+
+        if self.vm_name in current_vms:
+            vm = conn.lookupByName(self.vm_name)
+            status, status_reason = get_domain_state_string(vm.state())
+            exists = True
+
+        conn.close()
+        return exists, status, status_reason
 
     def shutdown(self, uri):
         """Shutdown the virtual machine"""
+        shutdown_status = 0
         conn = connect_to_libvirt(uri)
 
         # Get a list of current VMs
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
         if self.vm_name in current_vms:
-            click.echo(f"Found virtual machine {self.vm_name} ")
-
             vm = conn.lookupByName(self.vm_name)
-            vm_status, vm_status_reason = get_domain_state_string(vm.state())
-            click.echo(f"Current Status: {vm_status}\nCurrent Status Reason: {vm_status_reason}")
+            vm_status, _ = get_domain_state_string(vm.state())
 
             if vm_status in ["Running"]:
-                click.echo(f"Attempting to Shutdown {self.vm_name}")
-                if vm.shutdown() > 0:
-                    return False
-                
-                return True
+                shutdown_status = vm.shutdown()
+                vm_status, _ = get_domain_state_string(vm.state())
 
-            elif vm_status in ["Shut Off", "Crashed"]:
-                click.echo(f"The virtual machine {self.vm_name} is not Running.")
-                return False
+            if shutdown_status > 0:
+                click.echo(f"Error with machine.shutdown")
 
         else:
-            click.echo(f"The virtual machine {self.vm_name} does not exist in this Libvirt URI")
+            click.echo(f"The virtual machine {self.vm_name} does not exist in Libvirt")
 
         conn.close()
-
+        return shutdown_status
 
 
 def connect_to_libvirt(uri=None):
@@ -195,6 +252,7 @@ def connect_to_libvirt(uri=None):
 
 def get_domain_state_string(state):
     """Humanize the current state of the domain."""
+#    click.echo(f"Translating State: {state}")
 
     vir_domain_state = {
         libvirt.VIR_DOMAIN_NOSTATE: "No State",

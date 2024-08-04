@@ -10,7 +10,7 @@ class VirtualDisk:
     """A virtual disk definition"""
 
     def __init__(
-        self, machine_hostname, disk, disk_id, cloud_image, environment, config_defaults
+        self, machine_vm_name, disk, disk_id, cloud_image, environment, config_defaults
     ):
         """VirtualDisk"""
         self.name = disk.get("name", None)
@@ -19,7 +19,7 @@ class VirtualDisk:
         self.fpath = os.path.join(
             os.path.expanduser(config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images/lvlab")),
             environment.get("name", "LvLabEnvironment"),
-            machine_hostname,
+            machine_vm_name,
             "disk" + f"{disk_id}" + ".qcow2",
         )
         self.backing_image_fpath = cloud_image.image_fpath
@@ -64,3 +64,13 @@ class VirtualDisk:
         except subprocess.CalledProcessError as e:
             click.echo(f"Error in qemu-img call: {e}")
             return False
+
+
+    def delete(self):
+        """Delete a virtual disk"""
+        if os.path.exists(self.fpath):
+            try:
+                os.remove(self.fpath)
+            except Exception as e:  # pylint: disable=broad-except
+                click.echo(f"Exception removing vdisk: {e}")
+

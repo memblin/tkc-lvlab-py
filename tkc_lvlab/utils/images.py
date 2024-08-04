@@ -15,7 +15,7 @@ from tqdm import tqdm
 class CloudImage:
     """A cloud image definition"""
 
-    def __init__(self, config, environment, config_defaults):
+    def __init__(self, name, config, environment, config_defaults):
         """CloudImage
 
         Args:
@@ -26,7 +26,7 @@ class CloudImage:
                             'checksum_url_gpg': 'https://{URL_TO_THE_GPG_KEYRING}/fedora.gpg',
                             'network_version': 2}
         """
-        self.name = config.get("name", None)
+        self.name = name
         self.image_url = config.get("image_url", None)
         self.checksum_url = config.get("checksum_url", None)
         self.checksum_type = config.get("checksum_type", None)

@@ -1,34 +1,17 @@
 """A CLI for deploying lab VMs on Libvirt"""
 
-import os
 import sys
 
 import click
-import libvirt
-from tkc_lvlab.config import parse_config, parse_file_from_url
-from tkc_lvlab.utils.libvirt import get_domain_state_string
+from tkc_lvlab.config import parse_config
+from tkc_lvlab.utils.libvirt import (
+    connect_to_libvirt,
+    get_domain_state_string,
+    get_machine_by_hostname,
+    Machine,
+)
+from tkc_lvlab.utils.vdisk import VirtualDisk
 from tkc_lvlab.utils.images import CloudImage
-from tkc_lvlab.utils.vdisk import create_vdisk
-
-
-def connect_to_libvirt(uri=None):
-    """Connect to Hypervisor"""
-    if uri == None:
-        uri = "qemu:///system"
-
-    conn = libvirt.open(uri)
-    if not conn:
-        raise SystemExit(f"Failed to open connection to {uri}")
-
-    return conn
-
-
-def get_machine_by_hostname(machines, hostname):
-    """Get a machine by hostname from the machines list"""
-    for machine in machines:
-        if machine.get("hostname", None) == hostname:
-            return machine
-    return None
 
 
 @click.group()
@@ -41,7 +24,7 @@ def run():
 def init():
     """Initialize the environment."""
     try:
-        environment, images, config_defaults, machines = parse_config()
+        environment, images, config_defaults, _ = parse_config()
     except TypeError as e:
         click.echo("Could not parse config file.")
         sys.exit()
@@ -49,8 +32,8 @@ def init():
     click.echo()
     click.echo(f'Initializing Libvirt Lab Environment: {environment["name"]}\n')
 
-    for image_config in images:
-        image = CloudImage(image_config, environment, config_defaults)
+    for image_name, image_config in images.items():
+        image = CloudImage(image_name, image_config, environment, config_defaults)
 
         if image.exists_locally("image"):
             click.echo(f"CloudImage {image.name} exists locally: {image.image_fpath}")
@@ -113,74 +96,59 @@ def init():
 @click.argument("vm_name")
 def up(vm_name):
     """Start a machine defined in the Lvlab.yml manifest."""
-    environment, images, config_defaults, machines = parse_config()
+    try:
+        environment, images, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit()
 
-    cloud_image_dir = config_defaults.get("cloud_image_base_dir", "/var/lib/libvirt")
-    cloud_image_dir += "/cloud-images"
+    machine = Machine(get_machine_by_hostname(machines, vm_name), config_defaults)
 
-    disk_image_dir = config_defaults.get("disk_image_base_dir", "/var/lib/libvirt")
-    disk_image_dir += f"/{environment.get("name", "lvlab_noname")}"
-
-    # Lookup our machine config from the Lvlab.yml manifest
-    machine = get_machine_by_hostname(machines, vm_name)
     if machine:
-        # Connect to Libvirt
         conn = connect_to_libvirt()
-
-        # Get a list of current VMs
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
         if vm_name in current_vms:
-            print(f"The VM, {vm_name}, already exists.")
-
-            vm = conn.lookupByName(machine["hostname"])
+            click.echo(f"The virtual machine {vm_name} already exists.")
+            vm = conn.lookupByName(machine.hostname)
             vm_status, vm_status_reason = get_domain_state_string(vm.state())
-            print(f"Status: {vm_status}, {vm_status_reason}")
+            click.echo(f"Status: {vm_status}, {vm_status_reason}")
 
             # If VM is shutdown, start it up
             if vm_status in ["Shut Off", "Crashed"]:
-                print(f"Trying to start {vm_name}...")
+                click.echo(f"Trying to start {vm_name}...")
                 if vm.create() > 0:
                     raise SystemExit(f"Cannot boot VM {vm_name}")
 
                 cur_vm_status, cur_vm_status_reason = get_domain_state_string(
                     vm.state()
                 )
-                print(f"Status: {cur_vm_status}, {cur_vm_status_reason}")
+                click.echo(f"Status: {cur_vm_status}, {cur_vm_status_reason}")
 
             elif vm_status in ["Running"]:
-                print(f"The VM {vm_name} is running already.")
+                click.echo(f"The virtual machine {vm_name} is running already")
 
         else:
-            print(f"The VM {vm_name}, doesn't exist yet.")
-            print(f"Creating VM: {vm_name}.")
+            click.echo(f"The virtual machine {vm_name} doesn't exist yet")
+            click.echo(f"Creating virtual machine: {vm_name}")
 
-            vdisk_fpath = os.path.join(
-                disk_image_dir, machine.get("hostname"), "disk0.qcow2"
+            cloud_image = CloudImage(
+                machine.os, images.get(machine.os), environment, config_defaults
             )
 
-            backing_image = [
-                img
-                for img in images
-                if img["name"]
-                == environment.get("os", config_defaults.get("os", "fedora40"))
-            ][0]
-            backing_image_name = parse_file_from_url(backing_image["image_url"])
-            vdisk_backing_fpath = cloud_image_dir + "/" + backing_image_name
+            # Create Virtual Disks
+            for index, disk in enumerate(machine.disks):
+                vdisk = VirtualDisk(machine.hostname, disk, index, cloud_image, environment, config_defaults)
 
-            if os.path.isfile(vdisk_fpath):
-                raise SystemExit(
-                    f"The vDisk {vdisk_fpath} already exists. May need to clean-up a previous deployment.\n"
-                )
-
-            if not os.path.exists(os.path.dirname(vdisk_fpath)):
-                os.makedirs(os.path.dirname(vdisk_fpath))
-
-            create_vdisk(
-                vdisk_fpath,
-                machine.get("disk", config_defaults.get("disk", "15GB")),
-                vdisk_backing_fpath,
-            )
+                if vdisk.exists():
+                    click.echo(f"Virtual Disk: {vdisk.name} exists at {vdisk.fpath}")
+                else:
+                    click.echo(f"Creating Virtual Disk: {vdisk.fpath} at {vdisk.size}")
+                    if vdisk.create():
+                        if vdisk.exists():
+                            click.echo(f"Virtual Disk Created Successfully")
+                    else:
+                        click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
 
             # TODO: Create cloud-init data and iso
             # TODO: virt-install the VM and check status
@@ -279,8 +247,10 @@ def status():
 
     click.echo()
     click.echo("Images Used:\n")
-    for img in images:
-        click.echo(f"  - { img['name'] }")
+    for image_name, image_date in images.items():
+        click.echo(
+            f"  - {image_name} from {image_date.get("image_url", "Missing Image URL.")}"
+        )
 
     click.echo()
 

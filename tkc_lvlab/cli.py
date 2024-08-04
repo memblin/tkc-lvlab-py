@@ -34,6 +34,8 @@ def init():
     click.echo()
     click.echo(f'Initializing Libvirt Lab Environment: {environment["name"]}\n')
 
+    # TODO: Would this classify well into an environment object with
+    # a list of CloudImages?
     for image_name, image_config in images.items():
         image = CloudImage(image_name, image_config, environment, config_defaults)
 
@@ -46,7 +48,7 @@ def init():
             else:
                 click.echo("CloudImage download failed")
 
-        if image.checksum_url_gpg is not None:
+        if image.checksum_url_gpg:
             if image.exists_locally(file_type=("checksum_gpg")):
                 click.echo(
                     f"CloudImage {image.name} checksum GPG file exists locally: {image.checksum_gpg_fpath}"
@@ -59,7 +61,7 @@ def init():
                 else:
                     click.echo(f"CloudImage checksum GPG file download failed")
 
-        if image.checksum_url is not None:
+        if image.checksum_url:
             if image.exists_locally(file_type="checksum"):
                 click.echo(
                     f"CloudImage {image.name} checksum file exists locally: {image.checksum_fpath}"
@@ -75,7 +77,7 @@ def init():
                 else:
                     click.echo("CloudImage {image.name} checksum file download failed")
 
-        if image.checksum_url_gpg is not None and image.exists_locally(
+        if image.checksum_url_gpg and image.exists_locally(
             file_type=("checksum_gpg")
         ):
             if image.gpg_verify_checksum_file():
@@ -83,7 +85,7 @@ def init():
             else:
                 click.echo(f"CloudImage {image.name} checksum file GPG validation BAD")
 
-        if image.checksum_url is not None and image.exists_locally(
+        if image.checksum_url and image.exists_locally(
             file_type=("checksum")
         ):
             if image.checksum_verify_image():
@@ -160,7 +162,7 @@ def up(vm_name):
                         click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
 
             config_fpath = os.path.join(
-                config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images"),
+                config_defaults.get("disk_image_basedir", "~/.local/lvlab"),
                 environment.get("name", "LvLabEnvironment"),
                 machine.hostname,
             )

@@ -30,3 +30,26 @@ iso.add_file(
 iso.write('cidata.iso')
 iso.close()
 ```
+
+## How to handle the image directory?
+
+```bash
+# Do we need to put images under /var/lib/libvirt/images for local testing?
+#
+# - What about something like ~/.cache/lvlab/cloud-images and 
+#   ~/.local/lvlab/<project>/<vm>? That would allow many projects
+#   to share the same cloud-images.
+
+
+# Best options to get writeable in /var/lib/libvirt/images/<lvproject_name>
+# without changing base permissions on /var/lib/libvirt/images
+#
+# Pre-create and chown the directory via sudo before initializing?
+sudo mkdir --mode 0750 /var/lib/libvirt/images/lvlab
+sudo mkdir --mode 0750 /var/lib/libvirt/images/lvlab/cloud-images
+sudo mkdir --mode 0750 /var/lib/libvirt/images/lvlab/{$environment}
+sudo chown -R $user:$group /var/lib/libvirt/images/lvlab
+
+```
+
+- Libvirt will sometimes change the uid/gid on a image file or iso

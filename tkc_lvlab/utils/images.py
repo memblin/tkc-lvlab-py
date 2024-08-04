@@ -34,22 +34,21 @@ class CloudImage:
         self.network_version = config.get("network_version", 1)
         self.filename = os.path.basename(urlparse(self.image_url).path)
         self.image_dir = os.path.join(
-            config_defaults.get("cloud_image_basedir", "/var/lib/libvirt/images"),
-            environment.get("name", "lvlab-env-unnamed"),
+            config_defaults.get("cloud_image_basedir", "~/.cache/lvlab"),
             "cloud-images",
         )
-        self.image_fpath = os.path.join(self.image_dir, self.filename)
+        self.image_fpath = os.path.join(os.path.expanduser(self.image_dir), self.filename)
 
         if self.checksum_url:
             self.checksum_fpath = os.path.join(
-                self.image_dir, os.path.basename(urlparse(self.checksum_url).path)
+                os.path.expanduser(self.image_dir), os.path.basename(urlparse(self.checksum_url).path)
             )
         else:
             self.checksum_fpath = None
 
         if self.checksum_url_gpg:
             self.checksum_gpg_fpath = os.path.join(
-                self.image_dir, os.path.basename(urlparse(self.checksum_url_gpg).path)
+                os.path.expanduser(self.image_dir), os.path.basename(urlparse(self.checksum_url_gpg).path)
             )
         else:
             self.checksum_gpg_fpath = None
@@ -57,6 +56,7 @@ class CloudImage:
     @staticmethod
     def _download_file(url, destination):
         """Download a file associated with the cloud image."""
+        click.echo(f"downloading to: {destination}")
         response = requests.get(url, stream=True, timeout=10)
 
         total_size = int(response.headers.get("content-length", 0))
@@ -75,9 +75,14 @@ class CloudImage:
 
     def _manage_image_dir(self):
         """Ensure the environments cloud-image directory exists"""
-        if not os.path.isdir(self.image_dir):
-            click.echo(f"CloudImage creating image directory: {self.image_dir}")
-            os.makedirs(self.image_dir, exist_ok=True)
+        if "~" in self.image_dir:
+            image_dir = os.path.expanduser(self.image_dir)
+        else:
+            image_dir = self.image_dir
+
+        if not os.path.isdir(image_dir):
+            click.echo(f"CloudImage creating image directory: {image_dir}")
+            os.makedirs(image_dir, exist_ok=True)
 
     def download_image(self) -> bool:
         """Attempt to download the cloud image"""

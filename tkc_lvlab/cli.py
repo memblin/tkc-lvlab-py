@@ -5,7 +5,7 @@ import sys
 
 import click
 from .config import parse_config
-from .utils.cloud_init import MetaData, NetworkConfig, UserData
+from .utils.cloud_init import CloudInitIso, MetaData, NetworkConfig, UserData
 from .utils.libvirt import (
     connect_to_libvirt,
     get_domain_state_string,
@@ -140,7 +140,14 @@ def up(vm_name):
 
             # Create Virtual Disks
             for index, disk in enumerate(machine.disks):
-                vdisk = VirtualDisk(machine.hostname, disk, index, cloud_image, environment, config_defaults)
+                vdisk = VirtualDisk(
+                    machine.hostname,
+                    disk,
+                    index,
+                    cloud_image,
+                    environment,
+                    config_defaults,
+                )
 
                 if vdisk.exists():
                     click.echo(f"Virtual Disk: {vdisk.name} exists at {vdisk.fpath}")
@@ -155,15 +162,19 @@ def up(vm_name):
             config_fpath = os.path.join(
                 config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images"),
                 environment.get("name", "LvLabEnvironment"),
-                machine.hostname
+                machine.hostname,
             )
 
             # Render and write cloud-init: network-config
-            network_config = NetworkConfig(cloud_image.network_version, machine.interfaces)
+            network_config = NetworkConfig(
+                cloud_image.network_version, machine.interfaces
+            )
             rendered_network_config = network_config.render_config()
             network_config_fpath = os.path.join(config_fpath, "network-config")
             click.echo(f"Writing cloud-init network config file {network_config_fpath}")
-            with open(network_config_fpath, "w", encoding="utf-8") as network_config_file:
+            with open(
+                network_config_fpath, "w", encoding="utf-8"
+            ) as network_config_file:
                 network_config_file.write(rendered_network_config)
 
             # Render and write cloud-init: meta-data
@@ -171,20 +182,32 @@ def up(vm_name):
             rendered_metadata_config = metadata_config.render_config()
             metadata_config_fpath = os.path.join(config_fpath, "meta-data")
             click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
-            with open(metadata_config_fpath, "w", encoding="utf-8") as metadata_config_file:
+            with open(
+                metadata_config_fpath, "w", encoding="utf-8"
+            ) as metadata_config_file:
                 metadata_config_file.write(rendered_metadata_config)
 
             # Render and write cloud-init: user-data
-            userdata_config = UserData(config_defaults.get("cloud_init", {}), machine.hostname, machine.domain)
+            userdata_config = UserData(
+                config_defaults.get("cloud_init", {}), machine.hostname, machine.domain
+            )
             rendered_userdata_config = userdata_config.render_config()
             userdata_config_fpath = os.path.join(config_fpath, "user-data")
             click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")
-            
-            with open(userdata_config_fpath, 'w', encoding="utf-8") as userdata_config_file:
+            with open(
+                userdata_config_fpath, "w", encoding="utf-8"
+            ) as userdata_config_file:
                 userdata_config_file.write(rendered_userdata_config)
 
-            # TODO: Create cloud-init data and iso
-             
+            # Write cloud-init config files to ISO to mount during launch
+            iso = CloudInitIso(metadata_config_fpath, userdata_config_fpath, network_config_fpath)
+            click.echo(f"Writing cloud-init config ISO file {os.path.join(config_fpath, 'cidata.iso')}")
+            if iso.write(config_fpath):
+                click.echo(f'Writing cloud-init config ISO successful')
+            else:
+                click.echo(f'Writing cloud-init config ISO failed.')
+                sys.exit(1)
+
             # TODO: virt-install the VM and check status
 
         conn.close()

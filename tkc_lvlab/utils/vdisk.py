@@ -8,10 +8,11 @@ import click
 
 class VirtualDisk:
     """A virtual disk definition"""
-    def __init__(self, machine_hostname, disk, disk_id, cloud_image, environment, config_defaults):
-        """VirtualDisk
-        
-        """
+
+    def __init__(
+        self, machine_hostname, disk, disk_id, cloud_image, environment, config_defaults
+    ):
+        """VirtualDisk"""
         self.name = disk.get("name", None)
         self.index = disk_id
         self.size = disk.get("size", None)
@@ -19,7 +20,7 @@ class VirtualDisk:
             config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images"),
             environment.get("name", "LvLabEnvironment"),
             machine_hostname,
-            "disk" + f"{disk_id}" + ".qcow2"
+            "disk" + f"{disk_id}" + ".qcow2",
         )
         self.backing_image_fpath = cloud_image.image_fpath
 
@@ -54,7 +55,13 @@ class VirtualDisk:
                 return
         else:
             try:
-                subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                subprocess.run(
+                    command,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
                 return True
             except subprocess.CalledProcessError as e:
                 click.echo(f"Error in qemu-img call: {e}")

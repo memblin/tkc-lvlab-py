@@ -243,6 +243,17 @@ files = [
 ]
 
 [[package]]
+name = "pycdlib"
+version = "1.14.0"
+description = "Pure python ISO manipulation library"
+optional = false
+python-versions = "*"
+files = [
+    {file = "pycdlib-1.14.0-py2.py3-none-any.whl", hash = "sha256:a905827335f0066af3fd416c5cf9b1f29dffaf4d0914b714555213d1809f38d4"},
+    {file = "pycdlib-1.14.0.tar.gz", hash = "sha256:8ec306b31d9c850f28c5fda52438d904edd1e8fcf862c5ffd756272efac9f422"},
+]
+
+[[package]]
 name = "python-gnupg"
 version = "0.5.2"
 description = "A wrapper for the Gnu Privacy Guard (GPG or GnuPG)"
@@ -374,4 +385,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "8aaf6b7eecbb6f30eddc5db3ef52f6a22f00ddc62cd36304ca922a879b9d34b7"
+content-hash = "d4e345fc208bf6620747c23af50605407a7d93edcfe8a7426080654657363484"

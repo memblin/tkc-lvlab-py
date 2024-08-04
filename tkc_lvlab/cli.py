@@ -1,17 +1,19 @@
 """A CLI for deploying lab VMs on Libvirt"""
 
+import os
 import sys
 
 import click
-from tkc_lvlab.config import parse_config
-from tkc_lvlab.utils.libvirt import (
+from .config import parse_config
+from .utils.cloud_init import NetworkConfig
+from .utils.libvirt import (
     connect_to_libvirt,
     get_domain_state_string,
     get_machine_by_hostname,
     Machine,
 )
-from tkc_lvlab.utils.vdisk import VirtualDisk
-from tkc_lvlab.utils.images import CloudImage
+from .utils.vdisk import VirtualDisk
+from .utils.images import CloudImage
 
 
 @click.group()
@@ -100,7 +102,7 @@ def up(vm_name):
         environment, images, config_defaults, machines = parse_config()
     except TypeError as e:
         click.echo("Could not parse config file.")
-        sys.exit()
+        sys.exit(1)
 
     machine = Machine(get_machine_by_hostname(machines, vm_name), config_defaults)
 
@@ -151,6 +153,23 @@ def up(vm_name):
                         click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
 
             # TODO: Create cloud-init data and iso
+            network_config = NetworkConfig(cloud_image.network_version, machine.interfaces)
+            rendered_network_config = network_config.render_network_config()
+
+            network_config_fpath = os.path.join(
+                config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images"),
+                environment.get("name", "LvLabEnvironment"),
+                machine.hostname,
+                "network-config"
+            )
+
+            with open(network_config_fpath, "w", encoding="utf-8") as network_config_file:
+                network_config_file.write(rendered_network_config)
+
+            #  - meta-data
+            #  - user-data
+             
+             
             # TODO: virt-install the VM and check status
 
         conn.close()

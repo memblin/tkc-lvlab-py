@@ -4,6 +4,7 @@ version = "0.1.0"
 description = ""
 authors = ["Chris Row <1418370+memblin@users.noreply.github.com>"]
 readme = "README.md"
+include = ["tkc_lvlab/templates/*.j2"]
 
 [tool.poetry.dependencies]
 python = "^3.12"
@@ -13,10 +14,12 @@ tqdm = "^4.66.4"
 requests = "^2.32.3"
 libvirt-python = "^10.5.0"
 python-gnupg = "^0.5.2"
+jinja2 = "^3.1.4"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
 
 [tool.poetry.scripts]
 lvlab = "tkc_lvlab.cli:run"

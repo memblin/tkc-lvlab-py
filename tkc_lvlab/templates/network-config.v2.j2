@@ -1,0 +1,26 @@
+---
+network:
+  version: {{ config.network_version.value }}
+  ethernets:
+    {%- for iface in config.interfaces %}
+    {{ iface.name }}:
+      {%- if iface.ip4 %}
+      dhcp4: false
+      dhcp6: false
+      {%- else %}
+      dhcp4: true
+      dhcp6: true
+      {%- endif %}
+      {%- if iface.ip4 %}
+      addresses:
+        - {{ iface.ip4 }}
+      nameservers:
+        search: {{ iface.dns_search }}
+        addresses: {{ iface.dns_servers }}
+      routes:
+        - to: 0.0.0.0/0
+          via: {{ iface.ip4gw }}
+      {%- endif %}
+   {%- endfor %}
+
+{# Ensure newline at end of rendered file #}

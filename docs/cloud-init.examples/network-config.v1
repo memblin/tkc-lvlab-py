@@ -1,0 +1,16 @@
+---
+network:
+  version: 1
+  config:
+    - type: physical
+      name: enp1s0
+      subnets:
+         - type: static
+           address: 192.168.122.10/24
+           gateway: 192.168.122.1
+    - type: nameserver
+      address:
+        - 192.168.122.1
+      search:
+        - local
+        - {domain}

@@ -10,8 +10,8 @@ environment:
         - name: primary
           size: 25G
       user: root
-      privkey: ~/.ssh/id_ed25519_development.pub
-      pubkey: ~/.ssh/id_ed25519_development
+      pubkey: ~/.ssh/id_ed25519.pub
+      privkey: ~/.ssh/id_ed25519
       interfaces:
           network: default
       cloud_image_basedir: /tmp
@@ -43,6 +43,10 @@ environment:
           - name: eth0
             ip4: 192.168.122.17/24
             ip4gw: 192.168.122.1
+      - hostname: dhcp-config.local
+        os: fedora40
+        interfaces:
+          - name: eth0
 
 images:
   fedora40:

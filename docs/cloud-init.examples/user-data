@@ -1,0 +1,39 @@
+#cloud-config
+
+# manage_etc_hosts defaults to true on many OS os but recent Debian 12 cloud
+# images have it disabled so I've started adding it to my configs.
+manage_etc_hosts: true
+hostname: "{hostname}"
+fqdn: "{hostname}{doman}"
+
+users:
+  # I use root here for local lab machines to avoid bumping the UID/GID
+  # count as some automation I test relies on service user creation sequence.
+  # Adding a user here can knock that sequence out of alignment.
+  #
+  # If that is not among your challenges challenge I recommend using a normal
+  # username instead of root. This will be the username you need to use with
+  # the private key to login to the VM with SSH once it comes online.
+  - name: root
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKKBa/1RNIIF8/Tmi2bCy/V1nPAZvCMejf8U1P0Nl5N8 throwaway@tkclabs.io
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    shell: /bin/bash
+
+# This should download the current salt bootstrap script and bootstrap a
+# controller and minion onto the target. Adjust bootstrap source and command
+# command as needed.
+#
+# toggle off of fqdn grains to stop some minion latency in a local testing
+# situations where reverse DNS isn't available.
+runcmd:
+  - curl -s -o /root/bootstrap-salt.sh -L https://bootstrap.saltproject.io
+  - chmod 0755 /root/bootstrap-salt.sh
+  - /root/bootstrap-salt.sh -X -M -A 127.0.0.1 stable 3007
+  - |
+    cat << EOF > /etc/salt/minion.d/disable_fqdns_grains.conf
+    enable_fqdns_grains: False
+    EOF
+  - systemctl start salt-master
+  - systemctl start salt-minion
+  

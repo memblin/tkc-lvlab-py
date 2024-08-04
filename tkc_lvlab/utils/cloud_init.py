@@ -15,7 +15,7 @@ class NetworkVersion(Enum):
 
 @dataclass
 class NetworkConfig:
-    """A cloud-init network configuration"""
+    """A cloud-init network-config"""
     network_version: NetworkVersion
     interfaces: list
 
@@ -23,7 +23,7 @@ class NetworkConfig:
         if isinstance(self.network_version, int):
             self.network_version = NetworkVersion(self.network_version)
 
-    def render_network_config(self, template_dir: str = 'templates') -> str:
+    def render_config(self, template_dir: str = 'templates') -> str:
         """Render a Jinja2 template with the data"""
         env = Environment(
             loader=PackageLoader("tkc_lvlab"),
@@ -37,5 +37,21 @@ class NetworkConfig:
         else:
             raise ValueError(f"Unsupported network version: {self.network_version}")
         
+        template = env.get_template(template_file)
+        return template.render(config=self)
+
+
+@dataclass
+class MetaData:
+    """A cloud-init meta-data configuration"""
+    hostname: str
+
+    def render_config(self, template_dir: str = 'templates') -> str:
+        """Render a Jinja2 template with the data"""
+        env = Environment(
+            loader=PackageLoader("tkc_lvlab"),
+            autoescape=select_autoescape()
+        )
+        template_file = 'meta-data.j2'
         template = env.get_template(template_file)
         return template.render(config=self)

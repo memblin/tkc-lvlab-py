@@ -5,7 +5,7 @@ import sys
 
 import click
 from .config import parse_config
-from .utils.cloud_init import NetworkConfig
+from .utils.cloud_init import MetaData, NetworkConfig
 from .utils.libvirt import (
     connect_to_libvirt,
     get_domain_state_string,
@@ -153,21 +153,29 @@ def up(vm_name):
                         click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
 
             # TODO: Create cloud-init data and iso
-            network_config = NetworkConfig(cloud_image.network_version, machine.interfaces)
-            rendered_network_config = network_config.render_network_config()
-
-            network_config_fpath = os.path.join(
+            config_fpath = os.path.join(
                 config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images"),
                 environment.get("name", "LvLabEnvironment"),
-                machine.hostname,
-                "network-config"
+                machine.hostname
             )
 
+            # Render and write cloud-init: network-config
+            network_config = NetworkConfig(cloud_image.network_version, machine.interfaces)
+            rendered_network_config = network_config.render_config()
+            network_config_fpath = os.path.join(config_fpath, "network-config")
+            click.echo(f"Writing cloud-init network config file {network_config_fpath}")
             with open(network_config_fpath, "w", encoding="utf-8") as network_config_file:
                 network_config_file.write(rendered_network_config)
 
-            #  - meta-data
-            #  - user-data
+            # Render and write cloud-init: meta-data
+            metadata_config = MetaData(machine.hostname)
+            rendered_metadata_config = metadata_config.render_config()
+            metadata_config_fpath = os.path.join(config_fpath, "meta-data")
+            click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
+            with open(metadata_config_fpath, "w", encoding="utf-8") as metadata_config_file:
+                metadata_config_file.write(rendered_metadata_config)
+
+            # Render and write cloud-init: user-data
              
              
             # TODO: virt-install the VM and check status

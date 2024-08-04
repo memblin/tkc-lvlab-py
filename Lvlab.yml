@@ -9,9 +9,6 @@ environment:
       disks:
         - name: primary
           size: 25G
-      user: root
-      pubkey: ~/.ssh/id_ed25519.pub
-      privkey: ~/.ssh/id_ed25519
       interfaces:
           network: default
       cloud_image_basedir: /tmp
@@ -21,6 +18,12 @@ environment:
         # mount -t virtiofs gitrepos /srv/git
         - source: /home/crow/repos
           mount_tag: gitrepos
+      cloud_init:  
+        user: root
+        pubkey: ~/.ssh/id_ed25519.pub
+        sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+        shell: /bin/bash
+
     machines:
       - hostname: salt
         os: debian12

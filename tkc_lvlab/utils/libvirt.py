@@ -32,6 +32,7 @@ class Machine:
         machine = {**config_defaults, **machine}
 
         self.hostname = machine.get("hostname", None)
+        self.domain = config_defaults.get("domain", None)
         self.os = machine.get("os", config_defaults.get("os", None))
         self.interfaces = machine.get("interfaces", [])
         self.disks = machine.get("disks", [])

@@ -1,0 +1,14 @@
+#cloud-config
+
+manage_etc_hosts: true
+hostname: {{config.hostname}}
+fqdn: {{config.hostname}}.{{config.domain}}
+
+users:
+  - name: {{ config.cloud_init.user }}
+    ssh_authorized_keys:
+      - {{ config.cloud_init.pubkey }}
+    sudo: {{ config.cloud_init.sudo }}
+    shell: {{ config.cloud_init.shell }}
+
+{# Ensure a blank line at end of rendered file #}

@@ -5,7 +5,7 @@ import sys
 
 import click
 from .config import parse_config
-from .utils.cloud_init import MetaData, NetworkConfig
+from .utils.cloud_init import MetaData, NetworkConfig, UserData
 from .utils.libvirt import (
     connect_to_libvirt,
     get_domain_state_string,
@@ -152,7 +152,6 @@ def up(vm_name):
                     else:
                         click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
 
-            # TODO: Create cloud-init data and iso
             config_fpath = os.path.join(
                 config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images"),
                 environment.get("name", "LvLabEnvironment"),
@@ -176,7 +175,15 @@ def up(vm_name):
                 metadata_config_file.write(rendered_metadata_config)
 
             # Render and write cloud-init: user-data
-             
+            userdata_config = UserData(config_defaults.get("cloud_init", {}), machine.hostname, machine.domain)
+            rendered_userdata_config = userdata_config.render_config()
+            userdata_config_fpath = os.path.join(config_fpath, "user-data")
+            click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")
+            
+            with open(userdata_config_fpath, 'w', encoding="utf-8") as userdata_config_file:
+                userdata_config_file.write(rendered_userdata_config)
+
+            # TODO: Create cloud-init data and iso
              
             # TODO: virt-install the VM and check status
 

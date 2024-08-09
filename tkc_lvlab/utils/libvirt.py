@@ -7,6 +7,7 @@ import libvirt
 import subprocess
 
 from .vdisk import VirtualDisk
+from .cloud_init import MetaData, NetworkConfig, UserData
 
 
 class Machine:
@@ -53,9 +54,46 @@ class Machine:
         self.cpu = machine.get("cpu", config_defaults.get("cpu", 2))
         self.memory = machine.get("memory", config_defaults.get("memory", 2024))
         self.interfaces = machine.get("interfaces", [])
+        self.nameservers = machine.get("nameservers", config_defaults["interfaces"].get("nameservers", {}))
         self.disks = machine.get("disks", [])
         self.config_fpath = config_fpath
 
+    def cloud_init(self, cloud_image, config_defaults):
+            # Render and write cloud-init: network-config
+            network_config = NetworkConfig(
+                cloud_image.network_version, self.interfaces, self.nameservers
+            )
+            rendered_network_config = network_config.render_config()
+            network_config_fpath = os.path.join(self.config_fpath, "network-config")
+            click.echo(f"Writing cloud-init network config file {network_config_fpath}")
+            with open(
+                network_config_fpath, "w", encoding="utf-8"
+            ) as network_config_file:
+                network_config_file.write(rendered_network_config)
+
+            # Render and write cloud-init: meta-data
+            metadata_config = MetaData(self.hostname)
+            rendered_metadata_config = metadata_config.render_config()
+            metadata_config_fpath = os.path.join(self.config_fpath, "meta-data")
+            click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
+            with open(
+                metadata_config_fpath, "w", encoding="utf-8"
+            ) as metadata_config_file:
+                metadata_config_file.write(rendered_metadata_config)
+
+            # Render and write cloud-init: user-data
+            userdata_config = UserData(
+                config_defaults.get("cloud_init", {}), self.hostname, self.domain
+            )
+            rendered_userdata_config = userdata_config.render_config()
+            userdata_config_fpath = os.path.join(self.config_fpath, "user-data")
+            click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")
+            with open(
+                userdata_config_fpath, "w", encoding="utf-8"
+            ) as userdata_config_file:
+                userdata_config_file.write(rendered_userdata_config)
+
+            return metadata_config_fpath, userdata_config_fpath, network_config_fpath
 
     def create_vdisks(self, environment={}, config_defaults={}, cloud_image=None):
         """Create all machine virtual disks"""
@@ -175,6 +213,20 @@ class Machine:
 
         conn.close()
 
+    def exists_in_libvirt(self, uri):
+        """Virtual machine existance and status"""
+        exists, status, status_reason = (False, 0, 0)
+
+        conn = connect_to_libvirt(uri)
+        current_vms = [dom.name() for dom in conn.listAllDomains()]
+
+        if self.vm_name in current_vms:
+            vm = conn.lookupByName(self.vm_name)
+            status, status_reason = get_domain_state_string(vm.state())
+            exists = True
+
+        conn.close()
+        return exists, status, status_reason
 
     def poweron(self, uri):
         """Powreon a virtual machine"""
@@ -195,22 +247,6 @@ class Machine:
 
         conn.close()
         return create_status
-
-
-    def exists_in_libvirt(self, uri):
-        """Virtual machine existance and status"""
-        exists, status, status_reason = (False, 0, 0)
-
-        conn = connect_to_libvirt(uri)
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
-
-        if self.vm_name in current_vms:
-            vm = conn.lookupByName(self.vm_name)
-            status, status_reason = get_domain_state_string(vm.state())
-            exists = True
-
-        conn.close()
-        return exists, status, status_reason
 
     def shutdown(self, uri):
         """Shutdown the virtual machine"""

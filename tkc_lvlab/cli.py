@@ -95,6 +95,25 @@ def init():
 
         click.echo()
 
+@click.command()
+@click.argument("vm_name")
+def cloudinit(vm_name):
+    """Render the cloud-init template for a machine defined in the Lvlab.yml manifest."""
+    try:
+        environment, images, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
+
+    machine = Machine(get_machine_by_vm_name(machines, vm_name), environment, config_defaults)
+
+    if machine:
+            cloud_image = CloudImage(
+                machine.os, images.get(machine.os), environment, config_defaults
+            )
+
+            # Render and write cloud-init config
+            _, _, _ = machine.cloud_init(cloud_image, config_defaults)
 
 @click.command()
 @click.argument("vm_name")
@@ -130,39 +149,8 @@ def up(vm_name):
             # TODO: Check if vdisks exist before trying to create
             machine.create_vdisks(environment, config_defaults, cloud_image)
 
-            # Render and write cloud-init: network-config
-            network_config = NetworkConfig(
-                cloud_image.network_version, machine.interfaces
-            )
-            rendered_network_config = network_config.render_config()
-            network_config_fpath = os.path.join(machine.config_fpath, "network-config")
-            click.echo(f"Writing cloud-init network config file {network_config_fpath}")
-            with open(
-                network_config_fpath, "w", encoding="utf-8"
-            ) as network_config_file:
-                network_config_file.write(rendered_network_config)
-
-            # Render and write cloud-init: meta-data
-            metadata_config = MetaData(machine.hostname)
-            rendered_metadata_config = metadata_config.render_config()
-            metadata_config_fpath = os.path.join(machine.config_fpath, "meta-data")
-            click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
-            with open(
-                metadata_config_fpath, "w", encoding="utf-8"
-            ) as metadata_config_file:
-                metadata_config_file.write(rendered_metadata_config)
-
-            # Render and write cloud-init: user-data
-            userdata_config = UserData(
-                config_defaults.get("cloud_init", {}), machine.hostname, machine.domain
-            )
-            rendered_userdata_config = userdata_config.render_config()
-            userdata_config_fpath = os.path.join(machine.config_fpath, "user-data")
-            click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")
-            with open(
-                userdata_config_fpath, "w", encoding="utf-8"
-            ) as userdata_config_file:
-                userdata_config_file.write(rendered_userdata_config)
+            # Render and write cloud-init config
+            metadata_config_fpath, userdata_config_fpath, network_config_fpath = machine.cloud_init(cloud_image, config_defaults)
 
             # Write cloud-init config files to ISO to mount during launch
             iso = CloudInitIso(metadata_config_fpath, userdata_config_fpath, network_config_fpath, os.path.join(machine.config_fpath, 'cidata.iso'))
@@ -276,6 +264,7 @@ def status():
 
 
 # Bulid the CLI
+run.add_command(cloudinit)
 run.add_command(up)
 run.add_command(down)
 run.add_command(destroy)

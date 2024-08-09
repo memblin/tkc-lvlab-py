@@ -20,12 +20,13 @@ class NetworkConfig:
 
     network_version: NetworkVersion
     interfaces: list
+    nameservers: dict
 
     def __post_init__(self):
         if isinstance(self.network_version, int):
             self.network_version = NetworkVersion(self.network_version)
 
-    def render_config(self, template_dir: str = "templates") -> str:
+    def render_config(self) -> str:
         """Render a Jinja2 template with the data"""
         env = Environment(
             loader=PackageLoader("tkc_lvlab"), autoescape=select_autoescape()

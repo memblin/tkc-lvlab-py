@@ -14,9 +14,17 @@ network:
       {%- if iface.ip4 %}
       addresses:
         - {{ iface.ip4 }}
+      {%- if config.nameservers.search is defined and config.nameservers.search | length > 0 %}
       nameservers:
-        search: {{ iface.dns_search }}
-        addresses: {{ iface.dns_servers }}
+        search:
+          {%- for search_domain in config.nameservers.search %}
+          - {{ search_domain }}
+          {%- endfor %}
+        addresses:
+          {%- for dns_server in config.nameservers.addresses %}
+          - {{ dns_server }}
+          {%- endfor %}
+      {%- endif %}
       routes:
         - to: 0.0.0.0/0
           via: {{ iface.ip4gw }}

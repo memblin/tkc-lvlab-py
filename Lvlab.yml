@@ -12,6 +12,9 @@ environment:
           size: 25G
       interfaces:
           network: default
+          nameservers:
+            search: [local]
+            addresses: [192.168.122.1]
       # cloud_image_basedir: /var/lib/libvirt/images/lvlab
       # disk_image_basedir: /var/lib/libvirt/images/lvlab
       shared_directories:

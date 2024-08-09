@@ -71,3 +71,13 @@ images:
     checksum_url: https://cloud.debian.org/images/cloud/bookworm/20240717-1811/SHA512SUMS
     checksum_type: sha512
     network_version: 2
+  debian11:
+    image_url: https://cloud.debian.org/images/cloud/bullseye/20240717-1811/debian-11-generic-amd64-20240717-1811.qcow2 
+    checksum_url: https://cloud.debian.org/images/cloud/bullseye/20240717-1811/SHA512SUMS
+    checksum_type: sha512
+    network_version: 1
+  debian10:
+    image_url: https://cloud.debian.org/images/cloud/buster/20240703-1797/debian-10-generic-amd64-20240703-1797.qcow2
+    checksum_url: https://cloud.debian.org/images/cloud/buster/20240703-1797/SHA512SUMS
+    checksum_type: sha512
+    network_version: 1

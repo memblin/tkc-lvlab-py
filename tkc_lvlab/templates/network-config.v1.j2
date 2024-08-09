@@ -2,7 +2,7 @@
 network:
   version: {{ config.network_version.value }}
   config:
-    {%- for iface in conig.interfaces %}
+    {%- for iface in config.interfaces %}
     - type: physical
       name: {{ iface.name }}
       {%- if iface.ip4 %}
@@ -25,5 +25,6 @@ network:
         - {{ search_domain }}
         {%- endfor %}
     {%- endif %}
+    {%- endfor %}
 
 {# Ensure newline at end of rendered file #}

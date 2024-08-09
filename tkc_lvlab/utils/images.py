@@ -40,9 +40,19 @@ class CloudImage:
         self.image_fpath = os.path.join(os.path.expanduser(self.image_dir), self.filename)
 
         if self.checksum_url:
-            self.checksum_fpath = os.path.join(
-                os.path.expanduser(self.image_dir), os.path.basename(urlparse(self.checksum_url).path)
-            )
+            # Debian 10, 11, and 12 use a checksum file name that conflicts
+            # with one another so we need to put a suffix on the checksum file.
+            match = re.search(r"debian-(\d+)", self.filename.lower())
+            if match:
+                version = match.group(1)
+                checksum_filename = os.path.basename(urlparse(self.checksum_url).path) + f".debian{version}"
+                self.checksum_fpath = os.path.join(
+                    os.path.expanduser(self.image_dir), checksum_filename
+                )
+            else:
+                self.checksum_fpath = os.path.join(
+                    os.path.expanduser(self.image_dir), os.path.basename(urlparse(self.checksum_url).path)
+                )
         else:
             self.checksum_fpath = None
 
@@ -56,6 +66,7 @@ class CloudImage:
     @staticmethod
     def _download_file(url, destination):
         """Download a file associated with the cloud image."""
+
         click.echo(f"downloading to: {destination}")
         response = requests.get(url, stream=True, timeout=10)
 
@@ -115,6 +126,7 @@ class CloudImage:
         }
 
         file_to_check = file_map.get(file_type)
+
         if not file_to_check:
             raise ValueError(f"Unknown file type: {file_type}")
 
@@ -145,7 +157,7 @@ class CloudImage:
         return False
 
     @staticmethod
-    def _parse_checksum_file(checksum_fpath):
+    def _parse_checksum_file(checksum_fpath: str) -> dict:
         """Parse checksum file into checksums"""
         checksums = {}
 

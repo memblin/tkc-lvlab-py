@@ -5,6 +5,7 @@ import os
 import click
 import libvirt
 import subprocess
+import sys
 
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
@@ -59,41 +60,50 @@ class Machine:
         self.config_fpath = config_fpath
 
     def cloud_init(self, cloud_image, config_defaults):
-            # Render and write cloud-init: network-config
-            network_config = NetworkConfig(
-                cloud_image.network_version, self.interfaces, self.nameservers
-            )
-            rendered_network_config = network_config.render_config()
-            network_config_fpath = os.path.join(self.config_fpath, "network-config")
-            click.echo(f"Writing cloud-init network config file {network_config_fpath}")
-            with open(
-                network_config_fpath, "w", encoding="utf-8"
-            ) as network_config_file:
-                network_config_file.write(rendered_network_config)
+        """Render Cloud Init configuraion files"""
+        if not os.path.exists(self.config_fpath):
+            try:
+                os.makedirs(self.config_fpath)
+            except Exception as e:  # pylint: disable=broad-except
+                click.echo(f"Exception creating : {e}")
+                sys.exit(1)
 
-            # Render and write cloud-init: meta-data
-            metadata_config = MetaData(self.hostname)
-            rendered_metadata_config = metadata_config.render_config()
-            metadata_config_fpath = os.path.join(self.config_fpath, "meta-data")
-            click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
-            with open(
-                metadata_config_fpath, "w", encoding="utf-8"
-            ) as metadata_config_file:
-                metadata_config_file.write(rendered_metadata_config)
+        # Render and write cloud-init: network-config
+        network_config = NetworkConfig(
+            cloud_image.network_version, self.interfaces, self.nameservers
+        )
+        rendered_network_config = network_config.render_config()
+        network_config_fpath = os.path.join(self.config_fpath, "network-config")
+        click.echo(f"Writing cloud-init network config file {network_config_fpath}")
+        with open(
+            network_config_fpath, "w", encoding="utf-8"
+        ) as network_config_file:
+            network_config_file.write(rendered_network_config)
 
-            # Render and write cloud-init: user-data
-            userdata_config = UserData(
-                config_defaults.get("cloud_init", {}), self.hostname, self.domain
-            )
-            rendered_userdata_config = userdata_config.render_config()
-            userdata_config_fpath = os.path.join(self.config_fpath, "user-data")
-            click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")
-            with open(
-                userdata_config_fpath, "w", encoding="utf-8"
-            ) as userdata_config_file:
-                userdata_config_file.write(rendered_userdata_config)
+        # Render and write cloud-init: meta-data
+        metadata_config = MetaData(self.hostname)
+        rendered_metadata_config = metadata_config.render_config()
+        metadata_config_fpath = os.path.join(self.config_fpath, "meta-data")
+        click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
+        with open(
+            metadata_config_fpath, "w", encoding="utf-8"
+        ) as metadata_config_file:
+            metadata_config_file.write(rendered_metadata_config)
 
-            return metadata_config_fpath, userdata_config_fpath, network_config_fpath
+        # Render and write cloud-init: user-data
+        userdata_config = UserData(
+            config_defaults.get("cloud_init", {}), self.hostname, self.domain
+        )
+        rendered_userdata_config = userdata_config.render_config()
+        userdata_config_fpath = os.path.join(self.config_fpath, "user-data")
+        click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")
+        with open(
+            userdata_config_fpath, "w", encoding="utf-8"
+        ) as userdata_config_file:
+            userdata_config_file.write(rendered_userdata_config)
+
+        return metadata_config_fpath, userdata_config_fpath, network_config_fpath
+    
 
     def create_vdisks(self, environment={}, config_defaults={}, cloud_image=None):
         """Create all machine virtual disks"""

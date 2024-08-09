@@ -111,7 +111,6 @@ def cloudinit(vm_name):
             cloud_image = CloudImage(
                 machine.os, images.get(machine.os), environment, config_defaults
             )
-
             # Render and write cloud-init config
             _, _, _ = machine.cloud_init(cloud_image, config_defaults)
 

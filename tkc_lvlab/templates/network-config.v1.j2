@@ -1,0 +1,29 @@
+---
+network:
+  version: {{ config.network_version.value }}
+  config:
+    {%- for iface in conig.interfaces %}
+    - type: physical
+      name: {{ iface.name }}
+      {%- if iface.ip4 %}
+      subnets:
+         - type: static
+           address: {{ iface.ip4 }}
+           gateway: {{ iface.ip4gw }}
+      {%- else %}
+      subnets:
+         - type: dhcp4
+      {%- endif %}
+    {%- if config.nameservers.search is defined and config.nameservers.search | length > 0 %}
+    - type: nameserver
+      address:
+        {%- for dns_server in config.nameservers.addresses %}
+        - {{ dns_server }}
+        {%- endfor %}
+      search:
+        {%- for search_domain in config.nameservers.search %}
+        - {{ search_domain }}
+        {%- endfor %}
+    {%- endif %}
+
+{# Ensure newline at end of rendered file #}

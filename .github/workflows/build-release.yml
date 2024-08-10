@@ -3,8 +3,9 @@ name: build-release
 on:
   workflow_dispatch:
     inputs:
-      description: 'Tag to build'
-      required: true
+      build_tag:
+        description: 'Tag to build'
+        required: true
 
 jobs:
   pre-commit:

@@ -20,8 +20,26 @@ the base image information.
 
 ## Installation
 
-- TODO: GHA Workflow to package and release this thing.
-- TODO: Fill in documentation on how to install from the release.
+- Install the repo latest release into a native Python 3 venv
+
+```bash
+# Create a venv if you don't have one you already want to use
+python -m venv ~/.venvs/lvlab
+
+# Activate the venv
+source ~/.venvs/lvlab/bin/activate
+
+# Use pip to install the release wheel for the latest package
+pip install https://github.com/memblin/tkc-lvlab-py/releases/download/0.1.0/tkc_lvlab-0.1.0-py3-none-any.whl
+
+# lvlab should be ready for use
+lvlab up salt.local
+
+# Show the VM w/ virsh
+virsh -c qemu:///system list
+```
+
+- Option B: Clone this repo local, build with `poetry build` and install the wheel from the ./dist directory.
 
 ## Help Output
 

@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "tkc-lvlab"
-version = "0.1.0"
-description = ""
+version = "v0.1.0"
+description = "The Libvirt Labs project provides the `lvlab` Python application which can be used to manage Libvirt based development environments in a familiar way."
 authors = ["Chris Row <1418370+memblin@users.noreply.github.com>"]
 readme = "README.md"
 include = ["tkc_lvlab/templates/*.j2"]

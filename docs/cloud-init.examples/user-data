@@ -36,4 +36,3 @@ runcmd:
     EOF
   - systemctl start salt-master
   - systemctl start salt-minion
-  

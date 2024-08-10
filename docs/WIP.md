@@ -10,7 +10,7 @@ due to selinux or other access issues.
 ```bash
 # Do we need to put images under /var/lib/libvirt/images for local testing?
 #
-# - What about something like ~/.cache/lvlab/cloud-images and 
+# - What about something like ~/.cache/lvlab/cloud-images and
 #   ~/.local/lvlab/<project>/<vm>? That would allow many projects
 #   to share the same cloud-images.
 

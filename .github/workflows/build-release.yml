@@ -8,14 +8,19 @@ on:
         required: true
 
 jobs:
-  pre-commit:
+  build-release:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
+      with:
+        ref: ${{ inputs.build_tag }}
     - name: Install python
       uses: actions/setup-python@v3
-    - name: Install poetry
+    - name: Install poetry and build tkc_lvlab
       run: |
         pip install -r requirements.txt
         poetry build
+    - name: Create release and upload artifacts
+      run: |
+        gh release create ${{ inputs.build_tag }} ./dist/tkc_lvlab-${{ inputs.build_tag }}-py3-none-any.whl

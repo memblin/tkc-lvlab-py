@@ -19,7 +19,7 @@ environment:
         # mount -t virtiofs gitrepos /srv/git
         - source: /home/crow/repos
           mount_tag: gitrepos
-      cloud_init:  
+      cloud_init:
         user: root
         pubkey: ~/.ssh/id_ed25519.pub
         sudo: ["ALL=(ALL) NOPASSWD:ALL"]
@@ -36,6 +36,7 @@ environment:
           - name: enp1s0
             ip4: 192.168.122.12/24
             ip4gw: 192.168.122.1
+
       - vm_name: vault.local
         hostname: vault
         os: fedora40
@@ -43,6 +44,7 @@ environment:
           - name: eth0
             ip4: 192.168.122.16/24
             ip4gw: 192.168.122.1
+
       - vm_name: ghar.local
         hostname: ghar
         os: fedora40
@@ -50,6 +52,7 @@ environment:
           - name: eth0
             ip4: 192.168.122.17/24
             ip4gw: 192.168.122.1
+
       - vm_name: dhcp-config.local
         hostname: dhcp-config
         os: fedora40
@@ -68,3 +71,13 @@ images:
     checksum_url: https://cloud.debian.org/images/cloud/bookworm/20240717-1811/SHA512SUMS
     checksum_type: sha512
     network_version: 2
+  debian11:
+    image_url: https://cloud.debian.org/images/cloud/bullseye/20240717-1811/debian-11-generic-amd64-20240717-1811.qcow2
+    checksum_url: https://cloud.debian.org/images/cloud/bullseye/20240717-1811/SHA512SUMS
+    checksum_type: sha512
+    network_version: 1
+  debian10:
+    image_url: https://cloud.debian.org/images/cloud/buster/20240703-1797/debian-10-generic-amd64-20240703-1797.qcow2
+    checksum_url: https://cloud.debian.org/images/cloud/buster/20240703-1797/SHA512SUMS
+    checksum_type: sha512
+    network_version: 1

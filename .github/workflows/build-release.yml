@@ -26,3 +26,5 @@ jobs:
     - name: Create release and upload artifacts
       run: |
         gh release create ${{ inputs.build_tag }} ./dist/tkc_lvlab-${{ inputs.build_tag }}-py3-none-any.whl
+      env:
+        GH_TOKEN: ${{ github.token }}

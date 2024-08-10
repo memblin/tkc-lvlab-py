@@ -10,6 +10,8 @@ on:
 jobs:
   build-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -27,4 +29,4 @@ jobs:
       run: |
         gh release create ${{ inputs.build_tag }} ./dist/tkc_lvlab-${{ inputs.build_tag }}-py3-none-any.whl
       env:
-        GH_TOKEN: ${{ secrets.REPO_PAT }}
+        GH_TOKEN: ${{ github.token }}

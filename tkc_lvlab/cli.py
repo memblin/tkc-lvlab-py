@@ -77,23 +77,20 @@ def init():
                 else:
                     click.echo("CloudImage {image.name} checksum file download failed")
 
-        if image.checksum_url_gpg and image.exists_locally(
-            file_type=("checksum_gpg")
-        ):
+        if image.checksum_url_gpg and image.exists_locally(file_type=("checksum_gpg")):
             if image.gpg_verify_checksum_file():
                 click.echo(f"CloudImage {image.name} checksum file GPG validation OK")
             else:
                 click.echo(f"CloudImage {image.name} checksum file GPG validation BAD")
 
-        if image.checksum_url and image.exists_locally(
-            file_type=("checksum")
-        ):
+        if image.checksum_url and image.exists_locally(file_type=("checksum")):
             if image.checksum_verify_image():
                 click.echo(f"CloudImage {image.name} checksum verification OK")
             else:
                 click.echo(f"CloudImage {image.name} checksum verification BAD")
 
         click.echo()
+
 
 @click.command()
 @click.argument("vm_name")
@@ -105,14 +102,17 @@ def cloudinit(vm_name):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(get_machine_by_vm_name(machines, vm_name), environment, config_defaults)
+    machine = Machine(
+        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+    )
 
     if machine:
-            cloud_image = CloudImage(
-                machine.os, images.get(machine.os), environment, config_defaults
-            )
-            # Render and write cloud-init config
-            _, _, _ = machine.cloud_init(cloud_image, config_defaults)
+        cloud_image = CloudImage(
+            machine.os, images.get(machine.os), environment, config_defaults
+        )
+        # Render and write cloud-init config
+        _, _, _ = machine.cloud_init(cloud_image, config_defaults)
+
 
 @click.command()
 @click.argument("vm_name")
@@ -124,11 +124,15 @@ def up(vm_name):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(get_machine_by_vm_name(machines, vm_name), environment, config_defaults)
+    machine = Machine(
+        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+    )
 
     if machine:
 
-        exists, status, status_reason = machine.exists_in_libvirt(environment.get("libvirt_uri", None))
+        exists, status, status_reason = machine.exists_in_libvirt(
+            environment.get("libvirt_uri", None)
+        )
 
         if exists:
             if status in ["Shut Off", "Crashed"]:
@@ -149,20 +153,29 @@ def up(vm_name):
             machine.create_vdisks(environment, config_defaults, cloud_image)
 
             # Render and write cloud-init config
-            metadata_config_fpath, userdata_config_fpath, network_config_fpath = machine.cloud_init(cloud_image, config_defaults)
+            metadata_config_fpath, userdata_config_fpath, network_config_fpath = (
+                machine.cloud_init(cloud_image, config_defaults)
+            )
 
             # Write cloud-init config files to ISO to mount during launch
-            iso = CloudInitIso(metadata_config_fpath, userdata_config_fpath, network_config_fpath, os.path.join(machine.config_fpath, 'cidata.iso'))
+            iso = CloudInitIso(
+                metadata_config_fpath,
+                userdata_config_fpath,
+                network_config_fpath,
+                os.path.join(machine.config_fpath, "cidata.iso"),
+            )
             click.echo(f"Writing cloud-init config ISO file {iso.fpath}")
             if iso.write(iso.fpath):
-                click.echo(f'Writing cloud-init config ISO successful')
+                click.echo(f"Writing cloud-init config ISO successful")
             else:
-                click.echo(f'Writing cloud-init config ISO failed.')
+                click.echo(f"Writing cloud-init config ISO failed.")
                 sys.exit(1)
 
             # virt-install the VM and check status
             click.echo(f"Attempting to start virtual maching: {machine.vm_name}")
-            if machine.deploy(machine.config_fpath, environment.get('libvirt_uri', 'qemu:///session')):
+            if machine.deploy(
+                machine.config_fpath, environment.get("libvirt_uri", "qemu:///session")
+            ):
                 click.echo(f"Virtual machine deployment complete.")
             else:
                 click.echo(f"Virtual machine installation failed.")
@@ -181,11 +194,15 @@ def destroy(vm_name):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(get_machine_by_vm_name(machines, vm_name), environment, config_defaults)
+    machine = Machine(
+        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+    )
 
     if machine:
         click.echo(f"Destroying virtual machine: {vm_name}")
-        if machine.destroy(machine.config_fpath, environment.get('libvirt_uri', 'qemu:///session')):
+        if machine.destroy(
+            machine.config_fpath, environment.get("libvirt_uri", "qemu:///session")
+        ):
             click.echo(f"Destruction appears successful.")
     else:
         click.echo(f"Machine not found:  {vm_name}")
@@ -201,15 +218,19 @@ def down(vm_name):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(get_machine_by_vm_name(machines, vm_name), environment, config_defaults)
+    machine = Machine(
+        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+    )
 
     if machine:
         click.echo(f"Shutting down virtual machine: {vm_name}")
-        if machine.shutdown(environment.get('libvirt_uri', 'qemu:///session')) > 0:
+        if machine.shutdown(environment.get("libvirt_uri", "qemu:///session")) > 0:
             click.echo(f"Shutdown appears to have failed.")
 
         else:
-            click.echo(f"Shutdown appears successful. The virtual machine may take a short time to complete shutdown.")
+            click.echo(
+                f"Shutdown appears successful. The virtual machine may take a short time to complete shutdown."
+            )
     else:
         click.echo(f"Machine not found:  {vm_name}")
 

@@ -118,7 +118,13 @@ class UserData:
 class CloudInitIso:
     """A Cloud init ISO"""
 
-    def __init__(self, meta_data_fpath: str, user_data_fpath: str, network_config_fpath: str, iso_fpath: str):
+    def __init__(
+        self,
+        meta_data_fpath: str,
+        user_data_fpath: str,
+        network_config_fpath: str,
+        iso_fpath: str,
+    ):
         self.meta_data_fpath = meta_data_fpath
         self.user_data_fpath = user_data_fpath
         self.network_config_fpath = network_config_fpath
@@ -129,30 +135,32 @@ class CloudInitIso:
 
         try:
             iso = pycdlib.PyCdlib()
-            iso.new(interchange_level=3, vol_ident='cidata', joliet=True, rock_ridge='1.09')
+            iso.new(
+                interchange_level=3, vol_ident="cidata", joliet=True, rock_ridge="1.09"
+            )
 
             iso.add_file(
                 self.meta_data_fpath,
-                iso_path='/METADATA;1',
-                rr_name='meta-data',
-                joliet_path='/meta-data',
+                iso_path="/METADATA;1",
+                rr_name="meta-data",
+                joliet_path="/meta-data",
             )
             iso.add_file(
                 self.user_data_fpath,
-                iso_path='/USERDATA;1',
-                rr_name='user-data',
-                joliet_path='/user-data',
+                iso_path="/USERDATA;1",
+                rr_name="user-data",
+                joliet_path="/user-data",
             )
             iso.add_file(
                 self.network_config_fpath,
-                iso_path='/NETCNFIG;1',
-                rr_name='network-config',
-                joliet_path='/network-config',
+                iso_path="/NETCNFIG;1",
+                rr_name="network-config",
+                joliet_path="/network-config",
             )
             iso.write(self.fpath)
             iso.close()
             return True
-        
+
         except Exception as e:
             click.echo(f"Error writting ISO: {e}")
             return False

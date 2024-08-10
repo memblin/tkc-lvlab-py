@@ -5,6 +5,11 @@ used to manage Libvirt based development environments in a familiar way.
 
 If you are wondering why I would write this, the long [answer is here](docs/Why.md)?
 
+> [!WARNING]
+> Very much a minimum viable product, it barely works. Do not use this
+> if you have important VMs in libvirt on your dev machine. Don't let
+> a bug ruin your day.
+
 ## Usage
 
 With `lvlab` one can create VMs automatically from a YAML syntax manifest
@@ -12,6 +17,11 @@ configuration that defines the environment, the virtual machines, and
 the base image information.
 
 - [Example YAML config file](docs/Lvlab.yml.example)
+
+## Installation
+
+- TODO: GHA Workflow to package and release this thing.
+- TODO: Fill in documentation on how to install from the release.
 
 ## Help Output
 
@@ -33,11 +43,7 @@ Commands:
   up            Start a machine defined in the Lvlab.yml manifest.
 ```
 
-## Current Functionality is MVP
-
-> [!WARNING]  
-> Very much a minimum viable product, it barely works. Do not use this
-> if you have important VMs in libvirt on your dev machine.
+## Current Functionality
 
 - Initializing the environment (init) is working
   - Downloads images defined in environment config
@@ -52,6 +58,9 @@ Commands:
   adjust disk image permissions this can require sudo.
 - Many many things have limited error checking support; expect crashes
   when permissions or config isn't just right.
+- status operation report is rudamentary and bugged right now. The
+  status reason will always translate to a shutdown reason right now
+  even if the VM is not shutdown.
 
 ## Requirements
 

@@ -37,7 +37,9 @@ class CloudImage:
             config_defaults.get("cloud_image_basedir", "/var/lib/libvirt/images/lvlab"),
             "cloud-images",
         )
-        self.image_fpath = os.path.join(os.path.expanduser(self.image_dir), self.filename)
+        self.image_fpath = os.path.join(
+            os.path.expanduser(self.image_dir), self.filename
+        )
 
         if self.checksum_url:
             # Debian 10, 11, and 12 use a checksum file name that conflicts
@@ -45,20 +47,25 @@ class CloudImage:
             match = re.search(r"debian-(\d+)", self.filename.lower())
             if match:
                 version = match.group(1)
-                checksum_filename = os.path.basename(urlparse(self.checksum_url).path) + f".debian{version}"
+                checksum_filename = (
+                    os.path.basename(urlparse(self.checksum_url).path)
+                    + f".debian{version}"
+                )
                 self.checksum_fpath = os.path.join(
                     os.path.expanduser(self.image_dir), checksum_filename
                 )
             else:
                 self.checksum_fpath = os.path.join(
-                    os.path.expanduser(self.image_dir), os.path.basename(urlparse(self.checksum_url).path)
+                    os.path.expanduser(self.image_dir),
+                    os.path.basename(urlparse(self.checksum_url).path),
                 )
         else:
             self.checksum_fpath = None
 
         if self.checksum_url_gpg:
             self.checksum_gpg_fpath = os.path.join(
-                os.path.expanduser(self.image_dir), os.path.basename(urlparse(self.checksum_url_gpg).path)
+                os.path.expanduser(self.image_dir),
+                os.path.basename(urlparse(self.checksum_url_gpg).path),
             )
         else:
             self.checksum_gpg_fpath = None

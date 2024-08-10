@@ -17,7 +17,11 @@ class VirtualDisk:
         self.index = disk_id
         self.size = disk.get("size", None)
         self.fpath = os.path.join(
-            os.path.expanduser(config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images/lvlab")),
+            os.path.expanduser(
+                config_defaults.get(
+                    "disk_image_basedir", "/var/lib/libvirt/images/lvlab"
+                )
+            ),
             environment.get("name", "LvLabEnvironment"),
             machine_vm_name,
             "disk" + f"{disk_id}" + ".qcow2",
@@ -65,7 +69,6 @@ class VirtualDisk:
             click.echo(f"Error in qemu-img call: {e}")
             return False
 
-
     def delete(self):
         """Delete a virtual disk"""
         if os.path.exists(self.fpath):
@@ -73,4 +76,3 @@ class VirtualDisk:
                 os.remove(self.fpath)
             except Exception as e:  # pylint: disable=broad-except
                 click.echo(f"Exception removing vdisk: {e}")
-

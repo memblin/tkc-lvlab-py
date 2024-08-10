@@ -40,12 +40,20 @@ class Machine:
 
         # Setup a maching file path to contain all of the files associated
         # with the instance of a machine.
-        vm_name = machine.get("vm_name", machine.get("hostname", None) + machine.get("domain", None))
-        config_fpath = os.path.expanduser(os.path.join(
-            os.path.expanduser(config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images/lvlab")),
-            environment.get("name", "LvLabEnvironment"),
-            vm_name
-        ))
+        vm_name = machine.get(
+            "vm_name", machine.get("hostname", None) + machine.get("domain", None)
+        )
+        config_fpath = os.path.expanduser(
+            os.path.join(
+                os.path.expanduser(
+                    config_defaults.get(
+                        "disk_image_basedir", "/var/lib/libvirt/images/lvlab"
+                    )
+                ),
+                environment.get("name", "LvLabEnvironment"),
+                vm_name,
+            )
+        )
 
         self.vm_name = vm_name
         self.hostname = machine.get("hostname", None)
@@ -55,7 +63,9 @@ class Machine:
         self.cpu = machine.get("cpu", config_defaults.get("cpu", 2))
         self.memory = machine.get("memory", config_defaults.get("memory", 2024))
         self.interfaces = machine.get("interfaces", [])
-        self.nameservers = machine.get("nameservers", config_defaults["interfaces"].get("nameservers", {}))
+        self.nameservers = machine.get(
+            "nameservers", config_defaults["interfaces"].get("nameservers", {})
+        )
         self.disks = machine.get("disks", [])
         self.config_fpath = config_fpath
 
@@ -75,9 +85,7 @@ class Machine:
         rendered_network_config = network_config.render_config()
         network_config_fpath = os.path.join(self.config_fpath, "network-config")
         click.echo(f"Writing cloud-init network config file {network_config_fpath}")
-        with open(
-            network_config_fpath, "w", encoding="utf-8"
-        ) as network_config_file:
+        with open(network_config_fpath, "w", encoding="utf-8") as network_config_file:
             network_config_file.write(rendered_network_config)
 
         # Render and write cloud-init: meta-data
@@ -85,9 +93,7 @@ class Machine:
         rendered_metadata_config = metadata_config.render_config()
         metadata_config_fpath = os.path.join(self.config_fpath, "meta-data")
         click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
-        with open(
-            metadata_config_fpath, "w", encoding="utf-8"
-        ) as metadata_config_file:
+        with open(metadata_config_fpath, "w", encoding="utf-8") as metadata_config_file:
             metadata_config_file.write(rendered_metadata_config)
 
         # Render and write cloud-init: user-data
@@ -97,13 +103,10 @@ class Machine:
         rendered_userdata_config = userdata_config.render_config()
         userdata_config_fpath = os.path.join(self.config_fpath, "user-data")
         click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")
-        with open(
-            userdata_config_fpath, "w", encoding="utf-8"
-        ) as userdata_config_file:
+        with open(userdata_config_fpath, "w", encoding="utf-8") as userdata_config_file:
             userdata_config_file.write(rendered_userdata_config)
 
         return metadata_config_fpath, userdata_config_fpath, network_config_fpath
-    
 
     def create_vdisks(self, environment={}, config_defaults={}, cloud_image=None):
         """Create all machine virtual disks"""
@@ -128,7 +131,6 @@ class Machine:
                 else:
                     click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
 
-
     def delete_vdisks(self, environment={}, config_defaults={}, cloud_image=None):
         """Delete all machine virtual disks"""
 
@@ -150,8 +152,9 @@ class Machine:
                     else:
                         click.echo(f"Deletion of virtual disk successful.")
             else:
-                click.echo(f"Virtual Disk: {vdisk.name} does not exist at {vdisk.fpath}")
-
+                click.echo(
+                    f"Virtual Disk: {vdisk.name} does not exist at {vdisk.fpath}"
+                )
 
     def deploy(self, config_path, uri):
         """Use virt-install to create a virtual machine"""
@@ -171,7 +174,7 @@ class Machine:
             f"network={self.interfaces[0].get("network", "default")},model=virtio",
             "--graphics",
             "vnc,listen=0.0.0.0",
-            "--noautoconsole"
+            "--noautoconsole",
         ]
 
         try:
@@ -187,7 +190,6 @@ class Machine:
             click.echo(f"{' '.join(command)}")
             return False
 
-
     def destroy(self, config_path, uri):
         """Destroy a machine by shutting it down, undefining it, and deleting the directory"""
         conn = connect_to_libvirt(uri)
@@ -201,12 +203,16 @@ class Machine:
             if vm_status in ["Running"]:
                 click.echo(f"Destroying {self.vm_name}")
                 if vm.destroy() > 0:
-                    click.echo(f"Failed to destroy (forcefully shutdown) {self.vm_name}")
+                    click.echo(
+                        f"Failed to destroy (forcefully shutdown) {self.vm_name}"
+                    )
                 vm_status, _ = get_domain_state_string(vm.state())
 
             if vm_status in ["Shut Off", "Crashed"]:
                 if vm.undefine() > 0:
-                    click.echo(f"Failed to undefine (remove from Libvirt) {self.vm_name} ")
+                    click.echo(
+                        f"Failed to undefine (remove from Libvirt) {self.vm_name} "
+                    )
                 else:
                     try:
                         machine_files = glob.glob(os.path.join(self.config_fpath, "*"))
@@ -219,7 +225,9 @@ class Machine:
                     except Exception as e:
                         click.echo(f"Exception when deleting: {e}")
         else:
-            click.echo(f"The virtual machine {self.vm_name} does not exist in this Libvirt URI")
+            click.echo(
+                f"The virtual machine {self.vm_name} does not exist in this Libvirt URI"
+            )
 
         conn.close()
 
@@ -253,7 +261,9 @@ class Machine:
                 vm_status, _ = get_domain_state_string(vm.state())
 
         else:
-            click.echo(f"The virtual machine {self.vm_name} does not exist in this Libvirt URI")
+            click.echo(
+                f"The virtual machine {self.vm_name} does not exist in this Libvirt URI"
+            )
 
         conn.close()
         return create_status
@@ -298,7 +308,7 @@ def connect_to_libvirt(uri=None):
 
 def get_domain_state_string(state):
     """Humanize the current state of the domain."""
-#    click.echo(f"Translating State: {state}")
+    #    click.echo(f"Translating State: {state}")
 
     vir_domain_state = {
         libvirt.VIR_DOMAIN_NOSTATE: "No State",

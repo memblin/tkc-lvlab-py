@@ -90,3 +90,12 @@ Commands:
   to be writable by the user to run w/o sudo.
   - I usually create these directories in advance and chown them for my
     user.
+
+- System packages
+
+### Ubuntu 22.04
+
+```bash
+# installs qemu-kvm, libvirt, python, git, and 2 dependencies needed by python-libvirt
+apt install qemu-kvm libvirt-daemon-system python3 python-venv python-pip git pkg-config libvirt-dev
+```

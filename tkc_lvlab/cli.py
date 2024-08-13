@@ -277,7 +277,7 @@ def status():
     click.echo("Images Used:\n")
     for image_name, image_date in images.items():
         click.echo(
-            f"  - {image_name} from {image_date.get("image_url", "Missing Image URL.")}"
+            f'  - {image_name} from {image_date.get("image_url", "Missing Image URL.")}'
         )
 
     click.echo()

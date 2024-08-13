@@ -171,7 +171,7 @@ class Machine:
             f"path={os.path.join(config_path, 'cidata.iso') + ',device=cdrom'}",
             f"--os-variant={self.os}",
             "--network",
-            f"network={self.interfaces[0].get("network", "default")},model=virtio",
+            f'network={self.interfaces[0].get("network", "default")},model=virtio',
             "--graphics",
             "vnc,listen=0.0.0.0",
             "--noautoconsole",

@@ -156,7 +156,7 @@ class Machine:
                     f"Virtual Disk: {vdisk.name} does not exist at {vdisk.fpath}"
                 )
 
-    def deploy(self, config_path, uri):
+    def deploy(self, config_path, config_defaults, uri):
         """Use virt-install to create a virtual machine"""
         command = [
             "virt-install",
@@ -176,6 +176,14 @@ class Machine:
             "vnc,listen=0.0.0.0",
             "--noautoconsole",
         ]
+
+        # Extend the command to enable shared_directories if found in the config
+        if config_defaults.get("shared_directories", None):
+            command.append("--memorybacking=source.type=memfd,access.mode=shared")
+            for filesystem in config_defaults.get("shared_directories", None):
+                command.append(
+                    f'--filesystem={filesystem["source"]},{filesystem["mount_tag"]},driver.type=virtiofs'
+                )
 
         try:
             subprocess.run(

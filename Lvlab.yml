@@ -4,7 +4,7 @@ environment:
     libvirt_uri: qemu:///system
     config_defaults:
       domain: local
-      os: debian12
+      os: fedora40
       cpu: 2
       memory: 2048
       disks:
@@ -27,30 +27,35 @@ environment:
         pubkey: ~/.ssh/id_ed25519.pub
         sudo: ["ALL=(ALL) NOPASSWD:ALL"]
         shell: /bin/bash
+        runcmd:
+          - curl --insecure https://vault.tkclabs.io:8200/v1/root_ca/ca/pem > /etc/pki/ca-trust/source/anchors/vault.tkclabs.io.crt
+          - touch /tmp/cloud-runcmd-worked
+        mounts:
+          - [ gitrepos, /srv/git, virtiofs, "rw,relatime 0 0" ]
 
     machines:
       - vm_name: salt.local
         hostname: salt
-        os: debian12
+        os: fedora40
         disks:
           - name: primary
             size: 25G
         interfaces:
-          - name: enp1s0
+          - name: eth0
             ip4: 192.168.122.12/24
             ip4gw: 192.168.122.1
       - vm_name: vault.local
         hostname: vault
-        os: debian12
+        os: fedora40
         interfaces:
-          - name: enp1s0
+          - name: eth0
             ip4: 192.168.122.16/24
             ip4gw: 192.168.122.1
       - vm_name: ghar.local
         hostname: ghar
-        os: debian12
+        os: fedora40
         interfaces:
-          - name: enp1s0
+          - name: eth0
             ip4: 192.168.122.17/24
             ip4gw: 192.168.122.1
 

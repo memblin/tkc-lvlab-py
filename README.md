@@ -72,6 +72,9 @@ Commands:
 - Re-rendering of cloud-init templates is functional (cloudinit)
 - Status command output is very limited
 - Cloud init templating is very limited
+  - runcmd feature working now
+  - mounts feature is working now
+- Libvirt shared directories feature is working
 - Cleanup is still a manual thing and since Libvirt and QEMU sometimes
   adjust disk image permissions this can require sudo.
 - Many many things have limited error checking support; expect crashes
@@ -97,5 +100,5 @@ These packages are required to install and use the lvlab application.
 
 ```bash
 # installs qemu-kvm, libvirt, python, git, and 2 dependencies needed by python-libvirt
-apt install qemu-kvm libvirt-daemon-system virt-manager python3 python-venv python-pip git pkg-config libvirt-dev
+apt install qemu-system-x86 libvirt-daemon-system virt-manager python3 python3-venv python3-pip git pkg-config libvirt-dev
 ```

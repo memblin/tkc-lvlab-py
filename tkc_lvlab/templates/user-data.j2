@@ -10,5 +10,17 @@ users:
       - {{ config.cloud_init.pubkey }}
     sudo: {{ config.cloud_init.sudo }}
     shell: {{ config.cloud_init.shell }}
+{%- if config.cloud_init.runcmd is defined and config.cloud_init.runcmd | length > 0 %}
+runcmd:
+  {%- for command in config.cloud_init.runcmd %}
+  - {{ command }}
+  {%- endfor %}
+{%- endif %}
+{%- if config.cloud_init.mounts is defined and config.cloud_init.mounts | length > 0 %}
+mounts:
+  {%- for mount in config.cloud_init.mounts %}
+  - {{ mount }}
+  {%- endfor %}
+{%- endif %}
 
 {# Ensure a blank line at end of rendered file #}

@@ -174,7 +174,9 @@ def up(vm_name):
             # virt-install the VM and check status
             click.echo(f"Attempting to start virtual maching: {machine.vm_name}")
             if machine.deploy(
-                machine.config_fpath, environment.get("libvirt_uri", "qemu:///session")
+                machine.config_fpath,
+                config_defaults,
+                environment.get("libvirt_uri", "qemu:///session"),
             ):
                 click.echo(f"Virtual machine deployment complete.")
             else:

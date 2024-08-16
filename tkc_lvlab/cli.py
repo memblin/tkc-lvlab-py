@@ -201,7 +201,7 @@ def destroy(vm_name):
     )
 
     if machine:
-        click.echo(f"Destroying virtual machine: {vm_name}")
+        # TODO: Ask for confirmation before destroying, control with feature flag?
         if machine.destroy(
             machine.config_fpath, environment.get("libvirt_uri", "qemu:///session")
         ):

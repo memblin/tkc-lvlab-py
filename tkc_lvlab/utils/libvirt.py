@@ -318,53 +318,75 @@ def get_domain_state_string(state):
 
     # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainState
     vir_domain_state = {
-        libvirt.VIR_DOMAIN_NOSTATE: "No State",
-        libvirt.VIR_DOMAIN_RUNNING: "Running",
-        libvirt.VIR_DOMAIN_BLOCKED: "Blocked",
-        libvirt.VIR_DOMAIN_PAUSED: "Paused",
-        libvirt.VIR_DOMAIN_SHUTDOWN: "Shutting Down",
-        libvirt.VIR_DOMAIN_SHUTOFF: "Shut Off",
-        libvirt.VIR_DOMAIN_CRASHED: "Crashed",
-        libvirt.VIR_DOMAIN_PMSUSPENDED: "Suspended by Power Management",
+        getattr(libvirt, "VIR_DOMAIN_NOSTATE", -1): "No State",
+        getattr(libvirt, "VIR_DOMAIN_RUNNING", -1): "Running",
+        getattr(libvirt, "VIR_DOMAIN_BLOCKED", -1): "Blocked",
+        getattr(libvirt, "VIR_DOMAIN_PAUSED", -1): "Paused",
+        getattr(libvirt, "VIR_DOMAIN_SHUTDOWN", -1): "Shutting Down",
+        getattr(libvirt, "VIR_DOMAIN_SHUTOFF", -1): "Shut Off",
+        getattr(libvirt, "VIR_DOMAIN_CRASHED", -1): "Crashed",
+        getattr(libvirt, "VIR_DOMAIN_PMSUSPENDED", -1): "Suspended by Power Management",
     }
 
     # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainShutoffReason
     vir_domain_shutoff_reason = {
-        libvirt.VIR_DOMAIN_SHUTOFF_UNKNOWN: "the reason is unknown",
-        libvirt.VIR_DOMAIN_SHUTOFF_SHUTDOWN: "normal shutdown",
-        libvirt.VIR_DOMAIN_SHUTOFF_DESTROYED: "forced poweroff",
-        libvirt.VIR_DOMAIN_SHUTOFF_CRASHED: "domain crashed",
-        libvirt.VIR_DOMAIN_SHUTOFF_MIGRATED: "migrated to another host",
-        libvirt.VIR_DOMAIN_SHUTOFF_SAVED: "saved to a file",
-        libvirt.VIR_DOMAIN_SHUTOFF_FAILED: "domain failed to start",
-        libvirt.VIR_DOMAIN_SHUTOFF_FROM_SNAPSHOT: "restored from a snapshot which was taken while domain was shutoff",
-        libvirt.VIR_DOMAIN_SHUTOFF_DAEMON: "daemon decided to kill domain during reconnection processing",
+        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_UNKNOWN", -1): "the reason is unknown",
+        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_SHUTDOWN", -1): "normal shutdown",
+        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_DESTROYED", -1): "forced poweroff",
+        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_CRASHED", -1): "domain crashed",
+        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_MIGRATED", -1): "migrated to another host",
+        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_SAVED", -1): "saved to a file",
+        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_FAILED", -1): "domain failed to start",
+        getattr(
+            libvirt, "VIR_DOMAIN_SHUTOFF_FROM_SNAPSHOT", -1
+        ): "restored from a snapshot which was taken while domain was shutoff",
+        getattr(
+            libvirt, "VIR_DOMAIN_SHUTOFF_DAEMON", -1
+        ): "daemon decided to kill domain during reconnection processing",
     }
 
     # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainRunningReason
     vir_domain_running_reason = {
-        libvirt.VIR_DOMAIN_RUNNING_BOOTED: "normal startup from boot",
-        libvirt.VIR_DOMAIN_RUNNING_CRASHED: "resumed from crashed",
-        libvirt.VIR_DOMAIN_RUNNING_FROM_SNAPSHOT: "restored from snapshot",
-        libvirt.VIR_DOMAIN_RUNNING_MIGRATED: "migrated from another host",
-        libvirt.VIR_DOMAIN_RUNNING_MIGRATION_CANCELED: "returned from migration",
-        libvirt.VIR_DOMAIN_RUNNING_POSTCOPY: "running in post-copy migration mode",
-        libvirt.VIR_DOMAIN_RUNNING_POSTCOPY_FAILED: "running in failed post-copy migration",
-        libvirt.VIR_DOMAIN_RUNNING_RESTORED: "restored from a state file",
-        libvirt.VIR_DOMAIN_RUNNING_SAVE_CANCELED: "returned from failed save process",
-        libvirt.VIR_DOMAIN_RUNNING_UNKNOWN: "Unknown",
-        libvirt.VIR_DOMAIN_RUNNING_UNPAUSED: "returned from paused state",
-        libvirt.VIR_DOMAIN_RUNNING_WAKEUP: "returned from pmsuspended due to wakeup event",
+        getattr(libvirt, "VIR_DOMAIN_RUNNING_BOOTED", -1): "normal startup from boot",
+        getattr(libvirt, "VIR_DOMAIN_RUNNING_CRASHED", -1): "resumed from crashed",
+        getattr(
+            libvirt, "VIR_DOMAIN_RUNNING_FROM_SNAPSHOT", -1
+        ): "restored from snapshot",
+        getattr(
+            libvirt, "VIR_DOMAIN_RUNNING_MIGRATED", -1
+        ): "migrated from another host",
+        getattr(
+            libvirt, "VIR_DOMAIN_RUNNING_MIGRATION_CANCELED", -1
+        ): "returned from migration",
+        getattr(
+            libvirt, "VIR_DOMAIN_RUNNING_POSTCOPY", -1
+        ): "running in post-copy migration mode",
+        getattr(
+            libvirt, "VIR_DOMAIN_RUNNING_POSTCOPY_FAILED", -1
+        ): "running in failed post-copy migration",
+        getattr(
+            libvirt, "VIR_DOMAIN_RUNNING_RESTORED", -1
+        ): "restored from a state file",
+        getattr(
+            libvirt, "VIR_DOMAIN_RUNNING_SAVE_CANCELED", -1
+        ): "returned from failed save process",
+        getattr(libvirt, "VIR_DOMAIN_RUNNING_UNKNOWN", -1): "Unknown",
+        getattr(
+            libvirt, "VIR_DOMAIN_RUNNING_UNPAUSED", -1
+        ): "returned from paused state",
+        getattr(
+            libvirt, "VIR_DOMAIN_RUNNING_WAKEUP", -1
+        ): "returned from pmsuspended due to wakeup event",
     }
 
     vir_domain_state = vir_domain_state.get(state[0], "Unknown State")
 
-    vir_domain_state_reason = "Unsupported Reason"
-    if state[0] == libvirt.VIR_DOMAIN_RUNNING:
+    vir_domain_state_reason = "No Specific Reason"
+    if state[0] == getattr(libvirt, "VIR_DOMAIN_RUNNING", -1):
         vir_domain_state_reason = vir_domain_running_reason.get(
             state[1], "Unknown Reason"
         )
-    elif state[0] == libvirt.VIR_DOMAIN_SHUTOFF:
+    elif state[0] == getattr(libvirt, "VIR_DOMAIN_SHUTOFF", -1):
         vir_domain_state_reason = vir_domain_shutoff_reason.get(
             state[1], "Unknown Reason"
         )

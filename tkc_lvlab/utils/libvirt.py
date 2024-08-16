@@ -38,11 +38,10 @@ class Machine:
         # Apply machine defaults
         machine = {**config_defaults, **machine}
 
-        # Setup a maching file path to contain all of the files associated
+        # Setup a machine file path to contain all of the files associated
         # with the instance of a machine.
-        vm_name = machine.get(
-            "vm_name", machine.get("hostname", None) + machine.get("domain", None)
-        )
+        # vm_name = machine.get("vm_name", machine.get("hostname", None) + machine.get("domain", None))
+        vm_name = machine.get("vm_name")
         config_fpath = os.path.expanduser(
             os.path.join(
                 os.path.expanduser(
@@ -161,7 +160,7 @@ class Machine:
         command = [
             "virt-install",
             f"--connect={uri}",
-            f"--name={self.hostname}.{self.domain}",
+            f"--name={self.vm_name}",
             f"--memory={self.memory}",
             f"--vcpus={self.cpu}",
             "--import",
@@ -171,7 +170,7 @@ class Machine:
             f"path={os.path.join(config_path, 'cidata.iso') + ',device=cdrom'}",
             f"--os-variant={self.os}",
             "--network",
-            f'network={self.interfaces[0].get("network", "default")},model=virtio',
+            f'network={self.interfaces[0].get("network", "default")},model=virtio,address.type=pci,address.domain=0,address.bus=1,address.slot=0,address.function=0',
             "--graphics",
             "vnc,listen=0.0.0.0",
             "--noautoconsole",
@@ -316,8 +315,8 @@ def connect_to_libvirt(uri=None):
 
 def get_domain_state_string(state):
     """Humanize the current state of the domain."""
-    #    click.echo(f"Translating State: {state}")
 
+    # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainState
     vir_domain_state = {
         libvirt.VIR_DOMAIN_NOSTATE: "No State",
         libvirt.VIR_DOMAIN_RUNNING: "Running",
@@ -329,6 +328,7 @@ def get_domain_state_string(state):
         libvirt.VIR_DOMAIN_PMSUSPENDED: "Suspended by Power Management",
     }
 
+    # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainShutoffReason
     vir_domain_shutoff_reason = {
         libvirt.VIR_DOMAIN_SHUTOFF_UNKNOWN: "the reason is unknown",
         libvirt.VIR_DOMAIN_SHUTOFF_SHUTDOWN: "normal shutdown",
@@ -341,8 +341,33 @@ def get_domain_state_string(state):
         libvirt.VIR_DOMAIN_SHUTOFF_DAEMON: "daemon decided to kill domain during reconnection processing",
     }
 
+    # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainRunningReason
+    vir_domain_running_reason = {
+        libvirt.VIR_DOMAIN_RUNNING_BOOTED: "normal startup from boot",
+        libvirt.VIR_DOMAIN_RUNNING_CRASHED: "resumed from crashed",
+        libvirt.VIR_DOMAIN_RUNNING_FROM_SNAPSHOT: "restored from snapshot",
+        libvirt.VIR_DOMAIN_RUNNING_MIGRATED: "migrated from another host",
+        libvirt.VIR_DOMAIN_RUNNING_MIGRATION_CANCELED: "returned from migration",
+        libvirt.VIR_DOMAIN_RUNNING_POSTCOPY: "running in post-copy migration mode",
+        libvirt.VIR_DOMAIN_RUNNING_POSTCOPY_FAILED: "running in failed post-copy migration",
+        libvirt.VIR_DOMAIN_RUNNING_RESTORED: "restored from a state file",
+        libvirt.VIR_DOMAIN_RUNNING_SAVE_CANCELED: "returned from failed save process",
+        libvirt.VIR_DOMAIN_RUNNING_UNKNOWN: "Unknown",
+        libvirt.VIR_DOMAIN_RUNNING_UNPAUSED: "returned from paused state",
+        libvirt.VIR_DOMAIN_RUNNING_WAKEUP: "returned from pmsuspended due to wakeup event",
+    }
+
     vir_domain_state = vir_domain_state.get(state[0], "Unknown State")
-    vir_domain_state_reason = vir_domain_shutoff_reason.get(state[1], "Unkown Reason")
+
+    vir_domain_state_reason = "Unsupported Reason"
+    if state[0] == libvirt.VIR_DOMAIN_RUNNING:
+        vir_domain_state_reason = vir_domain_running_reason.get(
+            state[1], "Unknown Reason"
+        )
+    elif state[0] == libvirt.VIR_DOMAIN_SHUTOFF:
+        vir_domain_state_reason = vir_domain_shutoff_reason.get(
+            state[1], "Unknown Reason"
+        )
 
     return vir_domain_state, vir_domain_state_reason
 

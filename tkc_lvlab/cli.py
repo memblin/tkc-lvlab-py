@@ -8,7 +8,7 @@ from .config import parse_config
 from .utils.cloud_init import CloudInitIso, MetaData, NetworkConfig, UserData
 from .utils.libvirt import (
     connect_to_libvirt,
-    get_domain_state_string,
+    get_machine_state,
     get_machine_by_vm_name,
     Machine,
 )
@@ -16,10 +16,124 @@ from .utils.vdisk import VirtualDisk
 from .utils.images import CloudImage
 
 
-@click.group()
+@click.group(context_settings=dict(help_option_names=["-h", "--help"]))
 def run():
     """A command-line tool for managing VMs."""
     pass
+
+
+@click.command()
+def capabilities():
+    """Hypervisor Capabilities"""
+    conn = connect_to_libvirt()
+
+    caps = conn.getCapabilities()
+    click.echo("Capabilities:\n" + caps)
+
+    conn.close()
+
+
+@click.command()
+@click.argument("vm_name")
+def cloudinit(vm_name):
+    """Render the cloud-init template for a machine defined in the Lvlab.yml manifest."""
+    try:
+        environment, images, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
+
+    machine = Machine(
+        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+    )
+
+    if machine:
+        cloud_image = CloudImage(
+            machine.os, images.get(machine.os), environment, config_defaults
+        )
+        # Render and write cloud-init config
+        _, _, _ = machine.cloud_init(cloud_image, config_defaults)
+
+
+@click.command()
+@click.argument("vm_name")
+@click.option("--force", is_flag=True, help="Force destruction without confirmation.")
+def destroy(vm_name, force=False):
+    """Destroy a Virtual machine listed in the LvLab manifest"""
+    try:
+        environment, _, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
+
+    machine = Machine(
+        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+    )
+    libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+
+    if machine:
+        exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
+        if exists:
+            if force or click.confirm(
+                f"Are you sure you want to destroy {machine.vm_name}?"
+            ):
+                if machine.destroy(libvirt_endpoint):
+                    click.echo(f"Destruction appears successful for {machine.vm_name}.")
+                else:
+                    click.echo(
+                        f"Destruction appears to have failed for {machine.vm_name}."
+                    )
+
+            else:
+                click.echo(f"Destruction aborted for {machine.vm_name}.")
+        else:
+            click.echo(
+                f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
+            )
+    else:
+        click.echo(f"Machine not found in manifest: {vm_name}")
+
+
+@click.command()
+@click.argument("vm_name")
+def down(vm_name):
+    """Shutdown a machine defined in the Lvlab.yml manifest."""
+    try:
+        environment, _, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
+
+    machine_config = get_machine_by_vm_name(machines, vm_name)
+    if machine_config:
+
+        machine = Machine(
+            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+        )
+
+        exists, state, _ = machine.exists_in_libvirt(
+            environment.get("libvirt_uri", "qemu:///session")
+        )
+
+        if exists:
+            if state in ["VIR_DOMAIN_RUNNING", "VIR_DOMAIN_PAUSED"]:
+                click.echo(f"Shutting down virtual machine {vm_name}.")
+                if (
+                    machine.shutdown(environment.get("libvirt_uri", "qemu:///session"))
+                    > 0
+                ):
+                    click.echo(f"Shutdown appears to have failed.")
+                else:
+                    click.echo(
+                        f"Shutdown appears successful. The virtual machine may take a short time to complete shutdown."
+                    )
+            elif state in ["VIR_DOMAIN_SHUTOFF"]:
+                click.echo(
+                    f"The virtual machine {machine.vm_name} is shutdown already."
+                )
+
+    else:
+        click.echo(f"Machine {vm_name} not found in manifest.")
 
 
 @click.command()
@@ -93,25 +207,40 @@ def init():
 
 
 @click.command()
-@click.argument("vm_name")
-def cloudinit(vm_name):
-    """Render the cloud-init template for a machine defined in the Lvlab.yml manifest."""
+def status():
+    """Show the status of the environment."""
     try:
-        environment, images, config_defaults, machines = parse_config()
+        environment, images, _, machines = parse_config()
     except TypeError as e:
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(
-        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-    )
+    click.echo()
+    click.echo(f'LvLab Environment Name: {environment.get("name", "no-name-lvlab")}\n')
+    conn = connect_to_libvirt(environment.get("libvirt_uri", None))
 
-    if machine:
-        cloud_image = CloudImage(
-            machine.os, images.get(machine.os), environment, config_defaults
+    # Get a list of current VMs
+    current_vms = [dom.name() for dom in conn.listAllDomains()]
+
+    click.echo("Machines Defined:\n")
+    for machine in machines:
+        if machine["vm_name"] in current_vms:
+            vm = conn.lookupByName(machine["vm_name"])
+            _, _, vm_status, vm_status_reason = get_machine_state(vm.state())
+            click.echo(
+                f"  - { machine['vm_name'] } is {vm_status} ({vm_status_reason})"
+            )
+        else:
+            click.echo(f"  - { machine['vm_name'] } is undeployed")
+
+    click.echo()
+    click.echo("Images Used:\n")
+    for image_name, image_date in images.items():
+        click.echo(
+            f'  - {image_name} from {image_date.get("image_url", "Missing Image URL.")}'
         )
-        # Render and write cloud-init config
-        _, _, _ = machine.cloud_init(cloud_image, config_defaults)
+
+    click.echo()
 
 
 @click.command()
@@ -124,22 +253,20 @@ def up(vm_name):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(
-        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-    )
+    machine_config = get_machine_by_vm_name(machines, vm_name)
+    if machine_config:
+        machine = Machine(machine_config, environment, config_defaults)
 
-    if machine:
-
-        exists, status, status_reason = machine.exists_in_libvirt(
-            environment.get("libvirt_uri", None)
+        exists, status, _ = machine.exists_in_libvirt(
+            environment.get("libvirt_uri", "qemu:///session")
         )
 
         if exists:
-            if status in ["Shut Off", "Crashed"]:
-                click.echo(f"Virtual machine exists, trying to start {machine.vm_name}")
+            if status in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
+                click.echo(f"Starting virtual machine {machine.vm_name}")
                 if machine.poweron(environment.get("libvirt_uri", None)) > 0:
                     click.echo(f"Problem powering on VM {machine.vm_name}")
-            elif status in ["Running"]:
+            elif status in ["VIR_DOMAIN_RUNNING"]:
                 click.echo(f"The virtual machine {machine.vm_name} is running already")
 
         else:
@@ -183,117 +310,17 @@ def up(vm_name):
                 click.echo(f"Virtual machine installation failed.")
 
     else:
-        click.echo(f"Machine not found: {vm_name}")
-
-
-@click.command()
-@click.argument("vm_name")
-def destroy(vm_name):
-    """Destroy a Virtual machine listed in the LvLab manifest"""
-    try:
-        environment, images, config_defaults, machines = parse_config()
-    except TypeError as e:
-        click.echo("Could not parse config file.")
-        sys.exit(1)
-
-    machine = Machine(
-        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-    )
-
-    if machine:
-        # TODO: Ask for confirmation before destroying, control with feature flag?
-        if machine.destroy(
-            machine.config_fpath, environment.get("libvirt_uri", "qemu:///session")
-        ):
-            click.echo(f"Destruction appears successful.")
-    else:
-        click.echo(f"Machine not found:  {vm_name}")
-
-
-@click.command()
-@click.argument("vm_name")
-def down(vm_name):
-    """Shutdown a machine defined in the Lvlab.yml manifest."""
-    try:
-        environment, images, config_defaults, machines = parse_config()
-    except TypeError as e:
-        click.echo("Could not parse config file.")
-        sys.exit(1)
-
-    machine = Machine(
-        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-    )
-
-    if machine:
-        click.echo(f"Shutting down virtual machine: {vm_name}")
-        if machine.shutdown(environment.get("libvirt_uri", "qemu:///session")) > 0:
-            click.echo(f"Shutdown appears to have failed.")
-
-        else:
-            click.echo(
-                f"Shutdown appears successful. The virtual machine may take a short time to complete shutdown."
-            )
-    else:
-        click.echo(f"Machine not found:  {vm_name}")
-
-
-@click.command()
-def capabilities():
-    """Hypervisor Capabilities"""
-    conn = connect_to_libvirt()
-
-    caps = conn.getCapabilities()
-    click.echo("Capabilities:\n" + caps)
-
-    conn.close()
-
-
-@click.command()
-def status():
-    """Show the status of the environment."""
-    try:
-        environment, images, config_defaults, machines = parse_config()
-    except TypeError as e:
-        click.echo("Could not parse config file.")
-        sys.exit(1)
-
-    click.echo()
-    click.echo(f'LvLab Environment Name: {environment.get("name", "no-name-lvlab")}\n')
-    conn = connect_to_libvirt(environment.get("libvirt_uri", None))
-
-    # Get a list of current VMs
-    current_vms = [dom.name() for dom in conn.listAllDomains()]
-
-    click.echo("Machines Defined:\n")
-    for machine in machines:
-        if machine["vm_name"] in current_vms:
-            vm = conn.lookupByName(machine["vm_name"])
-            vm_status, vm_status_reason = get_domain_state_string(vm.state())
-            click.echo(
-                f"  - { machine['vm_name'] } is {vm_status} ({vm_status_reason})"
-            )
-        else:
-            click.echo(f"  - { machine['vm_name'] } is undeployed")
-
-    click.echo()
-    click.echo("Images Used:\n")
-    for image_name, image_date in images.items():
-        click.echo(
-            f'  - {image_name} from {image_date.get("image_url", "Missing Image URL.")}'
-        )
-
-    click.echo()
+        click.echo(f"Machine {vm_name} not found in manifest.")
 
 
 # Bulid the CLI
 run.add_command(cloudinit)
-run.add_command(up)
 run.add_command(down)
 run.add_command(destroy)
 run.add_command(init)
 run.add_command(status)
 run.add_command(capabilities)
-
+run.add_command(up)
 
 if __name__ == "__main__":
     run()

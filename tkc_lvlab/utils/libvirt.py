@@ -4,6 +4,7 @@ import glob
 import os
 import click
 import libvirt
+import re
 import subprocess
 import sys
 
@@ -197,61 +198,82 @@ class Machine:
             click.echo(f"{' '.join(command)}")
             return False
 
-    def destroy(self, config_path, uri):
-        """Destroy a machine by shutting it down, undefining it, and deleting the directory"""
+    def destroy(self, uri):
+        """Destroy a machine by shutting it down, undefining it, and deleting the directory
+
+        config_path is to be used in the fugure
+        """
         conn = connect_to_libvirt(uri)
 
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
         if self.vm_name in current_vms:
             vm = conn.lookupByName(self.vm_name)
-            vm_status, _ = get_domain_state_string(vm.state())
+            vm_state, _, _, _ = get_machine_state(vm.state())
 
-            if vm_status in ["Running"]:
-                click.echo(f"Destroying {self.vm_name}")
+            if vm_state in ["VIR_DOMAIN_RUNNING", "VIR_DOMAIN_PAUSED"]:
+                click.echo(f"Forcefully shutting down {self.vm_name}")
                 if vm.destroy() > 0:
-                    click.echo(
-                        f"Failed to destroy (forcefully shutdown) {self.vm_name}"
-                    )
-                vm_status, _ = get_domain_state_string(vm.state())
+                    click.echo(f"Failed to forcefully shutdown {self.vm_name}")
+                vm_state, _, _, _ = get_machine_state(vm.state())
 
-            if vm_status in ["Shut Off", "Crashed"]:
+            if vm_state in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
+                click.echo(f"Undefining {self.vm_name}")
                 if vm.undefine() > 0:
                     click.echo(
                         f"Failed to undefine (remove from Libvirt) {self.vm_name} "
                     )
                 else:
+                    # Done with libvirt connection
+                    conn.close()
                     try:
                         machine_files = glob.glob(os.path.join(self.config_fpath, "*"))
                         for file in machine_files:
                             if os.path.isfile(file):
+                                click.echo(f"Removing file {file}.")
                                 os.remove(file)
-                            elif os.path.isdir(file):
-                                os.rmdir(file)
-
                     except Exception as e:
-                        click.echo(f"Exception when deleting: {e}")
+                        click.echo(f"Exception when removing machine files {e}")
+                        return False
+
+                    try:
+                        # Check if the directory is empty and then remove it
+                        if not os.listdir(self.config_fpath):
+                            click.echo(
+                                f"Removing machine directory {self.config_fpath}."
+                            )
+                            os.rmdir(self.config_fpath)
+                        else:
+                            click.echo(
+                                f"Machine directory {self.config_fpath} is not empty."
+                            )
+                    except Exception as e:
+                        click.echo(f"Exception when removing machine files {e}")
+                        return False
+
         else:
             click.echo(
                 f"The virtual machine {self.vm_name} does not exist in this Libvirt URI"
             )
+            conn.close()
+            return False
 
-        conn.close()
+        return True
 
     def exists_in_libvirt(self, uri):
         """Virtual machine existance and status"""
-        exists, status, status_reason = (False, 0, 0)
+        exists, state, state_reason = (False, 0, 0)
 
         conn = connect_to_libvirt(uri)
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
         if self.vm_name in current_vms:
             vm = conn.lookupByName(self.vm_name)
-            status, status_reason = get_domain_state_string(vm.state())
+            state, state_reason, _, _ = get_machine_state(vm.state())
             exists = True
 
         conn.close()
-        return exists, status, status_reason
+        return exists, state, state_reason
 
     def poweron(self, uri):
         """Powreon a virtual machine"""
@@ -261,11 +283,10 @@ class Machine:
 
         if self.vm_name in current_vms:
             vm = conn.lookupByName(self.vm_name)
-            vm_status, _ = get_domain_state_string(vm.state())
+            vm_state, _, _, _ = get_machine_state(vm.state())
 
-            if vm_status in ["Shut Off", "Crashed"]:
+            if vm_state in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
                 create_status = vm.create()
-                vm_status, _ = get_domain_state_string(vm.state())
 
         else:
             click.echo(
@@ -285,11 +306,15 @@ class Machine:
 
         if self.vm_name in current_vms:
             vm = conn.lookupByName(self.vm_name)
-            vm_status, _ = get_domain_state_string(vm.state())
+            vm_state, _, _, _ = get_machine_state(vm.state())
 
-            if vm_status in ["Running"]:
+            if vm_state in [
+                "VIR_DOMAIN_RUNNING",
+                "VIR_DOMAIN_BLOCKED",
+                "VIR_DOMAIN_PAUSED",
+                "VIR_DOMAIN_PMSUSPENDED",
+            ]:
                 shutdown_status = vm.shutdown()
-                vm_status, _ = get_domain_state_string(vm.state())
 
             if shutdown_status > 0:
                 click.echo(f"Error with machine.shutdown")
@@ -313,85 +338,90 @@ def connect_to_libvirt(uri=None):
     return conn
 
 
-def get_domain_state_string(state):
-    """Humanize the current state of the domain."""
+def _humanize_machine_status(state: str, state_reason: str) -> tuple:
+    """Convert status constant value into something more descriptive"""
 
-    # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainState
-    vir_domain_state = {
-        getattr(libvirt, "VIR_DOMAIN_NOSTATE", -1): "No State",
-        getattr(libvirt, "VIR_DOMAIN_RUNNING", -1): "Running",
-        getattr(libvirt, "VIR_DOMAIN_BLOCKED", -1): "Blocked",
-        getattr(libvirt, "VIR_DOMAIN_PAUSED", -1): "Paused",
-        getattr(libvirt, "VIR_DOMAIN_SHUTDOWN", -1): "Shutting Down",
-        getattr(libvirt, "VIR_DOMAIN_SHUTOFF", -1): "Shut Off",
-        getattr(libvirt, "VIR_DOMAIN_CRASHED", -1): "Crashed",
-        getattr(libvirt, "VIR_DOMAIN_PMSUSPENDED", -1): "Suspended by Power Management",
+    vir_domain_state_descriptions = {
+        # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainState
+        "VIR_DOMAIN_NOSTATE": "no state",
+        "VIR_DOMAIN_RUNNING": "the machine is running",
+        "VIR_DOMAIN_BLOCKED": "the machine is blocked on resource",
+        "VIR_DOMAIN_PAUSED": "the machine is paused by user",
+        "VIR_DOMAIN_SHUTDOWN": "the machine is being shut down",
+        "VIR_DOMAIN_SHUTOFF": "the machine is shut off",
+        "VIR_DOMAIN_CRASHED": "the machine is crashed",
+        "VIR_DOMAIN_PMSUSPENDED": "the machine is suspended by guest power management",
     }
 
-    # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainShutoffReason
-    vir_domain_shutoff_reason = {
-        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_UNKNOWN", -1): "the reason is unknown",
-        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_SHUTDOWN", -1): "normal shutdown",
-        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_DESTROYED", -1): "forced poweroff",
-        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_CRASHED", -1): "domain crashed",
-        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_MIGRATED", -1): "migrated to another host",
-        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_SAVED", -1): "saved to a file",
-        getattr(libvirt, "VIR_DOMAIN_SHUTOFF_FAILED", -1): "domain failed to start",
-        getattr(
-            libvirt, "VIR_DOMAIN_SHUTOFF_FROM_SNAPSHOT", -1
-        ): "restored from a snapshot which was taken while domain was shutoff",
-        getattr(
-            libvirt, "VIR_DOMAIN_SHUTOFF_DAEMON", -1
-        ): "daemon decided to kill domain during reconnection processing",
+    vir_domain_state_reason_descriptions = {
+        # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainRunningReason
+        "VIR_DOMAIN_RUNNING_UNKNOWN": "Unknown",
+        "VIR_DOMAIN_RUNNING_BOOTED": "normal startup from boot",
+        "VIR_DOMAIN_RUNNING_MIGRATED": "migrated from another host",
+        "VIR_DOMAIN_RUNNING_RESTORED": "restored from a state file",
+        "VIR_DOMAIN_RUNNING_FROM_SNAPSHOT": "restored from snapshot",
+        "VIR_DOMAIN_RUNNING_UNPAUSED": "returned from paused state",
+        "VIR_DOMAIN_RUNNING_MIGRATION_CANCELED": "returned from migration",
+        "VIR_DOMAIN_RUNNING_SAVE_CANCELED": "returned from failed save process",
+        "VIR_DOMAIN_RUNNING_WAKEUP": "returned from pmsuspended due to wakeup event",
+        "VIR_DOMAIN_RUNNING_CRASHED": "resumed from crashed",
+        "VIR_DOMAIN_RUNNING_POSTCOPY": "running in post-copy migration mode",
+        "VIR_DOMAIN_RUNNING_POSTCOPY_FAILED": "running in failed post-copy migration",
+        # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainShutdownReason
+        "VIR_DOMAIN_SHUTDOWN_UNKNOWN": "the reason is unknown",
+        "VIR_DOMAIN_SHUTDOWN_USER": "shutting down on user request",
+        # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainShutoffReason
+        "VIR_DOMAIN_SHUTOFF_UNKNOWN": "the reason is unknown",
+        "VIR_DOMAIN_SHUTOFF_SHUTDOWN": "normal shutdown",
+        "VIR_DOMAIN_SHUTOFF_DESTROYED": "forced poweroff",
+        "VIR_DOMAIN_SHUTOFF_CRASHED": "machine crashed",
+        "VIR_DOMAIN_SHUTOFF_MIGRATED": "migrated to another host",
+        "VIR_DOMAIN_SHUTOFF_SAVED": "saved to a file",
+        "VIR_DOMAIN_SHUTOFF_FAILED": "machine failed to start",
+        "VIR_DOMAIN_SHUTOFF_FROM_SNAPSHOT": "restored from a snapshot which was taken while machine was shutoff",
+        "VIR_DOMAIN_SHUTOFF_DAEMON": "daemon decided to kill machine during reconnection processing",
     }
 
-    # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainRunningReason
-    vir_domain_running_reason = {
-        getattr(libvirt, "VIR_DOMAIN_RUNNING_BOOTED", -1): "normal startup from boot",
-        getattr(libvirt, "VIR_DOMAIN_RUNNING_CRASHED", -1): "resumed from crashed",
-        getattr(
-            libvirt, "VIR_DOMAIN_RUNNING_FROM_SNAPSHOT", -1
-        ): "restored from snapshot",
-        getattr(
-            libvirt, "VIR_DOMAIN_RUNNING_MIGRATED", -1
-        ): "migrated from another host",
-        getattr(
-            libvirt, "VIR_DOMAIN_RUNNING_MIGRATION_CANCELED", -1
-        ): "returned from migration",
-        getattr(
-            libvirt, "VIR_DOMAIN_RUNNING_POSTCOPY", -1
-        ): "running in post-copy migration mode",
-        getattr(
-            libvirt, "VIR_DOMAIN_RUNNING_POSTCOPY_FAILED", -1
-        ): "running in failed post-copy migration",
-        getattr(
-            libvirt, "VIR_DOMAIN_RUNNING_RESTORED", -1
-        ): "restored from a state file",
-        getattr(
-            libvirt, "VIR_DOMAIN_RUNNING_SAVE_CANCELED", -1
-        ): "returned from failed save process",
-        getattr(libvirt, "VIR_DOMAIN_RUNNING_UNKNOWN", -1): "Unknown",
-        getattr(
-            libvirt, "VIR_DOMAIN_RUNNING_UNPAUSED", -1
-        ): "returned from paused state",
-        getattr(
-            libvirt, "VIR_DOMAIN_RUNNING_WAKEUP", -1
-        ): "returned from pmsuspended due to wakeup event",
-    }
+    # Lookup the state in vir_domain_state_descriptions, if not found use the
+    # state as-is, a constant is better than nothing.
+    status = vir_domain_state_descriptions.get(state, state)
+    # Same for state_reason
+    reason = vir_domain_state_reason_descriptions.get(state_reason, state_reason)
 
-    vir_domain_state = vir_domain_state.get(state[0], "Unknown State")
+    return status, reason
 
-    vir_domain_state_reason = "No Specific Reason"
-    if state[0] == getattr(libvirt, "VIR_DOMAIN_RUNNING", -1):
-        vir_domain_state_reason = vir_domain_running_reason.get(
-            state[1], "Unknown Reason"
-        )
-    elif state[0] == getattr(libvirt, "VIR_DOMAIN_SHUTOFF", -1):
-        vir_domain_state_reason = vir_domain_shutoff_reason.get(
-            state[1], "Unknown Reason"
-        )
 
-    return vir_domain_state, vir_domain_state_reason
+def get_machine_state(state: tuple) -> tuple:
+    """Gets the current state of the domain.
+
+    https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainState
+    https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainShutoffReason
+    https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainRunningReason
+
+    """
+    # Get possible domain states from the library
+    vir_domain_states = {}
+    # https://docs.python.org/3/library/functions.html#vars
+    for k, v in vars(libvirt).items():
+        if re.match("VIR_DOMAIN_[A-Z]+$", k):
+            vir_domain_states[v] = k
+
+    # Get possible domain state reasons from the library
+    vir_domain_state_reasons = {}
+    for vir_domain_state in vir_domain_states.items():
+        pattern = vir_domain_state[1] + "_[A-Z]+$"
+        reason = {}
+        # https://docs.python.org/3/library/functions.html#vars
+        for k, v in vars(libvirt).items():
+            if re.match(pattern, k):
+                reason[v] = k
+                vir_domain_state_reasons[vir_domain_state[0]] = reason
+
+    machine_state = vir_domain_states.get(state[0], "Unknown State")
+    machine_state_reason = vir_domain_state_reasons[state[0]][state[1]]
+    status, reason = _humanize_machine_status(machine_state, machine_state_reason)
+
+    return machine_state, machine_state_reason, status, reason
 
 
 def get_machine_by_vm_name(machines, vm_name):

@@ -13,7 +13,15 @@ users:
 {%- if config.cloud_init.runcmd is defined and config.cloud_init.runcmd | length > 0 %}
 runcmd:
   {%- for command in config.cloud_init.runcmd %}
-  - {{ command }}
+  {%- if '\n' in command %}
+  - |
+    {{ command.split('\n')[0] }}
+    {%- for line in command.split('\n')[1:] %}
+    {{ line }}
+    {%- endfor %}
+  {%- else %}
+  - {{ command | indent(4) }}
+  {%- endif %}
   {%- endfor %}
 {%- endif %}
 {%- if config.cloud_init.mounts is defined and config.cloud_init.mounts | length > 0 %}

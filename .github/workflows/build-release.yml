@@ -6,10 +6,40 @@ on:
       build_tag:
         description: 'Tag to build'
         required: true
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+    branches:
+      - 'main'
 
 jobs:
-  build-release:
+  auto-build-release:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.ref_name }}
+    - name: Install python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.12
+    - name: Install poetry and build tkc_lvlab
+      run: |
+        pip install -r requirements.txt
+        poetry build
+    - name: Create release and upload artifacts
+      run: |
+        gh release create ${{ github.ref_name }} ./dist/tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+  manual-build-release:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     steps:

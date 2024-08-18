@@ -1,6 +1,6 @@
 ---
 environment:
-  - name: libvirt-salt-dev
+  - name: lvlab-dev
     libvirt_uri: qemu:///system
     config_defaults:
       domain: local
@@ -15,11 +15,7 @@ environment:
           nameservers:
             search: [local]
             addresses: [192.168.122.1]
-      # cloud_image_basedir: /var/lib/libvirt/images/lvlab
-      # disk_image_basedir: /var/lib/libvirt/images/lvlab
       shared_directories:
-        # requires mounting in guest like:
-        # mount -t virtiofs gitrepos /srv/git
         - source: /home/crow/repos
           mount_tag: gitrepos
       cloud_init:
@@ -29,31 +25,63 @@ environment:
         shell: /bin/bash
         runcmd:
           - curl --insecure https://vault.tkclabs.io:8200/v1/root_ca/ca/pem > /etc/pki/ca-trust/source/anchors/vault.tkclabs.io.crt
-          - touch /tmp/cloud-runcmd-worked
-        mounts:
-          - [ gitrepos, /srv/git, virtiofs, "rw,relatime 0 0" ]
+          - curl -s -o /root/bootstrap-salt.sh -L https://bootstrap.saltproject.io
+          - chmod 0755 /root/bootstrap-salt.sh
+          - /root/bootstrap-salt.sh -X -A 192.168.122.12 stable 3007
+          - |
+            cat << EOF > /etc/salt/minion.d/cloud_init_customization.conf
+            # This reduces latency for some salt operations when reverse
+            # DNS is not in place for the machine.
+            enable_fqdns_grains: False
+
+            EOF
+          - systemctl enable --now salt-minion
+
 
     machines:
       - vm_name: salt.local
         hostname: salt
-        os: fedora40
-        disks:
-          - name: primary
-            size: 25G
         interfaces:
           - name: eth0
             ip4: 192.168.122.12/24
             ip4gw: 192.168.122.1
+        cloud_init:
+          runcmd_ignore_defaults: true
+          runcmd:
+            - curl --insecure https://vault.tkclabs.io:8200/v1/root_ca/ca/pem > /etc/pki/ca-trust/source/anchors/vault.tkclabs.io.crt
+            - curl -s -o /root/bootstrap-salt.sh -L https://bootstrap.saltproject.io
+            - chmod 0755 /root/bootstrap-salt.sh
+            - /root/bootstrap-salt.sh -X -M -A 127.0.0.1 stable 3007
+            # Salt master config customization
+            - |
+              cat << EOF > /etc/salt/master.d/cloud_init_master.conf
+              # Auto-accept for the lab
+              auto_accept: True
+
+              EOF
+            # Salt minion config customization
+            - |
+              cat << EOF > /etc/salt/minion.d/cloud_init_minion.conf
+              # This reduces latency for some salt operations when reverse
+              # DNS is not in place for the machine.
+              enable_fqdns_grains: False
+
+              EOF
+            - systemctl enable --now salt-master
+            - systemctl enable --now salt-minion
+          mounts:
+            - [gitrepos, /srv/git, virtiofs, "ro,relatime"]
       - vm_name: vault.local
         hostname: vault
-        os: fedora40
         interfaces:
           - name: eth0
             ip4: 192.168.122.16/24
             ip4gw: 192.168.122.1
-      - vm_name: ghar.local
-        hostname: ghar
-        os: debian12
+        cloud_init:
+          runcmd:
+            - touch /tmp/cloud_init_from_machine_file
+      - vm_name: jenkins.local
+        hostname: jenkins
         interfaces:
           - name: eth0
             ip4: 192.168.122.17/24

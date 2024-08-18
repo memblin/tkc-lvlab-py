@@ -67,6 +67,7 @@ class Machine:
             "nameservers", config_defaults["interfaces"].get("nameservers", {})
         )
         self.disks = machine.get("disks", [])
+        self.cloud_init_config = machine.get("cloud_init", {})
         self.config_fpath = config_fpath
 
     def cloud_init(self, cloud_image, config_defaults):
@@ -97,9 +98,32 @@ class Machine:
             metadata_config_file.write(rendered_metadata_config)
 
         # Render and write cloud-init: user-data
-        userdata_config = UserData(
-            config_defaults.get("cloud_init", {}), self.hostname, self.domain
-        )
+        cloud_init_defaults = config_defaults.get("cloud_init", {})
+
+        # Apply cloud_init defaults
+        if self.cloud_init_config.get("runcmd_ignore_defaults", False):
+            click.echo(f"Ignoring config_defaults:cloud_init:runcmd for {self.vm_name}")
+            cloud_init_defaults_filtered = {
+                k: v for k, v in cloud_init_defaults.items() if k != "runcmd"
+            }
+            cloud_init_config = {
+                **cloud_init_defaults_filtered,
+                **self.cloud_init_config,
+            }
+        else:
+            click.echo(
+                f"Including config_defaults:cloud_init:runcmd for {self.vm_name}"
+            )
+            cloud_init_config = {**cloud_init_defaults, **self.cloud_init_config}
+
+            if "runcmd" in cloud_init_defaults and "runcmd" in self.cloud_init_config:
+                cloud_init_config["runcmd"] = (
+                    cloud_init_defaults["runcmd"] + self.cloud_init_config["runcmd"]
+                )
+            elif "runcmd" in cloud_init_defaults:
+                cloud_init_config["runcmd"] = cloud_init_defaults["runcmd"]
+
+        userdata_config = UserData(cloud_init_config, self.hostname, self.domain)
         rendered_userdata_config = userdata_config.render_config()
         userdata_config_fpath = os.path.join(self.config_fpath, "user-data")
         click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")

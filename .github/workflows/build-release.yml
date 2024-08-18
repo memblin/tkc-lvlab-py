@@ -15,7 +15,10 @@ on:
 jobs:
   auto-build-release:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    # Only run auto-build when we push tags, not every push
+    if: |
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:

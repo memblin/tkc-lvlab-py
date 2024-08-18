@@ -6,7 +6,7 @@ import click
 import yaml
 
 
-def generate_hosts(environment, config_defaults, machines):
+def generate_hosts(environment, config_defaults, machines, heredoc=None):
     """Generte hosts file entry content from config
 
     Parses the manifest to create sets of /etc/hosts
@@ -29,7 +29,12 @@ def generate_hosts(environment, config_defaults, machines):
             }
             hosts.append(hosts_entry)
 
-    config = {"env": environment, "defaults": config_defaults, "hosts": hosts}
+    config = {
+        "env": environment,
+        "defaults": config_defaults,
+        "hosts": hosts,
+        "heredoc": heredoc,
+    }
     template_file = "hosts.j2"
     template = env.get_template(template_file)
 

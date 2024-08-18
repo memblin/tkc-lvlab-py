@@ -4,7 +4,7 @@ import os
 import sys
 
 import click
-from .config import parse_config
+from .config import parse_config, generate_hosts
 from .utils.cloud_init import CloudInitIso, MetaData, NetworkConfig, UserData
 from .utils.libvirt import (
     connect_to_libvirt,
@@ -134,6 +134,56 @@ def down(vm_name):
 
     else:
         click.echo(f"Machine {vm_name} not found in manifest.")
+
+
+@click.command()
+@click.option(
+    "--append", is_flag=True, help="Attempt to append hosts snippet to /etc/hosts."
+)
+@click.option(
+    "--heredoc",
+    is_flag=True,
+    help="Render hosts snippet as a heredoc to append to /etc/hosts.",
+)
+def hosts(append=False, heredoc=False):
+    """Provide /etc/hosts support
+
+    This command by default will only print recommended
+    /etc/hosts snippets to the screen.
+
+    Flags can augment the output.
+
+    --append : Attempt to append hosts snippet to /etc/hosts.
+
+      Needs privs like; sudo $(which lvlab) hosts --append
+
+    --heredoc : Render hosts snippet as a heredoc to append to /etc/hosts.
+
+    """
+    try:
+        environment, _, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit()
+
+    hosts_snippet = generate_hosts(environment, config_defaults, machines)
+
+    if append:
+        etc_hosts = "/etc/hosts"
+        if os.access(etc_hosts, os.W_OK):
+            click.echo("Appending hosts file snippet to /etc/hosts")
+            with open(etc_hosts, "a") as hosts_file:
+                hosts_file.write(hosts_snippet)
+        else:
+            click.echo("No write access available for /etc/hosts")
+
+    if heredoc:
+        click.echo("cat << EOF | sudo tee -a /etc/hosts")
+
+    click.echo(f"{hosts_snippet}")
+
+    if heredoc:
+        click.echo("EOF")
 
 
 @click.command()
@@ -321,6 +371,7 @@ run.add_command(init)
 run.add_command(status)
 run.add_command(capabilities)
 run.add_command(up)
+run.add_command(hosts)
 
 if __name__ == "__main__":
     run()

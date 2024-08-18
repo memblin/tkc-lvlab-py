@@ -27,7 +27,7 @@ environment:
           - curl --insecure https://vault.tkclabs.io:8200/v1/root_ca/ca/pem > /etc/pki/ca-trust/source/anchors/vault.tkclabs.io.crt
           - curl -s -o /root/bootstrap-salt.sh -L https://bootstrap.saltproject.io
           - chmod 0755 /root/bootstrap-salt.sh
-          - /root/bootstrap-salt.sh -X -A 192.168.122.12 stable 3007
+          - /root/bootstrap-salt.sh -X -A salt.local stable 3007
           - |
             cat << EOF > /etc/salt/minion.d/cloud_init_customization.conf
             # This reduces latency for some salt operations when reverse
@@ -36,7 +36,6 @@ environment:
 
             EOF
           - systemctl enable --now salt-minion
-
 
     machines:
       - vm_name: salt.local

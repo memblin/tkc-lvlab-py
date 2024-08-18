@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 
+from ..config import parse_config, generate_hosts
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
 
@@ -55,6 +56,7 @@ class Machine:
             )
         )
 
+        self.environment = environment
         self.vm_name = vm_name
         self.hostname = machine.get("hostname", None)
         self.domain = config_defaults.get("domain", None)
@@ -122,6 +124,42 @@ class Machine:
                 )
             elif "runcmd" in cloud_init_defaults:
                 cloud_init_config["runcmd"] = cloud_init_defaults["runcmd"]
+
+        # Append /etc/hosts snippet to machine user-data runcmd list
+        try:
+            _, _, _, machines = parse_config()
+        except TypeError as e:
+            click.echo("Could not parse config file.")
+            sys.exit()
+
+        hosts_snippet = generate_hosts(
+            self.environment, config_defaults, machines, heredoc="/etc/hosts"
+        )
+
+        # We need to append entries to the correct cloud-init hosts template
+        # file in /etc/cloud/templates too.
+        template_file_mapping = {
+            "hosts.debian.tmpl": ["debian", "ubuntu"],
+            "hosts.redhat.tmpl": ["fedora", "rockylinux", "almalinux", "rhel"],
+        }
+
+        distro = re.sub(r"\d+(\.\d+)?$", "", self.os)
+        for template, distros in template_file_mapping.items():
+            if distro in distros:
+                template_fpath = "/etc/cloud/templates/" + template
+
+        hosts_template_snippet = generate_hosts(
+            self.environment, config_defaults, machines, heredoc=template_fpath
+        )
+
+        if "runcmd" not in cloud_init_config:
+            cloud_init_config["runcmd"] = []
+
+        # Append the hosts_snippet to the top of the runcmd list so /etc/hosts gets
+        # populated first as the runcmd is processed.
+        cloud_init_config["runcmd"] = (
+            [hosts_snippet] + [hosts_template_snippet] + cloud_init_config["runcmd"]
+        )
 
         userdata_config = UserData(cloud_init_config, self.hostname, self.domain)
         rendered_userdata_config = userdata_config.render_config()

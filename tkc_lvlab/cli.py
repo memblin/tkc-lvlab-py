@@ -66,30 +66,35 @@ def destroy(vm_name, force=False):
         click.echo("Could not parse config file.")
         sys.exit(1)
 
-    machine = Machine(
-        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-    )
-    libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+    machine_config = get_machine_by_vm_name(machines, vm_name)
+    if machine_config:
 
-    if machine:
-        exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
-        if exists:
-            if force or click.confirm(
-                f"Are you sure you want to destroy {machine.vm_name}?"
-            ):
-                if machine.destroy(libvirt_endpoint):
-                    click.echo(f"Destruction appears successful for {machine.vm_name}.")
+        machine = Machine(
+            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+        )
+        libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+
+        if machine:
+            exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
+            if exists:
+                if force or click.confirm(
+                    f"Are you sure you want to destroy {machine.vm_name}?"
+                ):
+                    if machine.destroy(libvirt_endpoint):
+                        click.echo(
+                            f"Destruction appears successful for {machine.vm_name}."
+                        )
+                    else:
+                        click.echo(
+                            f"Destruction appears to have failed for {machine.vm_name}."
+                        )
+
                 else:
-                    click.echo(
-                        f"Destruction appears to have failed for {machine.vm_name}."
-                    )
-
+                    click.echo(f"Destruction aborted for {machine.vm_name}.")
             else:
-                click.echo(f"Destruction aborted for {machine.vm_name}.")
-        else:
-            click.echo(
-                f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
-            )
+                click.echo(
+                    f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
+                )
     else:
         click.echo(f"Machine not found in manifest: {vm_name}")
 
@@ -178,12 +183,11 @@ def hosts(append=False, heredoc=False):
             click.echo("No write access available for /etc/hosts")
 
     if heredoc:
-        click.echo("cat << EOF | sudo tee -a /etc/hosts")
+        hosts_snippet = generate_hosts(
+            environment, config_defaults, machines, heredoc="/etc/hosts"
+        )
 
     click.echo(f"{hosts_snippet}")
-
-    if heredoc:
-        click.echo("EOF")
 
 
 @click.command()

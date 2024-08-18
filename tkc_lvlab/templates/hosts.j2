@@ -1,7 +1,17 @@
+{%- if config.heredoc -%}
+cat << EOF >> {{ config.heredoc }}
 
 # Libvirt Labs /etc/hosts snippet
 # Environment: {{ config.env.name }}
 {%- for entry in config.hosts %}
 {{ entry.ip4 }} {{ entry.fqdn }} {{ entry.hostname }}
 {%- endfor %}
+EOF
+{%- else -%}
+# Libvirt Labs /etc/hosts snippet
+# Environment: {{ config.env.name }}
+{%- for entry in config.hosts %}
+{{ entry.ip4 }} {{ entry.fqdn }} {{ entry.hostname }}
+{%- endfor %}
+{%- endif %}
 {# Ensure newline at end of rendered output #}

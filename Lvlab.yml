@@ -86,6 +86,10 @@ environment:
           - name: eth0
             ip4: 192.168.122.17/24
             ip4gw: 192.168.122.1
+      - vm_name: dhcpconfig.local
+        hostname: dhcpconfig
+        interfaces:
+          - name: eth0
 
 images:
   fedora40:

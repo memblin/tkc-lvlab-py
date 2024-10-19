@@ -280,6 +280,12 @@ class Machine:
                 vm_state, _, _, _ = get_machine_state(vm.state())
 
             if vm_state in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
+                if vm.hasCurrentSnapshot():
+                    click.echo(f"Deleting all snapshots for {self.vm_name}")
+                    for snapshot in vm.listAllSnapshots():
+                        click.echo(f"Deleting snapshot {snapshot.getName()}")
+                        snapshot.delete()
+
                 click.echo(f"Undefining {self.vm_name}")
                 if vm.undefine() > 0:
                     click.echo(
@@ -336,6 +342,65 @@ class Machine:
 
         conn.close()
         return exists, state, state_reason
+
+    def list_snapshots(self, uri):
+        """List snapshots for a virtual machine"""
+        snapshots = []
+        conn = connect_to_libvirt(uri)
+        current_vms = [dom.name() for dom in conn.listAllDomains()]
+
+        if self.vm_name in current_vms:
+            vm = conn.lookupByName(self.vm_name)
+            snapshots = vm.listAllSnapshots()
+
+        conn.close()
+        return snapshots
+
+    def create_snapshot(self, uri, snapshot_name, snapshot_description=None):
+        """Create a snapshot of a virtual machine with optional description"""
+        snapshot_status = 0
+        conn = connect_to_libvirt(uri)
+        current_vms = [dom.name() for dom in conn.listAllDomains()]
+
+        if self.vm_name in current_vms:
+            vm = conn.lookupByName(self.vm_name)
+
+            if not snapshot_description:
+                snapshot_description = f"Snapshot of {vm.name()}"
+
+            snapshot_xml = f"""
+            <domainsnapshot>
+                <name>{snapshot_name}</name>
+                <description>Snapshot of {vm.name()}</description>
+            </domainsnapshot>
+            """
+
+            try:
+                snapshot_status = vm.snapshotCreateXML(snapshot_xml, 0)
+            except libvirt.libvirtError as e:
+                snapshot_status = e
+            finally:
+                conn.close()
+                return snapshot_status
+
+    def delete_snapshot(self, uri, snapshot_name):
+        """Create a snapshot of a virtual machine with optional description"""
+        snapshot_status = 0
+        conn = connect_to_libvirt(uri)
+        current_vms = [dom.name() for dom in conn.listAllDomains()]
+
+        if self.vm_name in current_vms:
+            try:
+                vm = conn.lookupByName(self.vm_name)
+                snapshot = vm.snapshotLookupByName(snapshot_name)
+
+                if snapshot:
+                    snapshot_status = snapshot.delete()
+            except libvirt.libvirtError as e:
+                snapshot_status = e
+            finally:
+                conn.close()
+                return snapshot_status
 
     def poweron(self, uri):
         """Powreon a virtual machine"""

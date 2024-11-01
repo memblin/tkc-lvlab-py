@@ -9,6 +9,5 @@ pycdlib==1.14.0
 python-gnupg==0.5.2
 PyYAML==6.0.1
 requests==2.32.3
--e git+ssh://git@github.com/memblin/tkc-lvlab-py.git@ae5ab3c16c490ec26b6e8d38c318237db5bf3bd5#egg=tkc_lvlab
 tqdm==4.66.4
 urllib3==2.2.2

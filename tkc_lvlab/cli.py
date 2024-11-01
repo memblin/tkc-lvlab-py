@@ -4,6 +4,8 @@ import os
 import sys
 
 import click
+import libvirt
+
 from .config import parse_config, generate_hosts
 from .utils.cloud_init import CloudInitIso, MetaData, NetworkConfig, UserData
 from .utils.libvirt import (
@@ -260,6 +262,125 @@ def init():
         click.echo()
 
 
+@click.group()
+def snapshot():
+    """Snapshot management commands."""
+    pass
+
+
+@snapshot.command()
+@click.argument("vm_name")
+def list(vm_name):
+    """List snapshots for a given VM."""
+    try:
+        environment, _, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
+
+    machine_config = get_machine_by_vm_name(machines, vm_name)
+    if machine_config:
+
+        machine = Machine(
+            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+        )
+        libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+
+        if machine:
+            exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
+            if exists:
+                click.echo(f"Listing snapshots for {machine.vm_name}")
+                snapshots = machine.list_snapshots(libvirt_endpoint)
+                if snapshots:
+                    for snapshot in snapshots:
+                        click.echo(f"  - {snapshot.getName()}")
+                else:
+                    click.echo(f"No snapshots found for {machine.vm_name}")
+            else:
+                click.echo(
+                    f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
+                )
+    else:
+        click.echo(f"Machine not found in manifest: {vm_name}")
+
+
+@snapshot.command()
+@click.argument("vm_name")
+@click.argument("snapshot_name")
+@click.argument("snapshot_description", default=None, required=False)
+def create(vm_name, snapshot_name, snapshot_description=None):
+    """List snapshots for a given VM."""
+    try:
+        environment, _, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
+
+    machine_config = get_machine_by_vm_name(machines, vm_name)
+    if machine_config:
+
+        machine = Machine(
+            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+        )
+        libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+
+        if machine:
+            exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
+            if exists:
+                snapshot_status = machine.create_snapshot(
+                    libvirt_endpoint, snapshot_name, snapshot_description
+                )
+                if type(snapshot_status) == libvirt.virDomainSnapshot:
+                    click.echo(
+                        f"Snapshot {snapshot_status.getName()} created for {machine.vm_name}"
+                    )
+                else:
+                    click.echo(f"Snapshot creation failed for {machine.vm_name}")
+            else:
+                click.echo(
+                    f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
+                )
+    else:
+        click.echo(f"Machine not found in manifest: {vm_name}")
+
+
+@snapshot.command()
+@click.argument("vm_name")
+@click.argument("snapshot_name")
+def delete(vm_name, snapshot_name, snapshot_description=None):
+    """Delete snapshot/sfor a given VM."""
+    try:
+        environment, _, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
+
+    machine_config = get_machine_by_vm_name(machines, vm_name)
+    if machine_config:
+
+        machine = Machine(
+            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+        )
+        libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+
+        if machine:
+            exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
+            if exists:
+                snapshot_status = machine.delete_snapshot(
+                    libvirt_endpoint, snapshot_name
+                )
+                if snapshot_status == 0:
+                    click.echo(f"Snapshot deleted for {machine.vm_name}")
+                else:
+                    click.echo(f"Snapshot deletion failed for {machine.vm_name}")
+            else:
+                click.echo(
+                    f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
+                )
+    else:
+        click.echo(f"Machine not found in manifest: {vm_name}")
+
+
 @click.command()
 def status():
     """Show the status of the environment."""
@@ -372,6 +493,7 @@ run.add_command(cloudinit)
 run.add_command(down)
 run.add_command(destroy)
 run.add_command(init)
+run.add_command(snapshot)
 run.add_command(status)
 run.add_command(capabilities)
 run.add_command(up)

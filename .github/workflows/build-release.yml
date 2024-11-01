@@ -33,7 +33,7 @@ jobs:
     - name: Install poetry and build tkc_lvlab
       run: |
         apt update
-        apt install libvirt-dev
+        apt install -y libvirt-dev
         pip install -r requirements.txt
         poetry build
     - name: Create release and upload artifacts

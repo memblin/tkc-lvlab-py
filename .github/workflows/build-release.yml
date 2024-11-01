@@ -32,8 +32,8 @@ jobs:
         python-version: 3.12
     - name: Install poetry and build tkc_lvlab
       run: |
-        apt update
-        apt install -y libvirt-dev
+        sudo apt update
+        sudo apt install -y libvirt-dev
         pip install -r requirements.txt
         poetry build
     - name: Create release and upload artifacts

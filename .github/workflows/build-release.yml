@@ -29,12 +29,13 @@ jobs:
     - name: Install python
       uses: actions/setup-python@v5
       with:
-        python-version: 3.12
+        python-version: 3.13
     - name: Install poetry and build tkc_lvlab
       run: |
         sudo apt update
         sudo apt install -y libvirt-dev
-        pip install -r requirements.txt
+        pip install --user poetry
+        pip install --user -r requirements.txt
         poetry build
     - name: Create release and upload artifacts
       run: |
@@ -55,10 +56,13 @@ jobs:
     - name: Install python
       uses: actions/setup-python@v5
       with:
-        python-version: 3.12
+        python-version: 3.13
     - name: Install poetry and build tkc_lvlab
       run: |
-        pip install -r requirements.txt
+        sudo apt update
+        sudo apt install -y libvirt-dev
+        pip install --user poetry
+        pip install --user -r requirements.txt
         poetry build
     - name: Create release and upload artifacts
       run: |

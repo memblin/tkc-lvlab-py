@@ -399,8 +399,11 @@ def status():
 
     click.echo("Machines Defined:\n")
     for machine in machines:
-        if machine["vm_name"] in current_vms:
-            vm = conn.lookupByName(machine["vm_name"])
+        libvirt_vm_name = (
+            machine["vm_name"] + "_" + environment.get("name", "LvLabEnvironment")
+        )
+        if libvirt_vm_name in current_vms:
+            vm = conn.lookupByName(libvirt_vm_name)
             _, _, vm_status, vm_status_reason = get_machine_state(vm.state())
             click.echo(
                 f"  - { machine['vm_name'] } is {vm_status} ({vm_status_reason})"

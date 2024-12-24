@@ -42,7 +42,6 @@ class Machine:
 
         # Setup a machine file path to contain all of the files associated
         # with the instance of a machine.
-        # vm_name = machine.get("vm_name", machine.get("hostname", None) + machine.get("domain", None))
         vm_name = machine.get("vm_name")
         config_fpath = os.path.expanduser(
             os.path.join(
@@ -58,6 +57,9 @@ class Machine:
 
         self.environment = environment
         self.vm_name = vm_name
+        self.libvirt_vm_name = (
+            vm_name + "_" + environment.get("name", "LvLabEnvironment")
+        )
         self.hostname = machine.get("hostname", None)
         self.domain = config_defaults.get("domain", None)
         # If we don't have an os by now set a default of Generic Linux 2022
@@ -223,7 +225,7 @@ class Machine:
         command = [
             "virt-install",
             f"--connect={uri}",
-            f"--name={self.vm_name}",
+            f"--name={self.libvirt_vm_name}",
             f"--memory={self.memory}",
             f"--vcpus={self.cpu}",
             "--import",
@@ -269,8 +271,8 @@ class Machine:
 
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
-        if self.vm_name in current_vms:
-            vm = conn.lookupByName(self.vm_name)
+        if self.libvirt_vm_name in current_vms:
+            vm = conn.lookupByName(self.libvirt_vm_name)
             vm_state, _, _, _ = get_machine_state(vm.state())
 
             if vm_state in ["VIR_DOMAIN_RUNNING", "VIR_DOMAIN_PAUSED"]:
@@ -335,8 +337,8 @@ class Machine:
         conn = connect_to_libvirt(uri)
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
-        if self.vm_name in current_vms:
-            vm = conn.lookupByName(self.vm_name)
+        if self.libvirt_vm_name in current_vms:
+            vm = conn.lookupByName(self.libvirt_vm_name)
             state, state_reason, _, _ = get_machine_state(vm.state())
             exists = True
 
@@ -349,8 +351,8 @@ class Machine:
         conn = connect_to_libvirt(uri)
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
-        if self.vm_name in current_vms:
-            vm = conn.lookupByName(self.vm_name)
+        if self.libvirt_vm_name in current_vms:
+            vm = conn.lookupByName(self.libvirt_vm_name)
             snapshots = vm.listAllSnapshots()
 
         conn.close()
@@ -362,8 +364,8 @@ class Machine:
         conn = connect_to_libvirt(uri)
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
-        if self.vm_name in current_vms:
-            vm = conn.lookupByName(self.vm_name)
+        if self.libvirt_vm_name in current_vms:
+            vm = conn.lookupByName(self.libvirt_vm_name)
 
             if not snapshot_description:
                 snapshot_description = f"Snapshot of {vm.name()}"
@@ -389,9 +391,9 @@ class Machine:
         conn = connect_to_libvirt(uri)
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
-        if self.vm_name in current_vms:
+        if self.libvirt_vm_name in current_vms:
             try:
-                vm = conn.lookupByName(self.vm_name)
+                vm = conn.lookupByName(self.libvirt_vm_name)
                 snapshot = vm.snapshotLookupByName(snapshot_name)
 
                 if snapshot:
@@ -408,8 +410,8 @@ class Machine:
         conn = connect_to_libvirt(uri)
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
-        if self.vm_name in current_vms:
-            vm = conn.lookupByName(self.vm_name)
+        if self.libvirt_vm_name in current_vms:
+            vm = conn.lookupByName(self.libvirt_vm_name)
             vm_state, _, _, _ = get_machine_state(vm.state())
 
             if vm_state in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
@@ -431,8 +433,8 @@ class Machine:
         # Get a list of current VMs
         current_vms = [dom.name() for dom in conn.listAllDomains()]
 
-        if self.vm_name in current_vms:
-            vm = conn.lookupByName(self.vm_name)
+        if self.libvirt_vm_name in current_vms:
+            vm = conn.lookupByName(self.libvirt_vm_name)
             vm_state, _, _, _ = get_machine_state(vm.state())
 
             if vm_state in [

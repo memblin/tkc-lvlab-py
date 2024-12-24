@@ -16,3 +16,14 @@ poetry version minor
 # Major; This would take version 0.2.0 and make it 1.0.0
 poetry version major
 ```
+
+PR the changes in like normal and get merged into the `main` branch.
+
+Once it's merged pull the `main` branch local and create the release tag, then push it.
+
+```bash
+# Ceate the v0.2.0 release by adding tag 0.2.0
+git tag -m 'v0.2.0' 0.2.0
+
+git push --tags
+```

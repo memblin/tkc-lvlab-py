@@ -16,7 +16,8 @@ With `lvlab` one can create VMs automatically from a YAML syntax manifest
 configuration that defines the environment, the virtual machines, and
 the base image information.
 
-- [Example YAML config file](docs/Lvlab.yml.example)
+- [Example YAML config file](docs/Lvlab.example.yml)
+- [In-depth Example Repo](https://github.com/memblin/lvlab-examples)
 
 ## Installation
 

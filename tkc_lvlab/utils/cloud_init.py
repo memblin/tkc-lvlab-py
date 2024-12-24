@@ -47,7 +47,8 @@ class NetworkConfig:
 class MetaData:
     """A cloud-init meta-data configuration"""
 
-    hostname: str
+    libvirt_vm_name: str
+    fqdn: str
 
     def render_config(self) -> str:
         """Render a Jinja2 template with the data"""
@@ -66,6 +67,7 @@ class UserData:
     cloud_init: dict
     hostname: str
     domain: str
+    fqdn: str
 
     @staticmethod
     def _is_valid_ssh_public_key(key_str):

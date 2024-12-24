@@ -6,6 +6,37 @@ We have a GitHub project to track planned work for this repo:
 
 Pull Requests and reports of issues welcome.
 
+## Branch naming
+
+The branch naming approach I use when working on this repo is for reference. I won't enforce this same pattern for others interested in helping at this time. I make it available to help others who may be new to coding and perhaps a bit timid about jumping into an open project.
+
+```bash
+# Pull most recent on main branch
+user@example01:~/repos/github/memblin/tkc-lvlab-py$ git pull main
+On branch main
+Your branch is up to date with 'origin/main'.
+
+nothing to commit, working tree clean
+
+# Create new development branch for Issue #37
+user@example01:~/repos/github/memblin/tkc-lvlab-py$ git checkout -b main.issue37
+Switched to a new branch 'main.issue37'
+
+# Do work and stage changes for commit
+git add .
+
+# Commit with conventional commit message
+# https://www.conventionalcommits.org/en/v1.0.0/#summary
+git commit -m 'docs: more contributor help info'
+
+# Push to my repo
+git push -u origin main.issue37
+
+# I usually let commit trigger pre-commit but to do-so
+# manually now and then I use
+pre-commit run --all-files
+```
+
 ## Tools
 
 The project uses..

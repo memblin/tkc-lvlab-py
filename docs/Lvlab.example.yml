@@ -28,6 +28,8 @@ environment:
     machines:
       - vm_name: salt.local
         hostname: salt
+        # The default fqdn is {hostname}.{domain} so the machine.fqdn value is not needed unless you need a more specific fqdn.
+        fqdn: salt.some.specific.domain.local
         os: debian12
         disks:
           - name: primary

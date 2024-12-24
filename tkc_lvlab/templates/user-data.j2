@@ -2,7 +2,7 @@
 
 manage_etc_hosts: true
 hostname: {{config.hostname}}
-fqdn: {{config.hostname}}.{{config.domain}}
+fqdn: {{config.fqdn}}
 
 users:
   - name: {{ config.cloud_init.user }}

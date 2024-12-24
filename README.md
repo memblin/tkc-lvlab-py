@@ -30,7 +30,7 @@ python -m venv ~/.venvs/lvlab
 source ~/.venvs/lvlab/bin/activate
 
 # Use pip to install the release wheel for the latest package
-pip install https://github.com/memblin/tkc-lvlab-py/releases/download/0.1.0/tkc_lvlab-0.1.0-py3-none-any.whl
+pip install https://github.com/memblin/tkc-lvlab-py/releases/download/0.2.1/tkc_lvlab-0.2.1-py3-none-any.whl
 
 # lvlab should be ready for use
 lvlab up salt.local
@@ -49,39 +49,19 @@ Usage: lvlab [OPTIONS] COMMAND [ARGS]...
   A command-line tool for managing VMs.
 
 Options:
-  --help  Show this message and exit.
+  -h, --help  Show this message and exit.
 
 Commands:
   capabilities  Hypervisor Capabilities
   cloudinit     Render the cloud-init template for a machine defined in...
   destroy       Destroy a Virtual machine listed in the LvLab manifest
   down          Shutdown a machine defined in the Lvlab.yml manifest.
+  hosts         Provide /etc/hosts support
   init          Initialize the environment.
+  snapshot      Snapshot management commands.
   status        Show the status of the environment.
   up            Start a machine defined in the Lvlab.yml manifest.
 ```
-
-## Current Functionality
-
-- Initializing the environment (init) is working
-  - Downloads images defined in environment config
-  - Validates checksum if URL provided
-  - Validates checksum hash file of GPG fie provided (Fedora)
-- Create (up), Destroy (destroy), Startup (up), and Shutdown (down) of VMs
-  is working
-- Re-rendering of cloud-init templates is functional (cloudinit)
-- Status command output is very limited
-- Cloud init templating is very limited
-  - runcmd feature working now
-  - mounts feature is working now
-- Libvirt shared directories feature is working
-- Cleanup is still a manual thing and since Libvirt and QEMU sometimes
-  adjust disk image permissions this can require sudo.
-- Many many things have limited error checking support; expect crashes
-  when permissions or config isn't just right.
-- status operation report is rudamentary and bugged right now. The
-  status reason will always translate to a shutdown reason right now
-  even if the VM is not shutdown.
 
 ## Requirements
 
@@ -99,6 +79,6 @@ Commands:
 These packages are required to install and use the lvlab application.
 
 ```bash
-# installs qemu-kvm, libvirt, python, git, and 2 dependencies needed by python-libvirt
+# installs qemu-kvm, libvirt, python3, git, and 2 dependencies needed by python-libvirt
 apt install qemu-system-x86 libvirt-daemon-system virt-manager python3 python3-venv python3-pip git pkg-config libvirt-dev
 ```

@@ -62,6 +62,13 @@ class Machine:
         )
         self.hostname = machine.get("hostname", None)
         self.domain = config_defaults.get("domain", None)
+        # If the machine has an fqdn use it, otherwise build a
+        #  {hostname}.{domain} based fqdn
+        self.fqdn = (
+            machine.get("fqdn", None)
+            if machine.get("fqdn", None)
+            else f"{self.hostname}.{self.domain}"
+        )
         # If we don't have an os by now set a default of Generic Linux 2022
         self.os = machine.get("os", config_defaults.get("os", "linux2022"))
         self.cpu = machine.get("cpu", config_defaults.get("cpu", 2))
@@ -94,7 +101,7 @@ class Machine:
             network_config_file.write(rendered_network_config)
 
         # Render and write cloud-init: meta-data
-        metadata_config = MetaData(self.hostname)
+        metadata_config = MetaData(self.libvirt_vm_name, self.fqdn)
         rendered_metadata_config = metadata_config.render_config()
         metadata_config_fpath = os.path.join(self.config_fpath, "meta-data")
         click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
@@ -163,7 +170,9 @@ class Machine:
             [hosts_snippet] + [hosts_template_snippet] + cloud_init_config["runcmd"]
         )
 
-        userdata_config = UserData(cloud_init_config, self.hostname, self.domain)
+        userdata_config = UserData(
+            cloud_init_config, self.hostname, self.domain, self.fqdn
+        )
         rendered_userdata_config = userdata_config.render_config()
         userdata_config_fpath = os.path.join(self.config_fpath, "user-data")
         click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")

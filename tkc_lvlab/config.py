@@ -22,9 +22,16 @@ def generate_hosts(environment, config_defaults, machines, heredoc=None):
         if len(machine.get("interfaces", [])) > 0 and machine["interfaces"][0].get(
             "ip4", None
         ):
+            machine_fqdn = machine.get("fqdn", None)
+            if not machine_fqdn:
+                if machine.get("hostname", None) and config_defaults.get(
+                    "domain", None
+                ):
+                    machine_fqdn = f'{machine.get("hostname", None) + "." + config_defaults.get("domain", None)}'
+
             hosts_entry = {
                 "ip4": machine["interfaces"][0]["ip4"].split("/")[0],
-                "fqdn": machine["hostname"] + "." + config_defaults["domain"],
+                "fqdn": machine_fqdn,
                 "hostname": machine["hostname"],
             }
             hosts.append(hosts_entry)

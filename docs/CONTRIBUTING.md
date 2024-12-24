@@ -48,3 +48,54 @@ pre-commit install
 # Run black on the whole project
 black ./tkc_lvlab
 ```
+
+## End-to-End Testing
+
+Manual for now, make sure all operations still function after changes
+
+```bash
+# Capabilities command
+lvlab capabilities
+
+# Environment initialization
+lvlab init
+
+# Verify /etc/hosts file content rendering
+lvlab hosts
+lvlab hosts --heredoc
+
+# Verify /etc/hosts file content update
+# This will write to /etc/hosts so only run on ephemeral test machine
+sudo lvlab hosts --append
+
+# VM Operations
+#
+# Check the status
+lvlab status
+# Bring up salt.local
+lvlab up salt.local
+# Check that status agrees
+lvlab status
+# Verify cloud-init re-render works
+lvlab cloudinit salt.local
+# List snapshots when we know there aren' tany
+lvlab snapshot list salt.local
+# Create a snapshot
+lvlab snapshot create salt.local Base
+# List snapshots now that we know there is one
+lvlab snapshot list salt.local
+# Delete the snapshot
+lvlab snapshot delete salt.local Base
+# Shutdown salt.local
+lvlab down salt.local
+# Check that status agrees (may need to wait for shutdown)
+lvlab status
+# Bring salt.local up from down state
+lvlab up salt.local
+# Check that status agrees
+lvlab status
+# Destroy the running VM
+lvlab destroy salt.local
+# Check that status agrees
+lvlab status
+```

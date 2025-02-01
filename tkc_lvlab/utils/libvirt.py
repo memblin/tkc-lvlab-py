@@ -151,11 +151,18 @@ class Machine:
             "hosts.debian.tmpl": ["debian", "ubuntu"],
             "hosts.redhat.tmpl": ["fedora", "rockylinux", "almalinux", "rhel"],
         }
+        template_fpath = None
 
-        distro = re.sub(r"\d+(\.\d+)?$", "", self.os)
         for template, distros in template_file_mapping.items():
-            if distro in distros:
-                template_fpath = "/etc/cloud/templates/" + template
+            for distro in distros:
+                if self.os.lower().startswith(distro.lower()):
+                    template_fpath = "/etc/cloud/templates/" + template
+                    break
+            if template_fpath:
+                break
+
+        if not template_fpath:
+            raise ValueError(f"Could not find a template file for {self.os}")
 
         hosts_template_snippet = generate_hosts(
             self.environment, config_defaults, machines, heredoc=template_fpath
@@ -242,7 +249,7 @@ class Machine:
             f"path={os.path.join(config_path, 'disk0.qcow2')}",
             "--disk",
             f"path={os.path.join(config_path, 'cidata.iso') + ',device=cdrom'}",
-            f"--os-variant={self.os}",
+            f"--os-variant={self.os.split('-')[0]}",
             "--network",
             f'network={self.interfaces[0].get("network", "default")},model=virtio,address.type=pci,address.domain=0,address.bus=1,address.slot=0,address.function=0',
             "--graphics",

@@ -39,7 +39,7 @@ jobs:
         poetry build
     - name: Create release and upload artifacts
       run: |
-        gh release create ${{ github.ref_name }} ./dist/tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl
+        gh release create ${{ github.ref_name }} --generate-notes ./dist/tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl
       env:
         GH_TOKEN: ${{ github.token }}
 
@@ -66,6 +66,6 @@ jobs:
         poetry build
     - name: Create release and upload artifacts
       run: |
-        gh release create ${{ inputs.build_tag }} ./dist/tkc_lvlab-${{ inputs.build_tag }}-py3-none-any.whl
+        gh release create ${{ inputs.build_tag }} --generate-notes ./dist/tkc_lvlab-${{ inputs.build_tag }}-py3-none-any.whl
       env:
         GH_TOKEN: ${{ github.token }}

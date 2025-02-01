@@ -52,6 +52,39 @@ there is no need to duplicate images for multiple environments.
 
 It's cleanup is also manual for now.
 
+### Image Naming
+
+To enable the use of custom images or multiple versions of the same OS version
+we have introudced a naming standard. (Added v0.2.2)
+
+Images should be named: `$(os_variant)-$(whatever_you_want)`
+
+We split on the hyphen and pass the os_variant to the virt-install command as
+the `--os-variant` parameter.
+
+These are valid examples:
+
+- debian12-CustomImage
+- debian12-generic-amd64-20240717-1811
+- fedora40-idM-v0.1.3
+
+You can list the available options on a specific Libvirt host with:
+
+```bash
+# virt-install wrapper for osinfo-query
+virt-install --os-variant list
+
+# Or right to osinfo-query
+osinfo-query os
+```
+
+This value is also parsed to determine which `/etc/cloud/templates/hosts.*`
+template should be updated which ensures `/etc/hosts` changes made during
+cloud-init will persist.
+
+There are still some shortcomings with custom image checksuming that
+will be handled in a future release.
+
 ## status
 
 Read the config and query libvirt for VM status for each VM in the

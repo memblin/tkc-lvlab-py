@@ -83,3 +83,13 @@ images:
     checksum_url: https://cloud.debian.org/images/cloud/buster/20240703-1797/SHA512SUMS
     checksum_type: sha512
     network_version: 1
+  # Custom images should follow a specific naming standard of $(--os-variant value)-$(ImageName)
+  # The ImageName can be free-form but the start of the name must align with a valid --os-variant
+  # value or the virt-install command will fail. See examples below, two debian12 based images
+  # with varied software installed.
+  debian12-salt:
+    image_url: http://192.168.122.1:8080/cloud_images/debian-12-salt-20250121-0215.qcow2
+    network_version: 2
+  debian12-vault:
+    image_url: http://192.168.122.1:8080/cloud_images/debian-12-vault-20250121-0716.qcow2
+    network_version: 2

@@ -44,12 +44,15 @@ class CloudImage:
         if self.checksum_url:
             # Debian 10, 11, and 12 use a checksum file name that conflicts
             # with one another so we need to put a suffix on the checksum file.
+            #
+            # A simple version suffix here was not enough. Version updates
+            # became a problem due to overwriting the checksum file. We chose
+            # to use the whole image file name to ensure uniqueness.
             match = re.search(r"debian-(\d+)", self.filename.lower())
             if match:
-                version = match.group(1)
                 checksum_filename = (
-                    os.path.basename(urlparse(self.checksum_url).path)
-                    + f".debian{version}"
+                    f"{self.filename.replace('qcow2', '')}"
+                    + os.path.basename(urlparse(self.checksum_url).path)
                 )
                 self.checksum_fpath = os.path.join(
                     os.path.expanduser(self.image_dir), checksum_filename

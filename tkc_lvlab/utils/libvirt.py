@@ -149,7 +149,14 @@ class Machine:
         # file in /etc/cloud/templates too.
         template_file_mapping = {
             "hosts.debian.tmpl": ["debian", "ubuntu"],
-            "hosts.redhat.tmpl": ["fedora", "rockylinux", "almalinux", "rhel"],
+            "hosts.redhat.tmpl": [
+                "fedora",
+                "rocky",
+                "rockylinux",
+                "alma",
+                "almalinux",
+                "rhel",
+            ],
         }
         template_fpath = None
 

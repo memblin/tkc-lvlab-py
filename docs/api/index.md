@@ -20,6 +20,7 @@ via [mkdocstrings](https://mkdocstrings.github.io/).
 - [`tkc_lvlab.utils.standalone_cloud_init`](utils/standalone_cloud_init.md) — cloud-init artifacts for the standalone workflow.
 - [`tkc_lvlab.utils.snapshot_cleanup`](utils/snapshot_cleanup.md) — snapshot deletion + `undefine` fallback.
 - [`tkc_lvlab.utils.vdisk`](utils/vdisk.md) — per-VM qcow2 creation for the manifest workflow.
+- [`tkc_lvlab.utils.images`](utils/images.md) — cloud-image download + GPG/checksum verification.
 
 ### `tkc_lvlab.scripts`
 
@@ -38,7 +39,6 @@ Phase 7).
     `MetaData` / `NetworkConfig` / `CloudInitIso` — see
     [`tkc_lvlab.utils.standalone_cloud_init`](utils/standalone_cloud_init.md)
     for the post-convention sibling.)*
-- `tkc_lvlab.utils.images`
 - `tkc_lvlab.utils.libvirt` *(partially migrated during Phase 2;
     `Machine` methods that were ported to `virsh` carry the new
     convention, the rest predate it.)*

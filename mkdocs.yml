@@ -84,6 +84,7 @@ nav:
           - standalone_cloud_init: api/utils/standalone_cloud_init.md
           - snapshot_cleanup: api/utils/snapshot_cleanup.md
           - vdisk: api/utils/vdisk.md
+          - images: api/utils/images.md
       - scripts:
           - createvm: api/scripts/createvm.md
           - destroyvm: api/scripts/destroyvm.md

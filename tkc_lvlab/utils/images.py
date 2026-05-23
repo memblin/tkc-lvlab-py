@@ -1,8 +1,32 @@
-"""Moudle to contain CloudImage related operations"""
+"""Cloud-image download, verification, and on-disk lookup.
+
+:class:`CloudImage` represents one entry from the manifest's ``images:``
+block (or from a hardcoded catalog in the standalone scripts). It owns
+the URLs to fetch the image, its checksum manifest, and the optional GPG
+keyring used to verify that manifest. Verification is two-layered:
+
+1. **GPG verification** of the checksum file. When a ``checksum_url_gpg``
+    URL is configured, the keyring is downloaded, the checksum file is
+    treated as a clearsigned document, and the verified plaintext is
+    written to ``<checksum>.verified`` so subsequent operations prefer
+    it over the original. Skipping this leaves the trust chain anchored
+    only at the HTTPS layer.
+1. **Hash verification** of the image itself against the (verified) checksum
+    manifest. Both Fedora's ``SHA256 (file) = hash`` and Debian's
+    ``hash  file`` formats are recognized.
+
+Debian's ``SHA512SUMS`` file uses the same filename across releases, so
+when the image's filename matches the Debian pattern (``debian-N-...``)
+the on-disk checksum filename is prefixed with the image's own basename
+to prevent a Debian 11 ``SHA512SUMS`` from clobbering Debian 12's.
+"""
+
+from __future__ import annotations
 
 import hashlib
 import os
 import re
+from typing import Any
 from urllib.parse import urlparse
 
 import gnupg
@@ -15,20 +39,53 @@ from .._logging import get_logger
 logger = get_logger(__name__)
 
 
-# pylint: disable=too-many-instance-attributes
-class CloudImage:
-    """A cloud image definition"""
+class CloudImage:  # pylint: disable=too-many-instance-attributes
+    """A cloud image definition resolved to on-disk paths and remote URLs.
 
-    def __init__(self, name, config, environment, config_defaults):
-        """CloudImage
+    Attributes:
+        name: Manifest-side key (e.g. ``fedora40``, ``debian12``).
+        image_url: URL of the qcow2 cloud image.
+        checksum_url: URL of the checksum manifest. May be ``None`` when
+            no checksum is configured (verification is then skipped).
+        checksum_type: Hash algorithm — ``sha256`` or ``sha512``.
+            Required when ``checksum_url`` is set.
+        checksum_url_gpg: URL of the GPG keyring for clearsign-verifying
+            the checksum file. ``None`` when no GPG verification is
+            configured.
+        network_version: cloud-init network-config schema version
+            (``1`` ENI-style or ``2`` netplan-style). Selects the
+            Jinja template at render time.
+        filename: Basename of the image, derived from ``image_url``.
+        image_dir: Directory where images are cached on disk
+            (``<cloud_image_basedir>/cloud-images``).
+        image_fpath: Full path to the on-disk image (cached download).
+        checksum_fpath: Full path to the on-disk checksum file, with
+            the Debian-name-collision workaround applied when the
+            image is a Debian release.
+        checksum_gpg_fpath: Full path to the on-disk GPG keyring file.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        config: dict[str, Any],
+        environment: dict[str, Any],
+        config_defaults: dict[str, Any],
+    ) -> None:
+        """Resolve URLs and on-disk paths for one cloud-image entry.
 
         Args:
-            config (dict): {'name': 'fedora40',
-                            'image_url': 'https://{URL_TO_THE_IMAGE}/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2',
-                            'checksum_url': 'https://{URL_TO_THE_CHECKSUM_FILE}/Fedora-Cloud-40-1.14-x86_64-CHECKSUM',
-                            'checksum_type': 'sha256',
-                            'checksum_url_gpg': 'https://{URL_TO_THE_GPG_KEYRING}/fedora.gpg',
-                            'network_version': 2}
+            name: Manifest-side key for the image (used by callers when
+                logging or composing per-image cache subdirectories).
+            config: One entry from the manifest's ``images`` dict. Honors
+                ``image_url``, ``checksum_url``, ``checksum_type``,
+                ``checksum_url_gpg``, and ``network_version``.
+            environment: The manifest's ``environment[0]`` dict. Unused
+                in the current implementation but kept in the signature
+                so callers in cli.py can pass it without a special case.
+            config_defaults: The manifest's ``config_defaults`` dict.
+                Honors ``cloud_image_basedir`` (defaults to
+                ``/var/lib/libvirt/images/lvlab``).
         """
         self.name = name
         self.image_url = config.get("image_url", None)
@@ -46,12 +103,11 @@ class CloudImage:
         )
 
         if self.checksum_url:
-            # Debian 10, 11, and 12 use a checksum file name that conflicts
-            # with one another so we need to put a suffix on the checksum file.
-            #
-            # A simple version suffix here was not enough. Version updates
-            # became a problem due to overwriting the checksum file. We chose
-            # to use the whole image file name to ensure uniqueness.
+            # Debian 10/11/12/13 all publish SHA512SUMS — same filename
+            # across releases. Without this prefix, switching between
+            # Debian versions would silently overwrite the checksum file
+            # belonging to the other release. Tested via the
+            # parse_checksum_file fixture suite.
             match = re.search(r"debian-(\d+)", self.filename.lower())
             if match:
                 checksum_filename = (
@@ -78,9 +134,19 @@ class CloudImage:
             self.checksum_gpg_fpath = None
 
     @staticmethod
-    def _download_file(url, destination):
-        """Download a file associated with the cloud image."""
+    def _download_file(url: str, destination: str) -> bool:
+        """Stream a URL to a local file with a tqdm progress bar.
 
+        Args:
+            url: HTTP(S) URL to download.
+            destination: Local filesystem path to write to.
+
+        Returns:
+            ``True`` on a complete write (content-length matched bytes
+            written, or the server didn't advertise a length).
+            ``False`` if the advertised content-length didn't match
+            what we wrote.
+        """
         logger.info("downloading to: %s", destination)
         response = requests.get(url, stream=True, timeout=10)
 
@@ -98,8 +164,8 @@ class CloudImage:
 
         return True
 
-    def _manage_image_dir(self):
-        """Ensure the environments cloud-image directory exists"""
+    def _manage_image_dir(self) -> None:
+        """Ensure the cloud-images directory exists, expanding ``~`` if needed."""
         if "~" in self.image_dir:
             image_dir = os.path.expanduser(self.image_dir)
         else:
@@ -110,29 +176,52 @@ class CloudImage:
             os.makedirs(image_dir, exist_ok=True)
 
     def download_image(self) -> bool:
-        """Attempt to download the cloud image"""
+        """Download the cloud image to :attr:`image_fpath`.
+
+        Creates the cache directory if needed. Returns ``True`` on
+        successful download, ``False`` on content-length mismatch.
+        """
         self._manage_image_dir()
         if self._download_file(self.image_url, self.image_fpath):
             return True
-
         return False
 
     def download_checksum(self) -> bool:
-        """Attempt to download the cloud image chekcsum file"""
+        """Download the checksum manifest to :attr:`checksum_fpath`.
+
+        Returns:
+            ``True`` on successful download, ``False`` on content-length
+            mismatch.
+        """
         if self._download_file(self.checksum_url, self.checksum_fpath):
             return True
-
         return False
 
     def download_checksum_gpg(self) -> bool:
-        """Attempt to download the cloud image checksum GPG file"""
+        """Download the GPG keyring to :attr:`checksum_gpg_fpath`.
+
+        Returns:
+            ``True`` on successful download, ``False`` on content-length
+            mismatch.
+        """
         if self._download_file(self.checksum_url_gpg, self.checksum_gpg_fpath):
             return True
-
         return False
 
     def exists_locally(self, file_type: str = "image") -> bool:
-        """Reports if the file already exists on the local disk"""
+        """Check whether one of the on-disk artifacts is already cached.
+
+        Args:
+            file_type: One of ``"image"``, ``"checksum"``, or
+                ``"checksum_gpg"``.
+
+        Returns:
+            ``True`` when the corresponding on-disk file exists.
+
+        Raises:
+            ValueError: ``file_type`` is not one of the three recognized
+                names.
+        """
         file_map = {
             "image": self.image_fpath,
             "checksum": self.checksum_fpath,
@@ -146,8 +235,20 @@ class CloudImage:
 
         return os.path.exists(file_to_check)
 
-    def gpg_verify_checksum_file(self):
-        """Verify the GPG signature on the checksum file if present"""
+    def gpg_verify_checksum_file(self) -> bool:
+        """Clearsign-verify the checksum file with the imported GPG keyring.
+
+        Reads the GPG keyring from :attr:`checksum_gpg_fpath`, imports
+        it, then verifies the checksum file at :attr:`checksum_fpath`.
+        On success, writes the verified plaintext to
+        ``<checksum>.verified`` so :meth:`checksum_verify_image`
+        prefers it over the original.
+
+        Returns:
+            ``True`` when verification succeeded and the .verified
+            sidecar was written. ``False`` when either input file is
+            missing or verification did not produce a ``valid`` result.
+        """
         if os.path.isfile(self.checksum_gpg_fpath) and os.path.isfile(
             self.checksum_fpath
         ):
@@ -171,16 +272,29 @@ class CloudImage:
         return False
 
     @staticmethod
-    def _parse_checksum_file(checksum_fpath: str) -> dict:
-        """Parse checksum file into checksums"""
-        checksums = {}
+    def _parse_checksum_file(checksum_fpath: str) -> dict[str, str]:
+        """Parse a checksum manifest into ``{filename: hash}``.
 
-        # Regex patterns for various checksum formats
+        Recognizes two upstream formats:
+
+        - **Fedora**: ``SHA256 (filename) = hex``
+        - **Debian**: ``hex  filename`` (two-space separator,
+            tolerated as ``\\s+``)
+
+        When a ``<checksum_fpath>.verified`` file exists (post-GPG),
+        it is preferred over the raw path.
+
+        Args:
+            checksum_fpath: On-disk path to the checksum file.
+
+        Returns:
+            Dict mapping image filename to its hex hash.
+        """
+        checksums: dict[str, str] = {}
+
         fedora_pattern = re.compile(r"^SHA\d+\s\((.+)\)\s=\s(.+)$")
         debian_pattern = re.compile(r"(\w+)\s+(\S+)")
 
-        # Sometimes we want to operate from a verified checksum file
-        # but only if it exists.
         if os.path.exists(checksum_fpath + ".verified"):
             checksum_fpath = checksum_fpath + ".verified"
 
@@ -202,9 +316,23 @@ class CloudImage:
 
         return checksums
 
-    def checksum_verify_image(self):
-        """Attempt checksum verification of CloudImage file"""
+    def checksum_verify_image(self) -> bool:
+        """Hash the on-disk image and compare to the manifest entry.
 
+        Uses the configured :attr:`checksum_type` (``sha256`` /
+        ``sha512``) and prefers the ``.verified`` sidecar when one
+        exists.
+
+        Returns:
+            ``True`` when the computed hash matches the manifest entry
+            for the image filename. ``False`` on mismatch OR when
+            either the image or the checksum file is missing locally.
+
+        Raises:
+            SystemExit: ``checksum_type`` is missing or names an
+                unsupported algorithm. Kept as a hard-fail to avoid
+                silently skipping verification.
+        """
         hash_algorithms = {"sha256": hashlib.sha256, "sha512": hashlib.sha512}
 
         if self.checksum_type is None:
@@ -217,7 +345,6 @@ class CloudImage:
         else:
             raise SystemExit(f"Unsupported checksum algorithm {self.checksum_type}")
 
-        # Swap in the .verified checksum file name if one exists.
         checksum_fpath = self.checksum_fpath
         if os.path.isfile(self.checksum_fpath + ".verified"):
             checksum_fpath += ".verified"

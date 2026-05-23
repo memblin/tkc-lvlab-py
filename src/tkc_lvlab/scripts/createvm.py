@@ -53,6 +53,7 @@ from ..utils.passwords import (
     generate_password_phrase,
     hash_password_sha512,
 )
+from ..utils.osinfo import OsInfoLookupError, resolve_os_variant
 from ..utils.requirements import DependencyError, check_createvm_tooling
 from ..utils.subprocess_env import system_first_env
 from ..utils.ssh_keys import (
@@ -376,6 +377,19 @@ def _virt_install(
     else:
         network_arg = f"network={network_name},model=virtio"
 
+    try:
+        resolved_variant, fallback_reason = resolve_os_variant(os_variant)
+    except OsInfoLookupError as exc:
+        typer.echo(
+            f"warning: could not resolve --os-variant against osinfo-db ({exc}); "
+            f"using requested {os_variant!r} as-is",
+            err=True,
+        )
+        resolved_variant = os_variant
+    else:
+        if fallback_reason:
+            typer.echo(f"warning: {fallback_reason}", err=True)
+
     argv = [
         "virt-install",
         f"--connect={uri}",
@@ -387,7 +401,7 @@ def _virt_install(
         f"path={disk_path}",
         "--disk",
         f"path={cidata_path},device=cdrom",
-        f"--os-variant={os_variant}",
+        f"--os-variant={resolved_variant}",
         "--network",
         network_arg,
         "--graphics",

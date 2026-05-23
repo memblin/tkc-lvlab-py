@@ -156,6 +156,12 @@ def all_external_mocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict
     # Patch subprocess.run inside the createvm module (qemu-img, virt-install).
     monkeypatch.setattr(subprocess, "run", mocks["subprocess_run"])
 
+    # Bypass the osinfo-db lookup — it would otherwise add an extra
+    # subprocess call ('virt-install --osinfo list') that pollutes the
+    # call-count assertions in these tests. The fallback resolution is
+    # exercised in tests/test_osinfo.py.
+    monkeypatch.setattr(cv_mod, "resolve_os_variant", lambda v: (v, None))
+
     # Stub out CloudInitIso.write so it doesn't touch real pycdlib.
     monkeypatch.setattr(
         "tkc_lvlab.scripts.createvm.CloudInitIso.write", lambda self, p: True

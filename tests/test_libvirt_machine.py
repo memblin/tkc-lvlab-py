@@ -319,7 +319,13 @@ def test_machine_deploy_passes_system_first_env_to_virt_install(tmp_path) -> Non
     m.interfaces = [{"name": "eth0", "network": "default"}]
     m.shared_directories = []
 
-    with mock.patch("tkc_lvlab.utils.libvirt.subprocess.run") as run:
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.resolve_os_variant",
+            return_value=("debian13", None),
+        ),
+        mock.patch("tkc_lvlab.utils.libvirt.subprocess.run") as run,
+    ):
         m.deploy(str(tmp_path), {}, "qemu:///session")
 
     assert run.call_count == 1

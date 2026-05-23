@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._logging import get_logger
 from ..config import parse_config, generate_hosts
+from .osinfo import OsInfoLookupError, resolve_os_variant
 from .subprocess_env import system_first_env
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
@@ -501,6 +502,21 @@ class Machine:
             ``virt-install`` raised :class:`subprocess.CalledProcessError`
             (the error and the assembled command line are logged).
         """
+        requested_variant = self.os.split("-")[0]
+        try:
+            resolved_variant, fallback_reason = resolve_os_variant(requested_variant)
+        except OsInfoLookupError as exc:
+            logger.warning(
+                "Could not resolve --os-variant against osinfo-db (%s); "
+                "using requested %r as-is",
+                exc,
+                requested_variant,
+            )
+            resolved_variant = requested_variant
+        else:
+            if fallback_reason:
+                logger.warning("os-variant fallback: %s", fallback_reason)
+
         command = [
             "virt-install",
             f"--connect={uri}",
@@ -512,7 +528,7 @@ class Machine:
             f"path={os.path.join(config_path, 'disk0.qcow2')}",
             "--disk",
             f"path={os.path.join(config_path, 'cidata.iso') + ',device=cdrom'}",
-            f"--os-variant={self.os.split('-')[0]}",
+            f"--os-variant={resolved_variant}",
             "--network",
             _virt_install_network_arg(self.interfaces[0]),
             "--graphics",

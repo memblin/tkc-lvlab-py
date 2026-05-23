@@ -7,7 +7,12 @@ import click
 import libvirt
 
 from ._logging import configure_logging, get_logger
-from .config import parse_config, generate_hosts
+from .config import (
+    parse_config,
+    generate_hosts,
+    generate_hosts_entries,
+    parse_hosts_file,
+)
 from .utils.cloud_init import CloudInitIso, MetaData, NetworkConfig, UserData
 from .utils.libvirt import (
     connect_to_libvirt,
@@ -197,10 +202,49 @@ def hosts(append=False, heredoc=False):
 
     if append:
         etc_hosts = "/etc/hosts"
-        if os.access(etc_hosts, os.W_OK):
-            logger.info("Appending hosts file snippet to /etc/hosts")
-            with open(etc_hosts, "a") as hosts_file:
-                hosts_file.write(hosts_snippet)
+        try:
+            existing_ips, existing_names = parse_hosts_file(etc_hosts)
+        except OSError as e:
+            logger.error("Unable to read %s: %s", etc_hosts, e)
+            sys.exit(1)
+
+        candidates = generate_hosts_entries(config_defaults, machines)
+        to_append = []
+        for entry in candidates:
+            conflict_reasons = []
+            if entry["ip4"] in existing_ips:
+                conflict_reasons.append(f"IP {entry['ip4']} already present")
+            if entry["hostname"] and entry["hostname"].lower() in existing_names:
+                conflict_reasons.append(f"hostname {entry['hostname']} already present")
+            if entry["fqdn"] and entry["fqdn"].lower() in existing_names:
+                conflict_reasons.append(f"fqdn {entry['fqdn']} already present")
+
+            if conflict_reasons:
+                click.echo(
+                    f"Skipping {entry['ip4']} {entry['fqdn']} {entry['hostname']}: "
+                    + "; ".join(conflict_reasons)
+                )
+            else:
+                to_append.append(entry)
+
+        if not to_append:
+            click.echo("No new entries to append to /etc/hosts.")
+        elif os.access(etc_hosts, os.W_OK) or (
+            not os.path.exists(etc_hosts)
+            and os.access(os.path.dirname(etc_hosts) or ".", os.W_OK)
+        ):
+            logger.info("Appending hosts file snippet to %s", etc_hosts)
+            header = f"\n# Libvirt Labs /etc/hosts snippet\n# Environment: {environment.get('name', '')}\n"
+            try:
+                with open(etc_hosts, "a", encoding="utf-8") as hosts_file:
+                    hosts_file.write(header)
+                    for entry in to_append:
+                        line = f"{entry['ip4']} {entry['fqdn']} {entry['hostname']}\n"
+                        hosts_file.write(line)
+                        click.echo(f"Appended: {line.rstrip()}")
+            except OSError as e:
+                logger.error("Unable to write %s: %s", etc_hosts, e)
+                sys.exit(1)
         else:
             logger.error("No write access available for /etc/hosts")
 

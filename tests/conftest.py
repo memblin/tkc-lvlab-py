@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import shutil
 import subprocess
 import time
 from collections.abc import Iterator
@@ -294,6 +295,7 @@ def _session_reaper() -> Iterator[None]:
     # the prefix guard is not.
     for uri in ("qemu:///session", "qemu:///system"):
         _reap_test_prefixed_domains(uri)
+    _reap_test_prefixed_storage()
 
 
 # ---------------------------------------------------------------------------
@@ -303,28 +305,37 @@ def _session_reaper() -> Iterator[None]:
 
 _INTEGRATION_URIS: tuple[str, ...] = ("qemu:///session", "qemu:///system")
 
+# Dedicated test-only storage root, kept distinct from the production
+# ``/var/lib/libvirt/images/oneoff/`` directory that ``createvm`` uses
+# by default. Tests must pass ``--storage-root <this path>`` to both
+# ``createvm`` and ``destroyvm`` so per-VM artifacts never share a
+# parent dir with a real user's one-off VMs.
+#
+# Convention: createvm.py already passes ``exist_ok=False`` to the
+# per-VM ``mkdir`` (see ``_session_reaper`` cleanup + the
+# ``FileExistsError`` raise in the script), so a stale prefixed
+# directory from a crashed prior test will cause the next createvm
+# call for the same name to fail with a clear error rather than
+# silently overwriting state. The session storage reaper below sweeps
+# leftover prefixed directories at session end as the safety net.
+_LVLAB_TEST_STORAGE_ROOT: Path = Path("/var/lib/libvirt/images/lvlab-test")
 
-def _can_access_uri(uri: str) -> bool:
-    """Return True iff the current process can talk to ``virsh -c <uri> list``.
 
-    Used to auto-skip integration tests against URIs the test runner
-    can't reach. ``qemu:///session`` is normally always reachable
-    (rootless, per-user). ``qemu:///system`` requires libvirt-group
-    membership; this probe checks that without attempting sudo
-    elevation — adding a test user to a group is straightforward,
-    granting sudo often is not, so we honour group membership and
-    skip otherwise.
+def _virsh_probe(uri: str, *args: str) -> subprocess.CompletedProcess[str] | None:
+    """Run a short, locale-stable ``virsh`` probe with a tight timeout.
 
     Args:
         uri: libvirt URI to probe.
+        *args: Remaining ``virsh`` arguments.
 
     Returns:
-        True if ``virsh -c <uri> list`` exits 0 within a couple of
-        seconds; False on non-zero exit, timeout, or missing binary.
+        The :class:`subprocess.CompletedProcess`, or ``None`` if
+        ``virsh`` is missing or the probe timed out — both are treated
+        as "URI not usable" by the higher-level checks.
     """
     try:
-        result = subprocess.run(
-            ["virsh", "-c", uri, "list"],
+        return subprocess.run(
+            ["virsh", "-c", uri, *args],
             capture_output=True,
             text=True,
             check=False,
@@ -332,28 +343,141 @@ def _can_access_uri(uri: str) -> bool:
             env={**os.environ, "LC_ALL": "C"},
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0
+        return None
+
+
+def _uri_is_test_ready(uri: str) -> tuple[bool, str]:
+    """Return ``(ready, reason)`` for an integration URI.
+
+    Three checks, in order — first failure short-circuits with a
+    human-readable reason the skip message can surface:
+
+    1. ``virsh -c <uri> list`` exits 0 — i.e. the test user can talk
+        to the daemon at all. For ``qemu:///system`` this is the
+        libvirt-group membership check; sudo elevation is never
+        attempted.
+    2. The ``default`` libvirt network exists on the URI. createvm
+        defaults to ``--network default``; tests would error out at
+        ``virt-install`` time without it. ``qemu:///session`` on a
+        fresh user account has no networks by default.
+    3. The dedicated test storage root
+        (``/var/lib/libvirt/images/lvlab-test/``) can be created or is
+        writable by the test user. Without this, ``virt-install``
+        cannot place per-VM disks. Tests use this path instead of
+        createvm's production default to keep test artifacts from
+        ever sharing a parent dir with a real user's one-off VMs.
+
+    Args:
+        uri: libvirt URI to probe.
+
+    Returns:
+        ``(True, "")`` if the URI is ready for integration tests;
+        ``(False, reason)`` otherwise.
+    """
+    list_probe = _virsh_probe(uri, "list")
+    if list_probe is None or list_probe.returncode != 0:
+        return False, (
+            f"cannot reach {uri} (no libvirt-group access or daemon "
+            f"unavailable) — sudo elevation not attempted"
+        )
+
+    net_probe = _virsh_probe(uri, "net-list", "--name")
+    if net_probe is None or net_probe.returncode != 0:
+        return False, f"cannot list networks on {uri}"
+    if "default" not in {line.strip() for line in net_probe.stdout.splitlines()}:
+        return False, (
+            f"no 'default' libvirt network on {uri} — tests use the "
+            f"createvm default --network setting which requires it"
+        )
+
+    # mkdir is idempotent; the existence check after is what matters.
+    # mode=0o755 so qemu (under qemu:///system) can traverse + read.
+    try:
+        _LVLAB_TEST_STORAGE_ROOT.mkdir(parents=True, exist_ok=True, mode=0o755)
+    except PermissionError:
+        return False, (
+            f"test storage root {_LVLAB_TEST_STORAGE_ROOT} cannot be "
+            f"created (parent /var/lib/libvirt/images/ not writable by "
+            f"test user); add user to the libvirt group or adjust "
+            f"ownership"
+        )
+    if not os.access(_LVLAB_TEST_STORAGE_ROOT, os.W_OK):
+        return False, (
+            f"test storage root {_LVLAB_TEST_STORAGE_ROOT} exists but "
+            f"is not writable by the test user"
+        )
+
+    return True, ""
 
 
 @pytest.fixture(scope="session", params=_INTEGRATION_URIS)
 def integration_uri(request: pytest.FixtureRequest) -> str:
     """Parametrize each integration test across reachable libvirt URIs.
 
-    Yields ``qemu:///session`` always (rootless) and ``qemu:///system``
-    only when the test runner has access — i.e. libvirt-group
-    membership. URIs the runner can't reach are skipped per-parameter,
-    not per-test, so a partially-accessible host still gets coverage
-    on the URIs that work.
+    Yields ``qemu:///session`` and ``qemu:///system`` when each is
+    test-ready (see :func:`_uri_is_test_ready` for the three-part
+    readiness probe). URIs that aren't ready are skipped per-parameter,
+    not per-test, so a partially-equipped host still gets coverage on
+    the URIs that work.
 
     Returns:
-        A reachable libvirt URI string. The test is skipped (via
-        :func:`pytest.skip`) for URIs the runner can't access.
+        A test-ready libvirt URI string. The test is skipped (via
+        :func:`pytest.skip`) for URIs that fail any readiness check.
     """
     uri = request.param
-    if not _can_access_uri(uri):
-        pytest.skip(
-            f"cannot reach {uri} (no libvirt-group access or daemon "
-            f"unavailable) — sudo elevation not attempted"
-        )
+    ready, reason = _uri_is_test_ready(uri)
+    if not ready:
+        pytest.skip(reason)
     return uri
+
+
+@pytest.fixture(scope="session")
+def lvlab_integration_storage_root() -> Path:
+    """Expose the libvirt-readable test storage root.
+
+    Tests pass this path to ``createvm`` / ``destroyvm`` via
+    ``--storage-root`` so per-VM artifacts land in a dedicated,
+    qemu-traversable directory — distinct from the production
+    ``/var/lib/libvirt/images/oneoff/`` that real users' one-off VMs
+    occupy.
+
+    The directory is created by :func:`_uri_is_test_ready` during
+    URI-readiness probing (so the readiness skip message can call out
+    a permission problem before any test body runs). createvm will
+    refuse to overwrite an existing per-VM subdir
+    (``mkdir(exist_ok=False)`` in the script), so a leaked prefixed
+    directory from a crashed prior run becomes a loud failure rather
+    than a silent overwrite.
+
+    Returns:
+        Path to ``/var/lib/libvirt/images/lvlab-test/``.
+    """
+    return _LVLAB_TEST_STORAGE_ROOT
+
+
+def _reap_test_prefixed_storage() -> None:
+    """Remove any per-VM storage dir under the test storage root.
+
+    Companion to :func:`_reap_test_prefixed_domains`. The domain reaper
+    handles libvirt state; this handles the qcow2 / cloud-init ISO
+    state that ``destroyvm`` would normally remove but which can
+    survive a crashing test. Walks ONLY directories matching the
+    per-session prefix (plain or ``oneoff-`` prefixed); never iterates
+    over unrelated entries.
+
+    Operates on :data:`_LVLAB_TEST_STORAGE_ROOT` only — never the
+    production ``/var/lib/libvirt/images/oneoff/`` directory, even
+    though both share a parent.
+    """
+    if not _LVLAB_TEST_STORAGE_ROOT.exists():
+        return
+    for child in _LVLAB_TEST_STORAGE_ROOT.iterdir():
+        if not child.is_dir():
+            continue
+        if not _is_owned_by_test(child.name):
+            continue
+        assert_owned_by_test(child.name)
+        try:
+            shutil.rmtree(child, ignore_errors=True)
+        except OSError:
+            pass

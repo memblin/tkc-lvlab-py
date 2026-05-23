@@ -7,9 +7,14 @@ function in this module via the ``integration`` marker. See
 
 Every libvirt domain, qcow2 file, and cloud-init ISO this module
 creates is named via :func:`make_test_name` so the session reaper can
-clean up after a crashing test. Storage lives under
-:func:`lvlab_test_basedir` (a pytest ``tmp_path`` directory) so even
-unmanaged qcow2s are auto-removed when the test session ends.
+clean up after a crashing test. Storage lives under the dedicated
+``/var/lib/libvirt/images/lvlab-test/`` directory (exposed via the
+:func:`lvlab_integration_storage_root` fixture), distinct from the
+production ``/var/lib/libvirt/images/oneoff/`` that real users' VMs
+occupy. ``createvm`` refuses to overwrite an existing per-VM dir
+(``mkdir(exist_ok=False)`` in the script), so a leftover prefixed
+directory from a crashed prior run becomes a loud failure rather than
+silent state corruption.
 
 The cloud-image cache at ``/var/lib/libvirt/images/cloud-images/`` is
 intentionally shared with the developer's normal lvlab usage — the
@@ -124,7 +129,7 @@ def _find_entry_point(name: str) -> str:
 @pytest.mark.integration
 def test_createvm_destroyvm_roundtrip(
     integration_uri: str,
-    lvlab_test_basedir: Path,
+    lvlab_integration_storage_root: Path,
 ) -> None:
     """``createvm`` defines a domain; ``destroyvm --force`` undefines it.
 
@@ -132,8 +137,9 @@ def test_createvm_destroyvm_roundtrip(
     real qcow2 disk, real cloud-init ISO, real libvirt domain
     definition. Uses ``--copy`` so the per-VM qcow2 is standalone (no
     backing-file tie to the shared cloud-images cache) and
-    ``--storage-root <tmp>`` so per-VM artifacts land in the pytest
-    tmp directory.
+    ``--storage-root`` set to the dedicated test storage location so
+    per-VM artifacts land outside the production
+    ``/var/lib/libvirt/images/oneoff/`` directory.
 
     The cloud image (``debian13``) is fetched into the shared
     ``/var/lib/libvirt/images/cloud-images/`` cache on first run; the
@@ -142,20 +148,23 @@ def test_createvm_destroyvm_roundtrip(
     Args:
         integration_uri: libvirt URI parametrized by the
             :func:`integration_uri` fixture (skipped per-URI if not
-            reachable).
-        lvlab_test_basedir: Session-scoped pytest tmp directory for the
-            per-VM ``--storage-root``.
+            test-ready).
+        lvlab_integration_storage_root: libvirt-readable test storage
+            root (``/var/lib/libvirt/images/lvlab-test/``).
     """
     createvm = _find_entry_point("createvm")
     destroyvm = _find_entry_point("destroyvm")
 
-    vm_name = make_test_name("createvm-roundtrip")
+    # Distinguish parametrized URI runs so each gets its own per-VM
+    # name (and thus its own per-VM dir). ``make_test_name`` keeps the
+    # LVLAB_TEST_PREFIX so both the domain reaper and the storage
+    # reaper still recognize it.
+    uri_tag = "session" if "session" in integration_uri else "system"
+    vm_name = make_test_name(f"createvm-roundtrip-{uri_tag}")
     expected_domain = f"oneoff-{vm_name}"
     assert_owned_by_test(expected_domain)
 
-    # Per-test storage root so the per-VM directory does not collide
-    # with another parametrized run sharing the session tmpdir.
-    storage_root = lvlab_test_basedir / f"createvm-{integration_uri.replace('/', '_')}"
+    storage_root = lvlab_integration_storage_root
 
     create_result = subprocess.run(
         [

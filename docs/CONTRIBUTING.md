@@ -105,6 +105,47 @@ file, or ISO must carry the per-session `LVLAB_TEST_PREFIX`, and the
 session-scoped reaper will only ever touch resources whose name starts
 with that prefix.
 
+### Integration test storage layout
+
+Integration tests use a **dedicated** storage directory rather than the
+production `/var/lib/libvirt/images/oneoff/` path that the real
+`createvm` script defaults to. The test storage root is:
+
+```text
+/var/lib/libvirt/images/lvlab-test/
+```
+
+Tests must pass this path to both `createvm` and `destroyvm` via
+`--storage-root`. The `lvlab_integration_storage_root` session-scoped
+fixture in `tests/conftest.py` exposes the path; use that, don't
+hard-code the string.
+
+Conventions:
+
+- **No overwrite.** `createvm`'s per-VM `mkdir(exist_ok=False)` is the
+    guarantee — a stale prefixed directory from a crashed prior run
+    will cause the next `createvm` call for the same name to fail with
+    a clear error rather than silently corrupting state. Tests must
+    not work around this by removing the per-VM dir before calling
+    `createvm`.
+- **Auto-create.** The readiness probe in `tests/conftest.py`
+    (`_uri_is_test_ready`) creates `/var/lib/libvirt/images/lvlab-test/`
+    on demand with mode `0755` so the `qemu` user (under
+    `qemu:///system`) can traverse it. If the directory cannot be
+    created or written by the test user, the per-URI run is skipped
+    with a clear message.
+- **Dedicated, not shared.** Never use the production
+    `/var/lib/libvirt/images/oneoff/` directory from a test — even
+    with the prefix guard, sharing a parent dir with real one-off
+    VMs is the kind of layout that quietly grows risky as scope
+    expands. The dedicated `lvlab-test/` root keeps the blast radius
+    of any reaper or cleanup helper limited to test-owned state.
+- **Session reaper.** `_reap_test_prefixed_storage` (in
+    `tests/conftest.py`) walks **only** `lvlab-test/` at session end
+    and removes prefix-matching subdirs. It will never iterate over
+    `oneoff/` or any other neighbour, even though they share a
+    parent.
+
 ## End-to-End Testing
 
 A smoke-test checklist for verifying CLI changes against a real

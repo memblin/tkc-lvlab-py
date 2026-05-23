@@ -6,51 +6,44 @@ the `.claude/settings.local.json` grant for `lvscripts-py` takes effect.
 
 ---
 
-## Phase 1 — Migrate Poetry → uv, refresh deps, add Python matrix
+## Phase 1 — Migrate Poetry → uv, refresh deps, add Python matrix ✅ COMPLETE
 
-**Goal:** one-command env setup with `uv`, a real `uv.lock`, and a build/test
-matrix that runs on Python 3.11, 3.12, 3.13, and 3.14.
+**Status:** landed in commits `1359e7f` (uv migration), `b6d1bff`
+(supply-chain hygiene follow-up), `7a84e78` (pysonar dev dep). All 23
+historical Dependabot alerts closed as a side effect of removing
+`poetry.lock` + `requirements.txt`. The Python test matrix moved out to
+its own Phase 3 — it depends on Phase 2 landing first so the conftest
+doesn't have to mock around `libvirt-python`.
 
-- [ ] Use `uv_build` as the PEP 517 build backend. **No hatchling, no
-      setuptools — uv all the way.** `[build-system]` becomes
-      `requires = ["uv_build>=0.5"]` / `build-backend = "uv_build"` (pin to
-      whatever uv ships current at migration time).
-- [ ] Rewrite `pyproject.toml`:
-  - [ ] Replace `[tool.poetry]` with PEP 621 `[project]` (name, version,
-        description, authors, readme, license, classifiers, `requires-python = ">=3.11"`).
-  - [ ] Move `[tool.poetry.dependencies]` → `[project.dependencies]`.
-  - [ ] Move `[tool.poetry.scripts]` → `[project.scripts]`.
-  - [ ] Drop the Poetry-only `include = ["tkc_lvlab/templates/*.j2"]`.
-        `uv_build` ships package data by default for files inside the import
-        package, so `tkc_lvlab/templates/*.j2` is picked up automatically.
-        Verify with `uv build && unzip -l dist/*.whl | grep templates`.
-        If anything needs explicit inclusion, configure it under
-        `[tool.uv.build-backend]` per uv docs — **do not** reach for hatch
-        or setuptools tables.
-  - [ ] Add a `[dependency-groups]` entry (PEP 735) with `pytest`,
-        `pytest-cov`, and any other test/lint extras. Install via
-        `uv sync --group dev`.
-- [ ] Remove `poetry.lock`; generate `uv.lock` via `uv lock`.
-- [ ] Remove `requirements.txt` (only used by old CI). If we still want a
-      pinned export, generate it with `uv export --format requirements-txt`.
-- [ ] Refresh all dep versions to current latest-compatible. Spot-check:
-  - [ ] `libvirt-python` — keep pinned in Phase 1 (drops entirely in Phase 2).
-        Don't waste time chasing a 3.13/3.14 wheel — Phase 2 makes the wheel
-        irrelevant.
-  - [ ] `pycdlib`, `python-gnupg` — confirm wheel coverage on 3.11–3.14.
-  - [ ] `click`, `jinja2`, `requests`, `tqdm`, `pyyaml` — bump as resolver allows.
-- [ ] Update `.github/workflows/build-release.yml`:
-  - [ ] Replace `pip install --user poetry; poetry build` with
-        `uv build` (using `astral-sh/setup-uv` action).
-  - [ ] Drop `pip install --user -r requirements.txt`.
-- [ ] Update `README.md` install instructions:
-  - [ ] `uv tool install tkc-lvlab` as the recommended path.
-  - [ ] Or local dev: `uv sync && uv run lvlab --help`.
-  - [ ] Drop the manual venv + pip recipe (or move it to an "Alternatives"
-        section).
-- [ ] Update `CLAUDE.md` "Build / dev / lint commands" section to show `uv`.
-- [ ] Verify `pre-commit` still works after the migration (it's independent
-      of the build backend; mostly checking nothing references Poetry).
+- [x] Use `uv_build` as the PEP 517 build backend.
+      `requires = ["uv_build>=0.5,<0.12"]` with `build-backend = "uv_build"`.
+- [x] Rewrite `pyproject.toml` to PEP 621:
+  - [x] `[project]` with name/version/description/authors/readme and
+        `requires-python = ">=3.11"`. License/classifiers skipped (no
+        `LICENSE` file in repo yet — revisit later).
+  - [x] `[project.dependencies]` and `[project.scripts]` populated.
+  - [x] Poetry-only `include = [...]` dropped. Templates verified shipping
+        via `unzip -l dist/*.whl | grep templates`. Layout config set
+        under `[tool.uv.build-backend]` (`module-root = ""`,
+        `module-name = "tkc_lvlab"`).
+  - [x] `[dependency-groups]` `dev` table with `pytest`, `pytest-cov`,
+        `pysonar`. Installed via `uv sync --group dev`.
+- [x] `poetry.lock` removed, `uv.lock` generated and committed.
+- [x] `requirements.txt` removed.
+- [x] Dep floors refreshed; post-migration hardening raised
+      `requests>=2.33` and `jinja2>=3.1.6` to lock in the Dependabot fixes
+      against future fresh resolves. `libvirt-python` kept pinned (drops
+      entirely in Phase 2).
+- [x] `.github/workflows/build-release.yml` rewritten:
+  - [x] `astral-sh/setup-uv@v3` + `uv build` replaces poetry install +
+        `poetry build`.
+  - [x] Dropped the `apt install libvirt-dev` step — `uv build` does not
+        install runtime deps. Developers still need it until Phase 2 lands.
+- [x] `README.md` install instructions updated to `uv tool install`
+      (release path) and `uv sync && uv run lvlab` (dev path).
+- [x] `CLAUDE.md` "Build / dev / lint commands" section updated to uv.
+- [x] `pre-commit` verified working after migration.
+- [x] `.github/dependabot.yml` added — uv weekly, github-actions monthly.
 
 ---
 

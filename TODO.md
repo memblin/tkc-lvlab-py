@@ -675,48 +675,46 @@ drifting:
 - [ ] **`[default: 0]` shown for the `-v` count flag.** Slightly
     noisy but informative. No-op fix — accept as-is.
 
-### Follow-up: migrate the standalone scripts to Typer too
+### Follow-up: migrate the standalone scripts to Typer too (COMPLETE — 2026-05-23)
 
-The Click → Typer migration only touched `tkc_lvlab/cli.py` — the
-standalone one-off entry points (`tkc_lvlab/scripts/createvm.py`,
-`tkc_lvlab/scripts/destroyvm.py`) still use Click directly. They were
-left out of Phase 9 because the surface is substantial (createvm.py
-alone is ~622 LOC with 11 options) and the migration has its own UX
-contract to preserve. Doing it in the same commit as cli.py would have
-ballooned the diff and tangled two independent verifications.
+Landed in two commits on `main`:
 
-Scope when picked up:
+- `15e89b6` — destroyvm port. Single-command Typer app + the same
+    `_fail()` helper pattern. UX preserved (positional + 3 options,
+    same defaults, same confirmation-prompt routing to stderr).
+    `tests/test_destroyvm.py` switched to `typer.testing.CliRunner`;
+    6 tests pass unchanged.
+- `b79aee0` — createvm port. Single-command Typer app, 10 options +
+    positional, full Typer Option/Argument signatures. UX preserved:
+    `--distro` keeps `case_sensitive=False` via
+    `click_type=click.Choice(...)` (the only reason this module
+    still imports click); `--public-key` keeps `exists=True,   dir_okay=False`; `--copy` keeps the Python-param alias
+    (`copy_strategy`). Error reporting refactored to a `_fail()`
+    helper covering every prior `click.ClickException`.
+    `tests/test_createvm.py` switched to `typer.testing.CliRunner`;
+    16 tests pass unchanged.
 
-- [ ] `tkc_lvlab/scripts/createvm.py` — Click command + 11 options
-    (`--distro`, `--memory`, `--cpu`, `--disk-size`, `--network`,
-    `--ip4`, `--public-key`, `--copy`, `--uri`, `--storage-root`).
-    Watch the `click.Choice(case_sensitive=False)` for `--distro` —
-    Typer's `Enum` support is the natural replacement but the
-    case-insensitive matching must be preserved. The `--copy` flag
-    maps to a `copy_strategy` Python parameter via `@click.option`
-    aliasing — Typer's parameter-name-to-flag mapping works
-    differently; verify the alias still lands cleanly.
-- [ ] `tkc_lvlab/scripts/destroyvm.py` — smaller (3 options:
-    `--force`, `--uri`, `--storage-root`). Confirmation prompt uses
-    `click.confirm(..., err=True)` — Typer equivalent is
-    `typer.confirm(...)`, default stdout (not stderr) but accepts
-    `err=True` via kwargs.
-- [ ] `tests/test_createvm.py` (16 tests) and `tests/test_destroyvm.py`
-    (7 tests) currently import `from click.testing import CliRunner`
-    and `from tkc_lvlab.scripts.createvm import run`. They'll need
-    the same swap to `typer.testing.CliRunner` and `from tkc_lvlab.scripts.createvm import app` (with backwards-compat `run = app` alias
-    matching the cli.py pattern).
-- [ ] `click.ClickException` raises in the script bodies translate
-    to `typer.BadParameter` / explicit `typer.echo(..., err=True);   raise typer.Exit(code=1)` — pick whichever preserves the existing
-    error-message format and exit-code semantics.
-- [ ] Update CLAUDE.md "What this is" — currently calls out that
-    "The standalone one-off scripts (`createvm`, `destroyvm` in
-    `tkc_lvlab/scripts/`) still use Click directly." That sentence
-    goes away.
+Done outcomes:
 
-This is a candidate for a single bundled PR (createvm + destroyvm +
-their tests together) since they share helpers in `tkc_lvlab/utils/`
-and the test infra is parallel.
+- [x] `tkc_lvlab/scripts/createvm.py` — Typer app with 10 options +
+    positional. `click.Choice(case_sensitive=False)` preserved via
+    `click_type=`. `--copy` → `copy_strategy` alias clean.
+- [x] `tkc_lvlab/scripts/destroyvm.py` — Typer app, 3 options +
+    positional. `typer.confirm(..., err=True)` for the prompt.
+- [x] `tests/test_createvm.py` (16) and `tests/test_destroyvm.py` (6)
+    switched to `typer.testing.CliRunner`. Both files still import
+    `run` thanks to the `run = app` backwards-compat alias.
+- [x] `click.ClickException` raises replaced everywhere with a
+    `_fail()` helper that mirrors Click's `Error: <msg>` stderr
+    format + exit 1 behavior. Internal helpers (`_run_subprocess`,
+    `_create_disk`, `_virt_install`, `_ensure_image_available`) use
+    `_fail()` too so the format stays consistent.
+- [x] CLAUDE.md "What this is" updated — no longer says "the
+    standalone one-off scripts still use Click directly".
+
+Suite: 248 passed, 1 skipped. `uv run createvm --help` +
+`uv run destroyvm --help` both render Typer-styled panels with every
+option/default preserved.
 
 ### Optimization opportunities (do only if they don't shift UX)
 

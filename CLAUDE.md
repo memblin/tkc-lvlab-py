@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`tkc-lvlab` (binary: `lvlab`) is a Typer-based CLI (Typer wraps Click underneath) that manages local libvirt+QEMU lab VMs from a single declarative YAML manifest (`Lvlab.yml`). It is meant for end-to-end integration testing of configuration-management code (Salt, Ansible, etc.) on a developer workstation — not for production VM management. The standalone one-off scripts (`createvm`, `destroyvm` in `tkc_lvlab/scripts/`) still use Click directly.
+`tkc-lvlab` (binary: `lvlab`) is a Typer-based CLI (Typer wraps Click underneath) that manages local libvirt+QEMU lab VMs from a single declarative YAML manifest (`Lvlab.yml`). It is meant for end-to-end integration testing of configuration-management code (Salt, Ansible, etc.) on a developer workstation — not for production VM management. The standalone one-off scripts (`createvm`, `destroyvm` in `tkc_lvlab/scripts/`) are also Typer-based after the Phase 9 follow-up; `createvm` keeps a minimal `import click` only for `click.Choice(case_sensitive=False)` on `--distro`.
 
 A run of `lvlab init` followed by `lvlab up <vm_name>` will:
 

@@ -38,6 +38,13 @@ environment:
           - name: enp1s0
             ip4: 192.168.122.12/24
             ip4gw: 192.168.122.1
+        # shared_directories defined here extend the config_defaults list.
+        # An entry with the same mount_tag as a default overrides that default;
+        # other defaults still apply. Below, salt.local mounts both `gitrepos`
+        # (from defaults) and an additional `saltsrc` mount.
+        shared_directories:
+          - source: /home/crow/salt
+            mount_tag: saltsrc
 
       - vm_name: vault.local
         hostname: vault

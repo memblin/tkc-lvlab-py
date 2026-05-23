@@ -268,14 +268,57 @@ the test suite.
 
 ---
 
+## Phase 7 — Legacy docstring + type-hint conversion
+
+The `docs/conventions-and-toolchain` PR established **MkDocs + Material +
+mkdocstrings** as the documentation toolchain and codified Google-style
+docstrings + type hints as the rule for new code (see CLAUDE.md's
+"Documentation conventions" section). The existing codebase predates that
+rule and is excluded from the API reference until this phase lands.
+
+Modules to convert (one PR per module is fine; one PR for the whole sweep is
+also fine — pick what reviews cleanly):
+
+- [ ] `tkc_lvlab/cli.py` — biggest surface, Click commands and docstrings
+      become the `--help` output. Mind that black-formatted Click decorator
+      output and Google `Args:` headings interact awkwardly; verify with
+      `uv run lvlab --help` after conversion.
+- [ ] `tkc_lvlab/config.py` — `parse_config`, `generate_hosts`,
+      `generate_hosts_entries`, `parse_hosts_file`.
+- [ ] `tkc_lvlab/_logging.py` — `get_logger`, `configure_logging`.
+- [ ] `tkc_lvlab/utils/cloud_init.py` — three dataclasses and `CloudInitIso`.
+- [ ] `tkc_lvlab/utils/images.py` — `CloudImage` and its parsers.
+- [ ] `tkc_lvlab/utils/libvirt.py` — `Machine` and its methods. **Wait until
+      Phase 2 ports finish** — the methods change shape and types in Phase 2,
+      so converting here too early just creates rework.
+- [ ] `tkc_lvlab/utils/vdisk.py` — `VirtualDisk` (small).
+
+After each module is converted, remove its name from the "Modules pending
+migration" list in `docs/api/index.md` and add the corresponding
+`docs/api/.../*.md` page that does `::: tkc_lvlab.<dotted.path>` for
+mkdocstrings to pick up. Add it to `nav` in `mkdocs.yml`.
+
+The legacy user-facing docs (`docs/Walkthrough.md`, `Design.md`, `Why.md`,
+`Libvirt.md`, `CONTRIBUTING.md`, `releases.md`, `WIP.md`,
+`Lvlab.example.yml`, `cloud-init.examples/`) are in `exclude_docs` in
+`mkdocs.yml` — they don't render in the site yet. Move them into nav (and
+out of `exclude_docs`) as each one gets its turn at modernization. That's a
+separate effort from the docstring conversion.
+
+---
+
 ## Decisions still open (call these out before Phase 6 lands)
 
 1. ~~Build backend~~ — decided: `uv_build`. No hatchling, no setuptools.
 2. ~~Python floor~~ — decided: drop 3.10, `requires-python = ">=3.11"`.
    Phase 2 makes this consequence-free since libvirt-python is gone.
-3. One-off VM namespacing: sentinel environment `_oneoff` vs distinct prefix.
+3. ~~One-off VM namespacing~~ — decided in Phase 2 design doc
+   (`/tmp/phase2-design.md` §5): sentinel environment `_oneoff`.
 4. Whether to keep `createvm` / `destroyvm` as separate console_scripts, or
    only expose `lvlab vm create` / `lvlab vm destroy`.
-5. Phase 2: snapshot XML handoff — tempfile (default plan) vs stdin to
-   `virsh snapshot-create --xmlfile -`. Resolve when implementing.
-6. Phase 2: should `down` consume the same `--force` semantics as `destroy`?
+5. ~~Phase 2: snapshot XML handoff~~ — decided: tempfile. Stdin path
+   reserved for future use.
+6. ~~Phase 2: `down --force`~~ — decided: yes, with **different** semantics
+   than `destroy --force` (force-off without undefine; calls `virsh destroy
+   <name>`). Documented asymmetry in command help text at implementation
+   time.

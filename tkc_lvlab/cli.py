@@ -1,4 +1,26 @@
-"""A CLI for deploying lab VMs on Libvirt"""
+"""Click-based ``lvlab`` CLI entry points.
+
+This module wires the ``lvlab`` console script (``[project.scripts] lvlab``)
+to its subcommands. Each subcommand:
+
+1. Calls :func:`tkc_lvlab.config.parse_config` to load ``Lvlab.yml``.
+2. Resolves a machine by name via
+   :func:`tkc_lvlab.utils.libvirt.get_machine_by_vm_name`.
+3. Constructs a :class:`tkc_lvlab.utils.libvirt.Machine` from the
+   resolved manifest entry + environment + config_defaults.
+4. Dispatches the requested operation (start, stop, snapshot, etc.)
+   against the libvirt URI from ``environment.libvirt_uri``.
+
+The hypervisor side is invoked via :mod:`tkc_lvlab.utils.virsh` — a
+``subprocess.run`` wrapper around ``virsh``. No ``libvirt-python``
+C extension is imported (Phase 2 removed that dependency).
+
+The standalone one-off workflow (``createvm`` / ``destroyvm`` console
+scripts in :mod:`tkc_lvlab.scripts`) does not flow through this module
+— they have their own Click entry points that talk to virsh directly.
+"""
+
+from __future__ import annotations
 
 import os
 import sys
@@ -45,7 +67,7 @@ logger = get_logger(__name__)
     default=False,
     help="Suppress informational logs (ERROR only). Overrides -v.",
 )
-def run(verbose, quiet):
+def run(verbose: int, quiet: bool) -> None:
     """A command-line tool for managing VMs."""
     configure_logging(verbosity=verbose, quiet=quiet)
 
@@ -63,8 +85,8 @@ def capabilities() -> None:
 
 @click.command()
 @click.argument("vm_name")
-def cloudinit(vm_name):
-    """Render the cloud-init template for a machine defined in the Lvlab.yml manifest."""
+def cloudinit(vm_name: str) -> None:
+    """Render cloud-init files for a manifest VM without starting it."""
     try:
         environment, images, config_defaults, machines = parse_config()
     except TypeError as e:
@@ -86,8 +108,8 @@ def cloudinit(vm_name):
 @click.command()
 @click.argument("vm_name")
 @click.option("--force", is_flag=True, help="Force destruction without confirmation.")
-def destroy(vm_name, force=False):
-    """Destroy a Virtual machine listed in the LvLab manifest"""
+def destroy(vm_name: str, force: bool = False) -> None:
+    """Destroy a manifest VM: force-off, undefine, remove files."""
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
@@ -132,8 +154,8 @@ def destroy(vm_name, force=False):
 
 @click.command()
 @click.argument("vm_name")
-def down(vm_name):
-    """Shutdown a machine defined in the Lvlab.yml manifest."""
+def down(vm_name: str) -> None:
+    """Gracefully shut down a manifest VM."""
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
@@ -181,20 +203,13 @@ def down(vm_name):
     is_flag=True,
     help="Render hosts snippet as a heredoc to append to /etc/hosts.",
 )
-def hosts(append=False, heredoc=False):
-    """Provide /etc/hosts support
+def hosts(append: bool = False, heredoc: bool = False) -> None:
+    """Render a /etc/hosts snippet for the manifest's machines.
 
-    This command by default will only print recommended
-    /etc/hosts snippets to the screen.
-
-    Flags can augment the output.
-
-    --append : Attempt to append hosts snippet to /etc/hosts.
-
-      Needs privs like; sudo $(which lvlab) hosts --append
-
-    --heredoc : Render hosts snippet as a heredoc to append to /etc/hosts.
-
+    Default mode prints the snippet to stdout. ``--append`` writes
+    new entries directly into ``/etc/hosts`` (skipping conflicts);
+    typically needs ``sudo $(which lvlab) hosts --append``.
+    ``--heredoc`` wraps the output in a ``cat <<EOF`` heredoc.
     """
     try:
         environment, _, config_defaults, machines = parse_config()
@@ -262,13 +277,12 @@ def hosts(append=False, heredoc=False):
 
 @click.command(name="ssh-config")
 @click.argument("vm_name", required=False)
-def ssh_config(vm_name=None):
-    """Print ~/.ssh/config snippet(s) for machines defined in the Lvlab.yml manifest.
+def ssh_config(vm_name: str | None = None) -> None:
+    """Print ~/.ssh/config snippet(s) for machines in the manifest.
 
-    With no VM_NAME, a snippet is emitted for every machine in the manifest.
-    With a VM_NAME, only that machine's snippet is emitted.
-
-    Output goes to stdout; redirect or append it to ~/.ssh/config yourself.
+    With no VM_NAME, a snippet is emitted for every machine. With a
+    VM_NAME, only that machine's snippet is emitted. Output goes to
+    stdout; redirect or append it to ~/.ssh/config yourself.
     """
     try:
         environment, _, config_defaults, machines = parse_config()
@@ -324,8 +338,8 @@ def ssh_config(vm_name=None):
 
 
 @click.command()
-def init():
-    """Initialize the environment."""
+def init() -> None:
+    """Initialize the environment: download and verify cloud images."""
     try:
         environment, images, config_defaults, _ = parse_config()
     except TypeError as e:
@@ -398,14 +412,13 @@ def init():
 
 
 @click.group()
-def snapshot():
+def snapshot() -> None:
     """Snapshot management commands."""
-    pass
 
 
 @snapshot.command()
 @click.argument("vm_name")
-def list(vm_name):
+def list(vm_name: str) -> None:  # pylint: disable=redefined-builtin
     """List snapshots for a given VM."""
     try:
         environment, _, config_defaults, machines = parse_config()
@@ -445,8 +458,12 @@ def list(vm_name):
 @click.argument("vm_name")
 @click.argument("snapshot_name")
 @click.argument("snapshot_description", default=None, required=False)
-def create(vm_name, snapshot_name, snapshot_description=None):
-    """List snapshots for a given VM."""
+def create(
+    vm_name: str,
+    snapshot_name: str,
+    snapshot_description: str | None = None,
+) -> None:
+    """Create a snapshot for a given VM."""
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
@@ -492,7 +509,7 @@ def create(vm_name, snapshot_name, snapshot_description=None):
 @click.argument("vm_name")
 @click.argument("snapshot_name")
 @click.option("--force", is_flag=True, help="Skip confirmation prompt.")
-def delete(vm_name, snapshot_name, force=False):
+def delete(vm_name: str, snapshot_name: str, force: bool = False) -> None:
     """Delete a snapshot for a given VM."""
     try:
         environment, _, config_defaults, machines = parse_config()
@@ -602,8 +619,13 @@ def status() -> None:
 
 @click.command()
 @click.argument("vm_name")
-def up(vm_name):
-    """Start a machine defined in the Lvlab.yml manifest."""
+def up(vm_name: str) -> None:
+    """Start a machine defined in the Lvlab.yml manifest.
+
+    Creates the VM on first run (qcow2 disks → cloud-init render → ISO
+    pack → ``virt-install``) or powers it on if it's shut off. Already-
+    running VMs are a no-op.
+    """
     try:
         environment, images, config_defaults, machines = parse_config()
     except TypeError as e:

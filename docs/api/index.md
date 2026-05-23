@@ -8,6 +8,7 @@ via [mkdocstrings](https://mkdocstrings.github.io/).
 ### Top-level
 
 - [`tkc_lvlab._logging`](logging.md) — centralized project logger configuration.
+- [`tkc_lvlab.cli`](cli.md) — Click-based `lvlab` console-script entry point.
 - [`tkc_lvlab.config`](config.md) — manifest loading + `/etc/hosts` rendering.
 
 ### `tkc_lvlab.utils`
@@ -29,11 +30,5 @@ via [mkdocstrings](https://mkdocstrings.github.io/).
 - [`tkc_lvlab.scripts.createvm`](scripts/createvm.md) — standalone one-off VM creation.
 - [`tkc_lvlab.scripts.destroyvm`](scripts/destroyvm.md) — standalone one-off VM removal.
 
-## Modules pending migration
-
-These exist in the source tree but their docstrings/type hints have not
-yet been brought up to the new convention. They are excluded from this
-reference until the legacy-docstring conversion lands (see `TODO.md`
-Phase 7).
-
-- `tkc_lvlab.cli`
+Phase 7 (legacy docstring + type-hint conversion) is now complete —
+every module in the source tree is rendered above.

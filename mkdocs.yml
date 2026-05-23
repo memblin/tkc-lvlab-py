@@ -74,6 +74,7 @@ nav:
   - API Reference:
       - Overview: api/index.md
       - Logging: api/logging.md
+      - CLI: api/cli.md
       - Config: api/config.md
       - utils:
           - virsh: api/utils/virsh.md

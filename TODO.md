@@ -444,7 +444,7 @@ the test suite.
 
 ______________________________________________________________________
 
-## Phase 7 — Legacy docstring + type-hint conversion (IN PROGRESS, 5/7 done — 2026-05-23)
+## Phase 7 — Legacy docstring + type-hint conversion (COMPLETE — 2026-05-23)
 
 API reference pages for every already-converted module landed first
 (commit `1228c85`), then per-module conversions.
@@ -457,19 +457,19 @@ Status:
 - [x] `tkc_lvlab/utils/vdisk.py` — converted in `6cbd74a`.
 - [x] `tkc_lvlab/utils/images.py` — converted in `4ac789e`.
 - [x] `tkc_lvlab/utils/cloud_init.py` — converted in `2398d96`.
-- [ ] `tkc_lvlab/utils/libvirt.py` — partial. The Phase 2-ported
-    methods (`virsh_*` callers — `exists_in_libvirt`, `destroy`,
-    `poweron`, `shutdown`, list/create/delete snapshot, status) carry
-    the new convention. The pre-Phase-2 methods (`__init__`,
-    `cloud_init`, `deploy`, `manage_vdisks`) still need it. Worth
-    doing as a focused module-rewrite session because the class is
-    657 lines.
-- [ ] `tkc_lvlab/cli.py` — the biggest surface. Click command bodies
-    have intricate flow control; mind the interaction between
-    black-formatted Click decorator output and Google `Args:`
-    headings. Verify with `uv run lvlab --help` after each command's
-    conversion. Probably worth doing one command at a time rather
-    than the whole file in one shot.
+- [x] `tkc_lvlab/utils/libvirt.py` — converted in `5acfd0a`. The
+    Phase 2-ported methods (`virsh_*` callers — `exists_in_libvirt`,
+    `destroy`, `poweron`, `shutdown`, list/create/delete snapshot)
+    already carried the new convention; this commit added it to the
+    pre-Phase-2 methods (`__init__`, `cloud_init`, `create_vdisks`,
+    `deploy`) plus the `get_machine_by_vm_name` helper.
+- [x] `tkc_lvlab/cli.py` — converted. Docstrings stay short (one-line
+    summary + 1-3 sentence narrative) to keep `lvlab --help` output
+    clean — Click renders the full docstring verbatim, so the
+    Google-style `Args:` / `Raises:` sections would bleed in. The
+    signature type hints are the source of truth for mkdocstrings;
+    per-argument doc lives in the `@click.option(..., help="...")`
+    decorators.
 
 After each module is converted, remove its name from the "Modules pending
 migration" list in `docs/api/index.md` and add the corresponding

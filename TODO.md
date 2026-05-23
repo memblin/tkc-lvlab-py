@@ -209,31 +209,79 @@ just added).
 
 ______________________________________________________________________
 
-## Phase 6 — Merge `createvm` / `destroyvm` into `lvlab`
+## Phase 6 — Standalone `createvm` / `destroyvm` scripts in the lvlab package
 
-Outcome: one package providing both the lab manifest workflow and one-off VM
-creation, sharing the same `Machine` / `CloudImage` / `VirtualDisk` /
-`CloudInitIso` machinery.
+**Decision (locked):** `createvm` and `destroyvm` ship as **separate console
+scripts with their own `[project.scripts]` entry points**. They are NOT
+subcommands of `lvlab` (no `lvlab vm create`). They live in the same
+distribution so the library code is shared, but the two CLIs are
+intentionally separate at the command-line surface.
 
-- [ ] CLI shape:
-    - [ ] `lvlab vm create <name> [--os …] [--memory …] [--cpu …] [--disk …] [--network …] [--pubkey …]` — manifest-less one-off.
-    - [ ] `lvlab vm destroy <name>` — one-off teardown (no Lvlab.yml lookup).
-    - [ ] Existing `lvlab up` / `lvlab destroy` / `lvlab status` continue to be
-        manifest-driven and unchanged.
-    - [ ] Expose `createvm` and `destroyvm` as additional `[project.scripts]`
-        thin shims to the same Click commands (for muscle memory from users
-        coming from lvscripts).
-- [ ] Refactor where the merge exposes duplication:
-    - [ ] If lvscripts has a cleaner abstraction we want, port it and make
-        manifest-driven commands use it too — don't keep two implementations.
-- [ ] Naming guard: one-off VMs should still be namespaced. Either reuse
-    `{vm_name}_{environment}` with a sentinel environment like `_oneoff`,
-    or introduce a distinct prefix like `oneoff-{vm_name}`. **Decide
-    explicitly** — this affects how `status`/listing finds them.
-- [ ] Tests for both code paths (manifest and one-off) share the same safety
-    fixture (see below).
+Outcome:
+
+- `lvlab ...` stays focused on the manifest workflow (`Lvlab.yml`-driven
+    groups of VMs, environments, defaults, lifecycle).
+- `createvm` / `destroyvm` are for **one-off VM creation in the same
+    environment that also runs lvlab**, without reading `Lvlab.yml` or
+    touching lvlab-managed VMs.
+- Both surfaces share `Machine` / `CloudImage` / `VirtualDisk` /
+    `CloudInitIso` and any new helpers ported from lvscripts (SSH key
+    discovery, network validation, etc.) via a clean public library API
+    that doesn't know whether its caller is reading `Lvlab.yml` or accepting
+    CLI args.
+
+### Architecture (lock these in before implementation)
+
+- [ ] **Library / CLI split.** The shared logic moves to a stable library
+    surface (likely `tkc_lvlab.<core>` or its Phase 8 equivalent
+    `tkc.lvlab.<core>`). The lvlab CLI and the standalone scripts both
+    depend on it; neither imports the other's CLI module.
+- [ ] **No cross-contamination.** `createvm` / `destroyvm` MUST NOT read
+    `Lvlab.yml`, MUST NOT look up manifest-driven VMs, MUST NOT mutate
+    lvlab's per-environment state directories. `lvlab` reciprocally
+    MUST NOT enumerate or destroy domains that the standalone scripts
+    created. Cross-listing in `lvlab status` is acceptable as a
+    read-only convenience IF and only if it can clearly distinguish
+    one-offs from manifest VMs (see naming below).
+- [ ] **Naming.** Decide explicitly — affects whether the two surfaces can
+    tell each other's VMs apart. The previous `_oneoff` sentinel
+    environment is moot now (one-offs don't have an environment).
+    Candidates:
+    - [ ] **Flat:** standalone scripts use the user-provided name verbatim
+        as the libvirt domain name. Simplest. Risk: name collision with a
+        lvlab manifest VM whose `libvirt_vm_name` happens to match.
+    - [ ] **Prefix:** standalone scripts use e.g. `oneoff-<name>`. Cleanly
+        distinguishable from `<vm_name>_<env>` lvlab names. Recommended.
+    - [ ] **Distinct namespace via libvirt URI:** route standalone scripts
+        to a different `qemu:///...` (e.g. always `qemu:///system` for
+        one-offs, `qemu:///session` for lvlab). Heavier-weight; only worth
+        it if the user already wants the segmentation.
+- [ ] **Distribution shape.** Same wheel ships all three commands. After
+    Phase 8 (src-layout + namespace), `[project.scripts]` reads roughly:
+    `toml     lvlab = "tkc.lvlab.cli:run"     createvm = "tkc.lvlab.scripts.createvm:run"     destroyvm = "tkc.lvlab.scripts.destroyvm:run"     `
+
+### Implementation work
+
+- [ ] Port lvscripts `createvm` / `deletevm` logic into the lvlab package as
+    `tkc_lvlab/scripts/createvm.py` and `tkc_lvlab/scripts/destroyvm.py`
+    (post-Phase 8: `tkc/lvlab/scripts/...`). Each module exposes a `run()`
+    Click command.
+- [ ] Refactor `tkc_lvlab.utils.{libvirt,cloud_init,images,vdisk}` to expose
+    a clean public library API the standalone scripts can consume without
+    duplication. If lvscripts has a cleaner abstraction, port it and have
+    lvlab use it too — don't keep two implementations.
+- [ ] Port the high-value lvscripts capabilities flagged in
+    `/tmp/lvscripts-inventory.md` (SSH key discovery, password phrase
+    generation, `virsh net-dumpxml` network validation, optional DHCP
+    lease polling).
+- [ ] Sanity-check that `lvlab status` and the standalone scripts cannot
+    observe or touch each other's VMs. A test that creates a one-off via
+    `createvm` and then runs `lvlab status` expecting the one-off to be
+    absent is a useful regression guard.
+- [ ] Tests for both surfaces share the `LVLAB_TEST_PREFIX` safety fixture.
 - [ ] Docs: extend `README.md` and `docs/Walkthrough.md` with the one-off
-    workflow. Add a section explaining when to use which.
+    workflow. Explain when to use `lvlab` vs `createvm`/`destroyvm` —
+    including the explicit "they don't see each other's VMs" property.
 
 ______________________________________________________________________
 
@@ -392,8 +440,11 @@ ______________________________________________________________________
     Phase 2 makes this consequence-free since libvirt-python is gone.
 1. ~~One-off VM namespacing~~ — decided in Phase 2 design doc
     (`/tmp/phase2-design.md` §5): sentinel environment `_oneoff`.
-1. Whether to keep `createvm` / `destroyvm` as separate console_scripts, or
-    only expose `lvlab vm create` / `lvlab vm destroy`.
+1. ~~Whether to keep `createvm` / `destroyvm` as separate console_scripts~~ —
+    decided 2026-05-23: **separate console scripts**, with the explicit
+    constraint that they do not read `Lvlab.yml` or interact with lvlab-managed
+    VMs. They live in the same package so library code is shared via a clean
+    public API. See Phase 6 above for the full architectural notes.
 1. ~~Phase 2: snapshot XML handoff~~ — decided: tempfile. Stdin path
     reserved for future use.
 1. ~~Phase 2: `down --force`~~ — decided: yes, with **different** semantics

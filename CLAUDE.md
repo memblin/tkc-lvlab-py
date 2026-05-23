@@ -88,6 +88,10 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 - Several `destroy`/cleanup paths leave files behind on purpose or by oversight — see `docs/Walkthrough.md`. Don't "fix" this without checking whether the user relied on it.
 - A sibling project `lvscripts-py` (allowed via `.claude/settings.local.json`) is referenced for porting advanced features into this repo. Don't import from it; read it and adapt.
 
+## Git pushes
+
+**Never `git push` from this environment.** There are no push credentials available here, and the user does not want you to try — even if asked. Pushes (and `gh pr create`, tag pushes, etc. that hit the remote) are done by the user from a separate terminal. Commit locally if asked, but stop at the push boundary and let the user take it from there.
+
 ## Releasing
 
 Tagging `X.Y.Z` on `main` triggers `.github/workflows/build-release.yml`, which runs `poetry build` and uploads the wheel to a GitHub release. Bump `version` in `pyproject.toml` to match the tag before pushing it, or the artifact filename won't line up with the release.

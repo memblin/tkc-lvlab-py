@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from unittest import mock
 
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
 from tkc_lvlab import cli
 from tkc_lvlab.cli import snapshot

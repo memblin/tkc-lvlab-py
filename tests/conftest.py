@@ -23,6 +23,7 @@ the full libvirt domain list.
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import subprocess
@@ -31,6 +32,23 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_lvlab_logger_propagation() -> Iterator[None]:
+    """Reset the ``tkc_lvlab`` logger's ``propagate`` flag after every test.
+
+    ``tkc_lvlab._logging.configure_logging`` sets ``propagate=False`` on
+    the project root logger so production output doesn't double-log.
+    Tests that drive the CLI through Typer's ``CliRunner`` invoke the
+    root callback, which calls ``configure_logging`` and leaves
+    propagation off — that breaks pytest's ``caplog`` capture for any
+    test that runs after a CLI-driving test. This autouse fixture
+    restores ``propagate=True`` before each test so ``caplog`` keeps
+    working regardless of test ordering.
+    """
+    yield
+    logging.getLogger("tkc_lvlab").propagate = True
 
 
 LVLAB_TEST_PREFIX: str = f"lvlab-test-{int(time.time() * 1000)}-{secrets.token_hex(2)}-"

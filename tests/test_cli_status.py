@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from unittest import mock
 
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
 from tkc_lvlab import cli
-from tkc_lvlab.cli import status
+from tkc_lvlab.cli import app
 from tkc_lvlab.utils.virsh import VirshError
 
 
@@ -71,7 +71,7 @@ def test_status_happy_path_mixed_states_no_reason_suffix() -> None:
             cli, "virsh_domstate", side_effect=domstate_side_effect
         ) as domstate_mock,
     ):
-        result = runner.invoke(status, [])
+        result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0, result.output
     assert "LvLab Environment Name: demo" in result.output
@@ -110,7 +110,7 @@ def test_status_all_undeployed_skips_domstate_entirely() -> None:
         mock.patch.object(cli, "virsh_list_all_names", return_value=[]),
         mock.patch.object(cli, "virsh_domstate") as domstate_mock,
     ):
-        result = runner.invoke(status, [])
+        result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0, result.output
     assert "  - alpha is undeployed" in result.output
@@ -128,7 +128,7 @@ def test_status_list_failure_exits_nonzero() -> None:
         mock.patch.object(cli, "virsh_list_all_names", side_effect=err),
         mock.patch.object(cli, "virsh_domstate") as domstate_mock,
     ):
-        result = runner.invoke(status, [])
+        result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 1
     # We never reach the per-machine loop if listing fails.
@@ -155,7 +155,7 @@ def test_status_per_machine_domstate_failure_continues() -> None:
         mock.patch.object(cli, "virsh_list_all_names", return_value=listed),
         mock.patch.object(cli, "virsh_domstate", side_effect=domstate_side_effect),
     ):
-        result = runner.invoke(status, [])
+        result = runner.invoke(app, ["status"])
 
     # Per-machine failure does NOT take the whole command down.
     assert result.exit_code == 0, result.output
@@ -171,7 +171,7 @@ def test_status_parse_config_typeerror_exits_nonzero() -> None:
         mock.patch.object(cli, "parse_config", side_effect=TypeError("bad config")),
         mock.patch.object(cli, "virsh_list_all_names") as list_mock,
     ):
-        result = runner.invoke(status, [])
+        result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 1
     # We never reach the virsh layer once parse_config fails.
@@ -186,7 +186,7 @@ def test_status_section_headers_unchanged_for_ux_continuity() -> None:
         mock.patch.object(cli, "virsh_list_all_names", return_value=[]),
         mock.patch.object(cli, "virsh_domstate"),
     ):
-        result = runner.invoke(status, [])
+        result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0, result.output
     # Exact strings, in this order.

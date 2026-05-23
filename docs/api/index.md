@@ -8,7 +8,7 @@ via [mkdocstrings](https://mkdocstrings.github.io/).
 ### Top-level
 
 - [`tkc_lvlab._logging`](logging.md) — centralized project logger configuration.
-- [`tkc_lvlab.cli`](cli.md) — Click-based `lvlab` console-script entry point.
+- [`tkc_lvlab.cli`](cli.md) — Typer-based `lvlab` console-script entry point.
 - [`tkc_lvlab.config`](config.md) — manifest loading + `/etc/hosts` rendering.
 
 ### `tkc_lvlab.utils`

@@ -563,7 +563,11 @@ Reshape the package so:
 
 ______________________________________________________________________
 
-## Phase 9 — Migrate CLI from Click to Typer
+## Phase 9 — Migrate CLI from Click to Typer (COMPLETE — 2026-05-23)
+
+Done before Phase 8 because the UX-preservation contract was simpler to
+verify against a stable layout. Phase 8 (src-layout) can now slot in
+without dragging two refactors together.
 
 **Hard constraint: preserve current user experience.** Every command name,
 positional argument, option name, default value, exit code, and visible
@@ -584,65 +588,102 @@ Typer is a thin layer over Click that:
 - Plays nicely with mkdocstrings since command functions look like
     normal typed Python functions, not stacks of decorators.
 
-### Work this implies
+### What landed
 
-- [ ] Add `typer>=0.12` to `[project] dependencies` in `pyproject.toml`.
-    Keep `click` as a transitive (Typer pulls it in) — do **not** add it
-    as a direct dep just to use a couple of helpers; if you need
-    `click.confirm`, use `typer.confirm` instead.
-- [ ] Replace `@click.group()` on `run` with `typer.Typer(...)`. Pass
-    `context_settings={"help_option_names": ["-h", "--help"]}` so `-h`
-    still works. Set `no_args_is_help=True` to match current behavior
-    (Click's group shows help by default; Typer needs this opt-in).
-- [ ] Replace `@click.command()` with `@app.command()` for every
-    subcommand (`up`, `down`, `destroy`, `init`, `status`, `hosts`,
-    `ssh-config`, `cloudinit`, `capabilities`, `snapshot list/create/delete`).
-- [ ] Replace `@click.argument("vm_name")` with a typed positional:
-    `vm_name: str`. For optional args that default to None
-    (`snapshot_description`), use
-    `snapshot_description: Optional[str] = typer.Argument(None)`.
-- [ ] Replace `@click.option("--force", is_flag=True, ...)` with
-    `force: bool = typer.Option(False, "--force", help="...")`. Make
-    sure both short and long forms (where present today) are listed.
-- [ ] Replace verbosity flags (`-v/--verbose count` and `-q/--quiet`)
-    with `verbose: int = typer.Option(0, "-v", "--verbose", count=True)`
-    and `quiet: bool = typer.Option(False, "-q", "--quiet")` on the
-    main callback. Typer's callback is the analog of Click's group
-    body. **Verify the call to `configure_logging(verbosity=verbose, quiet=quiet)` still fires before any subcommand body runs** — Typer's
-    callback semantics differ slightly from Click's group.
-- [ ] Replace `click.echo` / `click.confirm` with `typer.echo` /
-    `typer.confirm`. Audit each: a few cli.py call sites currently
-    write to stderr via `click.echo(..., err=True)` — Typer's
-    equivalent is `typer.echo(..., err=True)`. The status command's
-    table output should look identical char-for-char.
-- [ ] Subcommand groups (`snapshot list/create/delete`) become
-    `snapshot_app = typer.Typer()` + `app.add_typer(snapshot_app, name="snapshot")`.
-- [ ] **Help-text parity check.** Run `uv run lvlab --help` and
-    `uv run lvlab <each command> --help` before and after; the
-    rendered text should match (or you must justify each diff). Rich
-    rendering can be turned off with
-    `app = typer.Typer(rich_markup_mode=None)` if it shifts column
-    widths or color in ways that break user expectations.
-- [ ] **Exit-code parity check.** Verify failure paths still
-    `sys.exit(1)` exactly where they did before. Typer translates
-    raised exceptions differently than raw Click; double-check
-    `VirshError` / `TypeError` handling in commands that have
-    explicit try/except blocks.
-- [ ] **Test migration.** Click's `CliRunner` works on Typer apps
-    (since Typer uses Click under the hood) — call
-    `CliRunner().invoke(app, [...])` against the Typer app object
-    the same way you do today. **Do not rewrite the test surface as
-    part of this PR** unless a test breaks for a real reason; just
-    swap the app instance.
-- [ ] **CLAUDE.md update**: Architecture section mentions "Click-based
-    CLI" — change to "Typer-based CLI (Click under the hood)." Note
-    that subcommand bodies should still grow via methods on
-    `Machine` / `CloudImage` / etc., not by bloating the command
-    function.
-- [ ] Manual smoke test the full happy path (`lvlab init`, `lvlab up`,
-    `lvlab status`, `lvlab snapshot create`, `lvlab snapshot list`,
-    `lvlab destroy`) before merging. Type-checker and test suite
-    catch a lot but not help-text drift.
+- [x] Added `typer>=0.12` to `[project] dependencies`.
+- [x] Replaced `@click.group()` on `run` with `app = typer.Typer(...)`
+    plus `context_settings={"help_option_names": ["-h", "--help"]}`
+    and `no_args_is_help=True`.
+- [x] Replaced every `@click.command()` with `@app.command()` /
+    `@snapshot_app.command()`.
+- [x] Replaced `@click.argument` with typed positional parameters.
+    Optional `snapshot_description` is
+    `snapshot_description: str = typer.Argument(None)`. `ssh-config`
+    keeps its hyphenated name via `@app.command("ssh-config")`.
+- [x] Replaced `@click.option` with typed parameters carrying
+    `typer.Option(default, "--flag", help="...")`.
+- [x] Replaced verbosity flags with
+    `verbose: int = typer.Option(0, "-v", "--verbose", count=True)`
+    and `quiet: bool = typer.Option(False, "-q", "--quiet")` on
+    `_root`, the `@app.callback()`. `configure_logging` runs before
+    every subcommand body.
+- [x] Replaced `click.echo` / `click.confirm` with `typer.echo` /
+    `typer.confirm`. Error output keeps `err=True`.
+- [x] Snapshot subgroup: `snapshot_app = typer.Typer(...)` +
+    `app.add_typer(snapshot_app, name="snapshot")`. Backwards-compat
+    aliases `run = app` and `snapshot = snapshot_app` keep the
+    pyproject entry-point and test imports working unchanged.
+- [x] **Help-text:** Rich rendering left enabled (lvscripts uses the
+    same default look). `--help` output preserves command names,
+    positional argument names, option names and defaults, and the
+    short summary line. Long-form Click help text bodies are kept as
+    docstrings on the function — Typer + Rich render them in a
+    cleaner panel layout but the content is unchanged.
+- [x] **Exit codes:** failure paths now `raise typer.Exit(code=1)`
+    where the Click code called `sys.exit(1)`. `hosts` and `init`'s
+    bare `sys.exit()` (no code) is preserved as a known quirk noted
+    in earlier phases.
+- [x] **Tests:** `click.testing.CliRunner` does NOT work directly
+    against a Typer instance (no `.name` attribute), so the three
+    affected tests (`test_cli_capabilities.py`, `test_cli_status.py`,
+    `test_cli_snapshots.py`) switched to `typer.testing.CliRunner`.
+    `test_cli_capabilities` and `test_cli_status` now invoke via the
+    full `app` (`runner.invoke(app, ["status"])`), which triggers the
+    `_root` callback and `configure_logging`. To keep `caplog` working
+    across tests, a new autouse fixture in `tests/conftest.py`
+    restores `tkc_lvlab` logger's `propagate=True` after every test
+    (otherwise the `configure_logging`-set `propagate=False` would
+    leak into later tests).
+- [x] **CLAUDE.md update**: "What this is" section + the cli.py
+    Architecture note both call out the Typer migration. `docs/index.md`
+    and `docs/api/{cli,index}.md` updated to match.
+- [ ] Manual smoke test the full happy path against a real libvirt
+    URI before pushing (`uv run lvlab init`, `up`, `status`,
+    `snapshot create/list/delete`, `destroy`). Unit tests cover
+    parsing + flow but not the actual hypervisor side.
+
+### Follow-up: migrate the standalone scripts to Typer too
+
+The Click → Typer migration only touched `tkc_lvlab/cli.py` — the
+standalone one-off entry points (`tkc_lvlab/scripts/createvm.py`,
+`tkc_lvlab/scripts/destroyvm.py`) still use Click directly. They were
+left out of Phase 9 because the surface is substantial (createvm.py
+alone is ~622 LOC with 11 options) and the migration has its own UX
+contract to preserve. Doing it in the same commit as cli.py would have
+ballooned the diff and tangled two independent verifications.
+
+Scope when picked up:
+
+- [ ] `tkc_lvlab/scripts/createvm.py` — Click command + 11 options
+    (`--distro`, `--memory`, `--cpu`, `--disk-size`, `--network`,
+    `--ip4`, `--public-key`, `--copy`, `--uri`, `--storage-root`).
+    Watch the `click.Choice(case_sensitive=False)` for `--distro` —
+    Typer's `Enum` support is the natural replacement but the
+    case-insensitive matching must be preserved. The `--copy` flag
+    maps to a `copy_strategy` Python parameter via `@click.option`
+    aliasing — Typer's parameter-name-to-flag mapping works
+    differently; verify the alias still lands cleanly.
+- [ ] `tkc_lvlab/scripts/destroyvm.py` — smaller (3 options:
+    `--force`, `--uri`, `--storage-root`). Confirmation prompt uses
+    `click.confirm(..., err=True)` — Typer equivalent is
+    `typer.confirm(...)`, default stdout (not stderr) but accepts
+    `err=True` via kwargs.
+- [ ] `tests/test_createvm.py` (16 tests) and `tests/test_destroyvm.py`
+    (7 tests) currently import `from click.testing import CliRunner`
+    and `from tkc_lvlab.scripts.createvm import run`. They'll need
+    the same swap to `typer.testing.CliRunner` and `from tkc_lvlab.scripts.createvm import app` (with backwards-compat `run = app` alias
+    matching the cli.py pattern).
+- [ ] `click.ClickException` raises in the script bodies translate
+    to `typer.BadParameter` / explicit `typer.echo(..., err=True);   raise typer.Exit(code=1)` — pick whichever preserves the existing
+    error-message format and exit-code semantics.
+- [ ] Update CLAUDE.md "What this is" — currently calls out that
+    "The standalone one-off scripts (`createvm`, `destroyvm` in
+    `tkc_lvlab/scripts/`) still use Click directly." That sentence
+    goes away.
+
+This is a candidate for a single bundled PR (createvm + destroyvm +
+their tests together) since they share helpers in `tkc_lvlab/utils/`
+and the test infra is parallel.
 
 ### Optimization opportunities (do only if they don't shift UX)
 

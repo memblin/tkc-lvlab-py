@@ -1,6 +1,6 @@
 # tkc-lvlab
 
-A Click-based CLI for managing local libvirt+QEMU lab VMs from a single
+A Typer-based CLI for managing local libvirt+QEMU lab VMs from a single
 declarative YAML manifest (`Lvlab.yml`). Built for end-to-end integration
 testing of configuration-management code (Salt, Ansible, etc.) on a developer
 workstation — not for production VM management.

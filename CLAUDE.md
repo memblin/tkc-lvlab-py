@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`tkc-lvlab` (binary: `lvlab`) is a Click-based CLI that manages local libvirt+QEMU lab VMs from a single declarative YAML manifest (`Lvlab.yml`). It is meant for end-to-end integration testing of configuration-management code (Salt, Ansible, etc.) on a developer workstation — not for production VM management.
+`tkc-lvlab` (binary: `lvlab`) is a Typer-based CLI (Typer wraps Click underneath) that manages local libvirt+QEMU lab VMs from a single declarative YAML manifest (`Lvlab.yml`). It is meant for end-to-end integration testing of configuration-management code (Salt, Ansible, etc.) on a developer workstation — not for production VM management. The standalone one-off scripts (`createvm`, `destroyvm` in `tkc_lvlab/scripts/`) still use Click directly.
 
 A run of `lvlab init` followed by `lvlab up <vm_name>` will:
 
@@ -51,7 +51,7 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 
 ### Core flow (cli.py → utils/)
 
-`tkc_lvlab/cli.py` defines the Click command group. Every command follows the same shape:
+`tkc_lvlab/cli.py` defines the Typer app + subcommands (Phase 9 ported it from Click; tests use `typer.testing.CliRunner`). Every command follows the same shape:
 
 1. `parse_config()` returns `(environment, images, config_defaults, machines)`.
 1. `get_machine_by_vm_name(machines, vm_name)` finds the manifest entry.

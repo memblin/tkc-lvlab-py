@@ -1,6 +1,6 @@
 # `tkc_lvlab.cli`
 
-The Click-based `lvlab` console-script entry point. Each subcommand
+The Typer-based `lvlab` console-script entry point. Each subcommand
 parses `Lvlab.yml`, resolves a machine by name, builds a
 `tkc_lvlab.utils.libvirt.Machine`, and dispatches against the libvirt
 URI from the manifest.

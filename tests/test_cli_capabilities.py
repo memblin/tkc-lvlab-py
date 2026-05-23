@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from unittest import mock
 
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
 from tkc_lvlab import cli
-from tkc_lvlab.cli import capabilities
+from tkc_lvlab.cli import app
 from tkc_lvlab.utils.virsh import VirshError
 
 
@@ -32,7 +32,7 @@ def test_capabilities_prints_xml_from_virsh_capabilities() -> None:
     with mock.patch.object(
         cli, "virsh_capabilities", return_value=SAMPLE_CAPS_XML
     ) as mocked:
-        result = runner.invoke(capabilities, [])
+        result = runner.invoke(app, ["capabilities"])
 
     assert result.exit_code == 0, result.output
     assert "Capabilities:" in result.output
@@ -47,7 +47,7 @@ def test_capabilities_virsh_error_exits_nonzero_with_stderr_message() -> None:
     err = VirshError(1, "error: failed to connect to the hypervisor", ["capabilities"])
     runner = CliRunner()
     with mock.patch.object(cli, "virsh_capabilities", side_effect=err):
-        result = runner.invoke(capabilities, [])
+        result = runner.invoke(app, ["capabilities"])
 
     assert result.exit_code == 1
     # The error message goes to stderr, not stdout, and the success banner

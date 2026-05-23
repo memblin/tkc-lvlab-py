@@ -32,7 +32,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from click.testing import CliRunner
+from typer.testing import CliRunner
 
 from tkc_lvlab.scripts import createvm as cv_mod
 from tkc_lvlab.scripts.createvm import (

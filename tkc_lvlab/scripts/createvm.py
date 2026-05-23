@@ -13,6 +13,14 @@ Phase 6 architecture lock the script:
     opt-in ``--copy`` flag that produces a standalone qcow2 with no
     cloud-images dependency (image-upgrade safety).
 
+Phase 9 follow-up ported this file from Click to Typer. UX is
+preserved: same positional, same 9 options, same defaults,
+same ``case_sensitive=False`` matching on ``--distro``. The script
+keeps a minimal ``import click`` for ``click.Choice`` (passed to
+Typer via ``click_type=``) since Typer doesn't have a native
+case-insensitive choice idiom. ``run = app`` is kept as a
+backwards-compat alias for the entry point and tests.
+
 Wired up as a console script via
 ``[project.scripts] createvm = "tkc_lvlab.scripts.createvm:run"``.
 """
@@ -28,6 +36,7 @@ from pathlib import Path
 from typing import Iterable
 
 import click
+import typer
 
 from ..utils.cloud_init import CloudInitIso, NetworkConfig
 from ..utils.images import CloudImage
@@ -253,16 +262,14 @@ def _create_disk(
             backing file.
 
     Raises:
-        click.ClickException: ``qemu-img`` (or ``cp``) exited non-zero.
+        typer.Exit: ``qemu-img`` (or ``cp``) exited non-zero.
     """
     disk_path.parent.mkdir(parents=True, exist_ok=True)
     if copy_strategy:
         try:
             shutil.copyfile(image_path, disk_path)
         except OSError as exc:
-            raise click.ClickException(
-                f"Failed to copy cloud image to {disk_path}: {exc}"
-            ) from exc
+            raise _fail(f"Failed to copy cloud image to {disk_path}: {exc}") from exc
         _run_subprocess(["qemu-img", "resize", str(disk_path), size])
         return
 
@@ -284,24 +291,23 @@ def _create_disk(
 
 
 def _run_subprocess(argv: list[str]) -> None:
-    """Run a subprocess with check=True, translating errors to ClickException.
+    """Run a subprocess with check=True, translating errors via :func:`_fail`.
 
     Args:
         argv: Command line, first element is the binary name.
 
     Raises:
-        click.ClickException: Non-zero exit; the stderr text is folded
-            into the message so the operator sees the real failure.
+        typer.Exit: Non-zero exit code on subprocess failure; the
+            stderr text is folded into the error message printed
+            before exit so the operator sees the real failure.
     """
     try:
         subprocess.run(argv, check=True, capture_output=True, text=True)
     except FileNotFoundError as exc:
-        raise click.ClickException(f"{argv[0]} not found in PATH.") from exc
+        raise _fail(f"{argv[0]} not found in PATH.") from exc
     except subprocess.CalledProcessError as exc:
         msg = (exc.stderr or exc.stdout or "unknown error").strip()
-        raise click.ClickException(
-            f"{argv[0]} {' '.join(argv[1:])} failed: {msg}"
-        ) from exc
+        raise _fail(f"{argv[0]} {' '.join(argv[1:])} failed: {msg}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +339,7 @@ def _virt_install(
         network_name: libvirt network name to attach NIC to.
 
     Raises:
-        click.ClickException: ``virt-install`` exited non-zero.
+        typer.Exit: ``virt-install`` exited non-zero.
     """
     argv = [
         "virt-install",
@@ -368,74 +374,74 @@ _DEFAULT_CPUS = 2
 _DEFAULT_DISK_SIZE = "20G"
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument("vm_name")
-@click.option(
-    "--distro",
-    required=True,
-    type=click.Choice(sorted(BUILTIN_IMAGES.keys()), case_sensitive=False),
-    help="Built-in cloud image to use.",
+app = typer.Typer(
+    help="Create a one-off libvirt VM from a built-in cloud image.",
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
-@click.option("--memory", default=_DEFAULT_MEMORY_MIB, show_default=True, type=int)
-@click.option("--cpu", default=_DEFAULT_CPUS, show_default=True, type=int)
-@click.option("--disk-size", default=_DEFAULT_DISK_SIZE, show_default=True, type=str)
-@click.option(
-    "--network",
-    default=_DEFAULT_NETWORK,
-    show_default=True,
-    type=str,
-    help="libvirt network name. NAT default uses 'default'; bridges need explicit name.",
-)
-@click.option(
-    "--ip4",
-    default=None,
-    help=(
-        "Static IPv4. Accepts 'IP' (uses --network) or 'NETWORK,IP'. "
-        "Validated against the network's subnet AND DHCP range."
+
+
+def _fail(message: str) -> typer.Exit:
+    """Print ``Error: <message>`` to stderr and return an ``Exit(1)``.
+
+    Returning (rather than raising) lets callers preserve the original
+    exception's cause via ``raise _fail(msg) from exc``.
+    """
+    typer.echo(f"Error: {message}", err=True)
+    return typer.Exit(code=1)
+
+
+@app.command()
+def createvm(  # pylint: disable=too-many-arguments,too-many-locals
+    vm_name: str = typer.Argument(..., help="Short name for the one-off VM."),
+    distro: str = typer.Option(
+        ...,
+        "--distro",
+        click_type=click.Choice(sorted(BUILTIN_IMAGES.keys()), case_sensitive=False),
+        help="Built-in cloud image to use.",
     ),
-)
-@click.option(
-    "--public-key",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Path to an additional SSH public key (appended after discovered defaults).",
-)
-@click.option(
-    "--copy",
-    "copy_strategy",
-    is_flag=True,
-    default=False,
-    help=(
-        "Create a standalone qcow2 via cp + qemu-img resize instead of the "
-        "default qemu-img create -b backing-file. Lets you wipe and re-init "
-        "the cloud-images directory without breaking this VM."
+    memory: int = typer.Option(_DEFAULT_MEMORY_MIB, "--memory", show_default=True),
+    cpu: int = typer.Option(_DEFAULT_CPUS, "--cpu", show_default=True),
+    disk_size: str = typer.Option(_DEFAULT_DISK_SIZE, "--disk-size", show_default=True),
+    network: str = typer.Option(
+        _DEFAULT_NETWORK,
+        "--network",
+        show_default=True,
+        help="libvirt network name. NAT default uses 'default'; bridges need explicit name.",
     ),
-)
-@click.option(
-    "--uri",
-    default=_DEFAULT_URI,
-    show_default=True,
-    help="libvirt connection URI.",
-)
-@click.option(
-    "--storage-root",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=_ONEOFF_STORAGE_ROOT,
-    show_default=True,
-    help="Override the per-VM storage root (test seam).",
-)
-def run(  # pylint: disable=too-many-arguments,too-many-locals
-    vm_name: str,
-    distro: str,
-    memory: int,
-    cpu: int,
-    disk_size: str,
-    network: str,
-    ip4: str | None,
-    public_key: Path | None,
-    copy_strategy: bool,
-    uri: str,
-    storage_root: Path,
+    ip4: str = typer.Option(
+        None,
+        "--ip4",
+        help=(
+            "Static IPv4. Accepts 'IP' (uses --network) or 'NETWORK,IP'. "
+            "Validated against the network's subnet AND DHCP range."
+        ),
+    ),
+    public_key: Path = typer.Option(
+        None,
+        "--public-key",
+        exists=True,
+        dir_okay=False,
+        help="Path to an additional SSH public key (appended after discovered defaults).",
+    ),
+    copy_strategy: bool = typer.Option(
+        False,
+        "--copy",
+        help=(
+            "Create a standalone qcow2 via cp + qemu-img resize instead of the "
+            "default qemu-img create -b backing-file. Lets you wipe and re-init "
+            "the cloud-images directory without breaking this VM."
+        ),
+    ),
+    uri: str = typer.Option(
+        _DEFAULT_URI, "--uri", show_default=True, help="libvirt connection URI."
+    ),
+    storage_root: Path = typer.Option(
+        _ONEOFF_STORAGE_ROOT,
+        "--storage-root",
+        show_default=True,
+        file_okay=False,
+        help="Override the per-VM storage root (test seam).",
+    ),
 ) -> None:
     """Create a one-off libvirt VM named ``VM_NAME`` from a built-in cloud image.
 
@@ -446,13 +452,13 @@ def run(  # pylint: disable=too-many-arguments,too-many-locals
     domain_name = domain_name_for(vm_name)
     vm_dir = storage_dir_for(vm_name, root=storage_root)
 
-    click.echo(f"Creating one-off VM '{domain_name}' under {vm_dir}", err=True)
+    typer.echo(f"Creating one-off VM '{domain_name}' under {vm_dir}", err=True)
 
     # Step 1: dependency precheck.
     try:
         check_createvm_tooling()
     except DependencyError as exc:
-        raise click.ClickException(str(exc)) from exc
+        raise _fail(str(exc)) from exc
 
     # Step 2: resolve image. Use lvlab's CloudImage for download + verify.
     entry = BUILTIN_IMAGES[distro.lower()]
@@ -475,15 +481,15 @@ def run(  # pylint: disable=too-many-arguments,too-many-locals
         # follow-up commit.
         resolve_network_settings(net_info)
     except (LibvirtNetworkError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
+        raise _fail(str(exc)) from exc
 
     # Step 4: SSH keys.
     try:
         ssh_keys = _collect_ssh_keys(public_key)
     except PublicKeyError as exc:
-        raise click.ClickException(str(exc)) from exc
+        raise _fail(str(exc)) from exc
     if not ssh_keys:
-        raise click.ClickException(
+        raise _fail(
             "No SSH public keys discovered and none supplied via --public-key. "
             "Refusing to create a VM with no way to log in."
         )
@@ -493,13 +499,13 @@ def run(  # pylint: disable=too-many-arguments,too-many-locals
     try:
         password_hash_value = hash_password_sha512(password)
     except PasswordHashError as exc:
-        raise click.ClickException(str(exc)) from exc
+        raise _fail(str(exc)) from exc
 
     # Step 6: cloud-init render + ISO build.
     try:
         vm_dir.mkdir(parents=True, exist_ok=False)
     except FileExistsError as exc:
-        raise click.ClickException(
+        raise _fail(
             f"Storage dir {vm_dir} already exists. Pick a different VM name or "
             "delete the directory first."
         ) from exc
@@ -536,7 +542,7 @@ def run(  # pylint: disable=too-many-arguments,too-many-locals
         iso_fpath=str(cidata_path),
     )
     if not iso.write(str(vm_dir)):
-        raise click.ClickException("Failed to build cidata.iso.")
+        raise _fail("Failed to build cidata.iso.")
 
     # Step 7: create the qcow2 disk.
     _create_disk(
@@ -558,13 +564,13 @@ def run(  # pylint: disable=too-many-arguments,too-many-locals
             os_variant=entry.os_variant,
             network_name=network_name,
         )
-    except click.ClickException:
+    except typer.Exit:
         # Cleanup-on-failure: wipe the partial VM directory before
         # re-raising so the operator can retry without colliding.
         shutil.rmtree(vm_dir, ignore_errors=True)
         raise
 
-    click.echo(
+    typer.echo(
         f"\nVM '{domain_name}' created. First-boot console password: {password}\n"
         f"SSH: ssh {entry.default_username}@<vm-ip>",
         err=False,
@@ -605,13 +611,11 @@ def _ensure_image_available(cloud_image: CloudImage) -> None:
         cloud_image: A populated :class:`CloudImage` instance.
 
     Raises:
-        click.ClickException: Download or verification failed.
+        typer.Exit: Download or verification failed.
     """
     if not cloud_image.exists_locally("image"):
         if not cloud_image.download_image():
-            raise click.ClickException(
-                f"Failed to download cloud image from {cloud_image.image_url}"
-            )
+            raise _fail(f"Failed to download cloud image from {cloud_image.image_url}")
     if cloud_image.checksum_url and not cloud_image.exists_locally("checksum"):
         cloud_image.download_checksum()
     if cloud_image.checksum_url_gpg and not cloud_image.exists_locally("checksum_gpg"):
@@ -619,10 +623,17 @@ def _ensure_image_available(cloud_image: CloudImage) -> None:
     if cloud_image.checksum_url_gpg:
         cloud_image.gpg_verify_checksum_file()
     if cloud_image.checksum_url and not cloud_image.checksum_verify_image():
-        raise click.ClickException(
+        raise _fail(
             f"Cloud image {cloud_image.image_fpath} failed checksum verification."
         )
 
 
+# Backwards-compat alias for the entry point and external imports.
+# pyproject.toml references "tkc_lvlab.scripts.createvm:run"; tests
+# import ``run`` from this module. Typer ``app`` is callable, so the
+# script entry point works identically.
+run = app
+
+
 if __name__ == "__main__":  # pragma: no cover
-    run()
+    app()

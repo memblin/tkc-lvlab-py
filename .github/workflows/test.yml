@@ -36,4 +36,7 @@ jobs:
         # Complements the runtime guard in tests/conftest.py.
         run: uv run python tests/lint_test_safety.py
       - name: Run pytest (unit tests only)
-        run: uv run pytest -m "not integration"
+        # Coverage flags are passed explicitly here rather than via
+        # pyproject's addopts — see the comment in pyproject.toml
+        # [tool.pytest.ini_options] for the rationale.
+        run: uv run pytest -m "not integration" --cov=tkc_lvlab --cov-report=xml --cov-report=term

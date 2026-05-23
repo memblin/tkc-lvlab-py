@@ -42,7 +42,14 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=tkc_lvlab --cov-report=xml --cov-report=term"
+# Coverage flags are intentionally NOT in addopts. pytest-cov's
+# default collector doesn't follow subprocess.run-spawned children,
+# so enabling --cov for the integration suite produces a misleading
+# "No data was collected" warning and clobbers any prior unit-test
+# coverage.xml. Opt in to coverage where it makes sense:
+#   - CI test workflow: passes --cov flags explicitly on the unit run.
+#   - Local dev: ``uv run pytest --cov=tkc_lvlab --cov-report=term``.
+#   - Integration: no coverage at all (behavior gate, not coverage source).
 markers = [
     "integration: test exercises real virsh/qemu-img/libvirt; gated by LVLAB_INTEGRATION=1 (default: skipped).",
 ]

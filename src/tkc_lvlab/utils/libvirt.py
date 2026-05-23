@@ -28,6 +28,7 @@ from .._logging import get_logger
 from ..config import parse_config, generate_hosts
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
+from .network import NETWORK_TYPES, USER_MODE_NETWORK_TYPES
 from .virsh import (
     DEAD_STATES,
     SHUTDOWNABLE_STATES,
@@ -45,6 +46,38 @@ if TYPE_CHECKING:
 
 
 logger = get_logger(__name__)
+
+
+def _virt_install_network_arg(iface: dict[str, Any]) -> str:
+    """Build the ``virt-install --network`` argument for one interface.
+
+    The default (``network_type="network"``) emits a managed-network
+    arg with a fixed PCI address — matching pre-Phase-12 behaviour so
+    existing manifests are unchanged. ``user`` and ``passt`` emit the
+    user-mode forms, which don't take a libvirt network name and
+    don't need a fixed PCI address (virt-install picks one). User-mode
+    is required for ``qemu:///session`` where rootless libvirt cannot
+    manage a NAT network.
+
+    Args:
+        iface: The merged interface dict from ``Machine.interfaces``
+            (already had ``config_defaults['interfaces']`` applied).
+
+    Returns:
+        The exact string to pass after ``--network`` on the
+        ``virt-install`` command line.
+    """
+    network_type = iface.get("network_type", "network")
+    if network_type == "user":
+        return "user,model=virtio"
+    if network_type == "passt":
+        return "passt,model=virtio"
+    libvirt_network = iface.get("network", "default")
+    return (
+        f"network={libvirt_network},model=virtio,"
+        "address.type=pci,address.domain=0,address.bus=1,"
+        "address.slot=0,address.function=0"
+    )
 
 
 class Machine:
@@ -117,6 +150,28 @@ class Machine:
                 **config_defaults.get("interfaces", {}),
                 **iface,
             }
+
+        # Validate interface network_type and the ip4-with-user-mode
+        # combination at construction time so an operator sees a clear
+        # error before any state is created (cloud-init render, qcow2
+        # disk, virt-install). Static IPs under SLIRP/passt are silently
+        # ignored by virt-install; refuse the combination loudly instead.
+        for iface in machine.get("interfaces", []):
+            network_type = iface.get("network_type", "network")
+            if network_type not in NETWORK_TYPES:
+                raise ValueError(
+                    f"Invalid network_type {network_type!r} on interface "
+                    f"{iface.get('name', '<unnamed>')!r}. "
+                    f"Valid values: {', '.join(NETWORK_TYPES)}."
+                )
+            if network_type in USER_MODE_NETWORK_TYPES and iface.get("ip4"):
+                raise ValueError(
+                    f"Interface {iface.get('name', '<unnamed>')!r} declares "
+                    f"network_type={network_type!r} together with a static "
+                    f"ip4 ({iface['ip4']!r}). User-mode networking "
+                    f"(SLIRP/passt) does not honour static IPs — remove the "
+                    f"ip4 field or switch to network_type='network'."
+                )
 
         # Apply disk defaults
         for index, disk in enumerate(machine.get("disks", [])):
@@ -458,7 +513,7 @@ class Machine:
             f"path={os.path.join(config_path, 'cidata.iso') + ',device=cdrom'}",
             f"--os-variant={self.os.split('-')[0]}",
             "--network",
-            f'network={self.interfaces[0].get("network", "default")},model=virtio,address.type=pci,address.domain=0,address.bus=1,address.slot=0,address.function=0',
+            _virt_install_network_arg(self.interfaces[0]),
             "--graphics",
             "vnc,listen=0.0.0.0",
             "--noautoconsole",

@@ -431,6 +431,116 @@ def test_run_collision_with_existing_storage_dir_refuses(
 
 
 # ---------------------------------------------------------------------------
+# --network-type (Phase 12)
+# ---------------------------------------------------------------------------
+
+
+def test_run_network_type_user_skips_libvirt_network_introspection(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """With --network-type user, no libvirt network is looked up.
+
+    Phase 12 invariant: user-mode networking (SLIRP/passt) is the path
+    for qemu:///session, which often has no libvirt network defined at
+    all. get_network_info must not be called — calling it would raise
+    LibvirtNetworkError on a network-less URI and break the use case.
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        run,
+        [
+            "testvm.local",
+            "--distro",
+            "debian12",
+            "--network-type",
+            "user",
+            "--storage-root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    # No libvirt network introspection happened.
+    all_external_mocked["get_network_info"].assert_not_called()
+    all_external_mocked["validate_static_ip"].assert_not_called()
+    all_external_mocked["resolve_network_settings"].assert_not_called()
+
+    # virt-install received --network user,model=virtio (NOT network=...).
+    virt_install_calls = [
+        c
+        for c in all_external_mocked["subprocess_run"].call_args_list
+        if c.args[0][0] == "virt-install"
+    ]
+    assert len(virt_install_calls) == 1
+    argv = virt_install_calls[0].args[0]
+    assert "user,model=virtio" in argv
+    assert not any(arg.startswith("network=") for arg in argv)
+
+
+def test_run_network_type_passt_emits_passt_virt_install_arg(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """--network-type passt emits 'passt,model=virtio' to virt-install."""
+    runner = CliRunner()
+    result = runner.invoke(
+        run,
+        [
+            "testvm.local",
+            "--distro",
+            "debian12",
+            "--network-type",
+            "passt",
+            "--storage-root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    all_external_mocked["get_network_info"].assert_not_called()
+
+    argv = [
+        c.args[0]
+        for c in all_external_mocked["subprocess_run"].call_args_list
+        if c.args[0][0] == "virt-install"
+    ][0]
+    assert "passt,model=virtio" in argv
+
+
+def test_run_network_type_user_with_ip4_rejected(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """User-mode networking + --ip4 is a contradiction; refuse loudly.
+
+    SLIRP and passt don't honour static IPs the way a managed libvirt
+    NAT network does. If the operator passes both, fail at the CLI
+    boundary before any state is created (no VM dir, no qcow2, no
+    virt-install).
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        run,
+        [
+            "testvm.local",
+            "--distro",
+            "debian12",
+            "--network-type",
+            "user",
+            "--ip4",
+            "192.168.122.50",
+            "--storage-root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--ip4 is not supported" in result.output
+    # No virt-install or qemu-img was invoked.
+    assert not any(
+        c.args[0][0] in {"virt-install", "qemu-img"}
+        for c in all_external_mocked["subprocess_run"].call_args_list
+    )
+
+
+# ---------------------------------------------------------------------------
 # Image catalog sanity
 # ---------------------------------------------------------------------------
 

@@ -41,6 +41,8 @@ import typer
 from ..utils.cloud_init import CloudInitIso, NetworkConfig
 from ..utils.images import CloudImage
 from ..utils.network import (
+    NETWORK_TYPES,
+    USER_MODE_NETWORK_TYPES,
     LibvirtNetworkError,
     get_network_info,
     resolve_network_settings,
@@ -334,6 +336,7 @@ def _virt_install(
     cidata_path: Path,
     os_variant: str,
     network_name: str,
+    network_type: str,
 ) -> None:
     """Build and run the ``virt-install`` command for a one-off VM.
 
@@ -345,11 +348,23 @@ def _virt_install(
         disk_path: Primary qcow2 disk.
         cidata_path: cloud-init seed ISO (attached as cdrom).
         os_variant: ``virt-install --os-variant`` value.
-        network_name: libvirt network name to attach NIC to.
+        network_name: libvirt network name (only used when
+            ``network_type == "network"``).
+        network_type: ``"network"`` (default — managed libvirt network),
+            ``"user"`` (SLIRP), or ``"passt"``. The user-mode forms are
+            primarily for ``qemu:///session`` and ignore
+            ``network_name``.
 
     Raises:
         typer.Exit: ``virt-install`` exited non-zero.
     """
+    if network_type == "user":
+        network_arg = "user,model=virtio"
+    elif network_type == "passt":
+        network_arg = "passt,model=virtio"
+    else:
+        network_arg = f"network={network_name},model=virtio"
+
     argv = [
         "virt-install",
         f"--connect={uri}",
@@ -363,7 +378,7 @@ def _virt_install(
         f"path={cidata_path},device=cdrom",
         f"--os-variant={os_variant}",
         "--network",
-        f"network={network_name},model=virtio",
+        network_arg,
         "--graphics",
         "vnc,listen=0.0.0.0",
         "--noautoconsole",
@@ -378,6 +393,7 @@ def _virt_install(
 
 _DEFAULT_URI = "qemu:///system"
 _DEFAULT_NETWORK = "default"
+_DEFAULT_NETWORK_TYPE = "network"
 _DEFAULT_MEMORY_MIB = 2048
 _DEFAULT_CPUS = 2
 _DEFAULT_DISK_SIZE = "20G"
@@ -416,6 +432,19 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         "--network",
         show_default=True,
         help="libvirt network name. NAT default uses 'default'; bridges need explicit name.",
+    ),
+    network_type: str = typer.Option(
+        _DEFAULT_NETWORK_TYPE,
+        "--network-type",
+        click_type=click.Choice(NETWORK_TYPES, case_sensitive=False),
+        show_default=True,
+        help=(
+            "Network attachment mode. 'network' (default) uses a managed "
+            "libvirt network named via --network. 'user' / 'passt' use "
+            "virt-install's user-mode forms — required for qemu:///session "
+            "where rootless libvirt cannot manage a NAT network. --ip4 is "
+            "rejected with user-mode."
+        ),
     ),
     ip4: str = typer.Option(
         None,
@@ -476,21 +505,35 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     _ensure_image_available(cloud_image)
 
     # Step 3: network + IP validation.
-    if ip4 is not None:
-        network_name, raw_ip = parse_ip4_option(ip4, network)
+    network_type_normalized = network_type.lower()
+    if network_type_normalized in USER_MODE_NETWORK_TYPES:
+        # User-mode networking — no libvirt network to introspect, and
+        # static IPs aren't honoured. Reject --ip4 with a clear message
+        # before any state is created.
+        if ip4 is not None:
+            raise _fail(
+                f"--ip4 is not supported with --network-type {network_type_normalized}. "
+                f"User-mode networking (SLIRP/passt) does not honour static IPs."
+            )
+        network_name = (
+            network  # unused at virt-install time; kept for the helper signature
+        )
     else:
-        network_name, raw_ip = network, None
-    try:
-        net_info = get_network_info(uri, network_name)
-        if raw_ip is not None:
-            validate_static_ip(raw_ip, net_info)
-        # Resolve policy for completeness — surfaces bridge-without-defaults
-        # errors before any state is written. Returns are unused in this
-        # iteration; cloud-init network-config rendering uses them in a
-        # follow-up commit.
-        resolve_network_settings(net_info)
-    except (LibvirtNetworkError, ValueError) as exc:
-        raise _fail(str(exc)) from exc
+        if ip4 is not None:
+            network_name, raw_ip = parse_ip4_option(ip4, network)
+        else:
+            network_name, raw_ip = network, None
+        try:
+            net_info = get_network_info(uri, network_name)
+            if raw_ip is not None:
+                validate_static_ip(raw_ip, net_info)
+            # Resolve policy for completeness — surfaces bridge-without-defaults
+            # errors before any state is written. Returns are unused in this
+            # iteration; cloud-init network-config rendering uses them in a
+            # follow-up commit.
+            resolve_network_settings(net_info)
+        except (LibvirtNetworkError, ValueError) as exc:
+            raise _fail(str(exc)) from exc
 
     # Step 4: SSH keys.
     try:
@@ -572,6 +615,7 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
             cidata_path=cidata_path,
             os_variant=entry.os_variant,
             network_name=network_name,
+            network_type=network_type_normalized,
         )
     except typer.Exit:
         # Cleanup-on-failure: wipe the partial VM directory before

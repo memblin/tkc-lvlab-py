@@ -36,6 +36,17 @@ import xml.etree.ElementTree as ET
 from .virsh import VirshError, run_virsh
 
 
+# Valid values for ``interfaces.network_type`` (manifest) and
+# ``--network-type`` (createvm). ``"network"`` is the default (managed
+# libvirt network); ``"user"`` and ``"passt"`` are virt-install's
+# user-mode options that don't require any libvirt network state —
+# useful primarily on ``qemu:///session`` where rootless libvirt cannot
+# trivially manage a NAT network. Static IPs are nonsensical under
+# user-mode and are rejected at the manifest/CLI boundary.
+NETWORK_TYPES: tuple[str, ...] = ("network", "user", "passt")
+USER_MODE_NETWORK_TYPES: frozenset[str] = frozenset({"user", "passt"})
+
+
 class LibvirtNetworkError(RuntimeError):
     """Raised when libvirt network information cannot be resolved or validated.
 

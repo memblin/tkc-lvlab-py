@@ -158,3 +158,136 @@ def test_shared_directories_source_expands_envvar(
     m = Machine(machine_cfg, environment, config_defaults)
 
     assert m.shared_directories[0]["source"] == str(tmp_path / "custom")
+
+
+# ---------------------------------------------------------------------------
+# __init__ — Phase 12 network_type validation
+# ---------------------------------------------------------------------------
+
+
+def _minimal_config_defaults() -> dict:
+    """Minimal config_defaults needed for Machine.__init__ to succeed.
+
+    Real manifests carry more, but the network_type validation runs before
+    most other fields are consulted, so a minimal shape is enough to
+    isolate the validation behaviour.
+    """
+    return {"interfaces": {"nameservers": {}}}
+
+
+def test_init_rejects_unknown_network_type() -> None:
+    """An interface with an unknown network_type fails fast in __init__.
+
+    Catching this at construction means the operator sees the error before
+    any cloud-init / qcow2 / virt-install state is created.
+    """
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [{"name": "eth0", "network_type": "vlan-trunk"}],
+    }
+    with pytest.raises(ValueError, match="Invalid network_type 'vlan-trunk'"):
+        Machine(machine_cfg, {"name": "lab"}, config_defaults)
+
+
+def test_init_rejects_user_network_with_static_ip4() -> None:
+    """User-mode networking + ip4 is contradictory; refuse at __init__ time.
+
+    SLIRP/passt do not honour static IPs. If both are present the
+    manifest is internally inconsistent; surfacing it at construction
+    rather than at virt-install time gives a clear operator message.
+    """
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [
+            {"name": "eth0", "network_type": "user", "ip4": "192.168.122.50"}
+        ],
+    }
+    with pytest.raises(ValueError, match="does not honour static IPs"):
+        Machine(machine_cfg, {"name": "lab"}, config_defaults)
+
+
+def test_init_rejects_passt_network_with_static_ip4() -> None:
+    """Same invariant as user-mode — passt also drops static IPs."""
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [
+            {"name": "eth0", "network_type": "passt", "ip4": "192.168.122.50"}
+        ],
+    }
+    with pytest.raises(ValueError, match="does not honour static IPs"):
+        Machine(machine_cfg, {"name": "lab"}, config_defaults)
+
+
+def test_init_accepts_user_network_without_ip4() -> None:
+    """User-mode + no ip4 is the supported shape; __init__ succeeds."""
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [{"name": "eth0", "network_type": "user"}],
+    }
+    m = Machine(machine_cfg, {"name": "lab"}, config_defaults)
+    assert m.interfaces[0]["network_type"] == "user"
+
+
+def test_init_accepts_default_managed_network_with_ip4() -> None:
+    """Managed network (the pre-Phase-12 default) + ip4 is the original
+    supported combination — still works after the new validation lands."""
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [{"name": "eth0", "network": "default", "ip4": "192.168.122.50"}],
+    }
+    m = Machine(machine_cfg, {"name": "lab"}, config_defaults)
+    assert m.interfaces[0]["ip4"] == "192.168.122.50"
+    # network_type omitted means the default behaviour.
+    assert m.interfaces[0].get("network_type", "network") == "network"
+
+
+# ---------------------------------------------------------------------------
+# _virt_install_network_arg — Phase 12 virt-install argument assembly
+# ---------------------------------------------------------------------------
+
+
+def test_virt_install_network_arg_default_managed_network() -> None:
+    """The default (no network_type) emits the same arg as pre-Phase-12.
+
+    Regression guard: any existing manifest without network_type must
+    produce the exact PCI-addressed managed-network arg that was
+    hard-coded before Phase 12.
+    """
+    from tkc_lvlab.utils.libvirt import _virt_install_network_arg
+
+    arg = _virt_install_network_arg({"name": "eth0", "network": "default"})
+    assert arg.startswith("network=default,model=virtio,")
+    assert "address.type=pci" in arg
+
+
+def test_virt_install_network_arg_user_mode() -> None:
+    """User-mode emits 'user,model=virtio' — no libvirt network name."""
+    from tkc_lvlab.utils.libvirt import _virt_install_network_arg
+
+    arg = _virt_install_network_arg({"name": "eth0", "network_type": "user"})
+    assert arg == "user,model=virtio"
+
+
+def test_virt_install_network_arg_passt() -> None:
+    """passt emits 'passt,model=virtio' — no libvirt network name."""
+    from tkc_lvlab.utils.libvirt import _virt_install_network_arg
+
+    arg = _virt_install_network_arg({"name": "eth0", "network_type": "passt"})
+    assert arg == "passt,model=virtio"
+
+
+def test_virt_install_network_arg_user_mode_ignores_network_field() -> None:
+    """An iface that happens to carry both network_type=user AND a leftover
+    'network' key (e.g. inherited from config_defaults) still emits the
+    user-mode arg — the network name is irrelevant for SLIRP/passt."""
+    from tkc_lvlab.utils.libvirt import _virt_install_network_arg
+
+    arg = _virt_install_network_arg(
+        {"name": "eth0", "network": "default", "network_type": "user"}
+    )
+    assert arg == "user,model=virtio"

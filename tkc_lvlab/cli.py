@@ -347,8 +347,9 @@ def create(vm_name, snapshot_name, snapshot_description=None):
 @snapshot.command()
 @click.argument("vm_name")
 @click.argument("snapshot_name")
-def delete(vm_name, snapshot_name, snapshot_description=None):
-    """Delete snapshot/sfor a given VM."""
+@click.option("--force", is_flag=True, help="Skip confirmation prompt.")
+def delete(vm_name, snapshot_name, force=False):
+    """Delete a snapshot for a given VM."""
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
@@ -366,13 +367,24 @@ def delete(vm_name, snapshot_name, snapshot_description=None):
         if machine:
             exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
             if exists:
+                if not (
+                    force
+                    or click.confirm(
+                        f"Delete snapshot {snapshot_name} from {machine.vm_name}?"
+                    )
+                ):
+                    click.echo(f"Snapshot deletion aborted for {machine.vm_name}.")
+                    return
+
                 snapshot_status = machine.delete_snapshot(
                     libvirt_endpoint, snapshot_name
                 )
                 if snapshot_status == 0:
                     click.echo(f"Snapshot deleted for {machine.vm_name}")
                 else:
-                    click.echo(f"Snapshot deletion failed for {machine.vm_name}")
+                    click.echo(
+                        f"Snapshot deletion failed for {machine.vm_name}: {snapshot_status}"
+                    )
             else:
                 click.echo(
                     f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
@@ -454,7 +466,6 @@ def up(vm_name):
                 machine.os, images.get(machine.os), environment, config_defaults
             )
 
-            # TODO: Check if vdisks exist before trying to create
             machine.create_vdisks(environment, config_defaults, cloud_image)
 
             # Render and write cloud-init config

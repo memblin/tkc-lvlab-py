@@ -706,12 +706,25 @@ Typer is a thin layer over Click that:
     (`--help` for the group + every subcommand), `snapshot list <vm>`
     against a not-deployed VM. All exit 0; output matches the Click
     UX modulo Typer/Rich panel rendering.
-- [ ] Manual smoke test the destructive happy path (`lvlab init`,
-    `lvlab up`, `lvlab snapshot create/delete`, `lvlab destroy`) —
-    not executed in the 2026-05-23 pass because `disk_image_basedir`
-    defaults to `/var/lib/libvirt/images/lvlab` (sudo-only on the
-    dev host) and `init` would pull ~1GB of cloud images. Schedule
-    on a developer workstation with image cache + sudo access.
+- [x] Manual smoke test the destructive happy path
+    (2026-05-23, second pass on `podman01.tkclabs.io` with sudo +
+    libvirt-group access). Both standalone (`createvm smoke.test   --distro debian13` → `destroyvm smoke.test --force`) and
+    manifest (`lvlab up vault.local` → `status` → `snapshot   create/list/delete` → `destroy --force`) round-trips
+    succeeded end-to-end. The smoke run surfaced the following
+    issues, addressed in the follow-up section below:
+    - **Real bugs (fixed):** `UserData._is_valid_ssh_public_key`
+        regex rejected multi-word comments AND
+        `UserData.__post_init__` crashed on the validator's
+        bare-`False` miss return — both fixed in commit `bbf6141`.
+    - **Stale catalog (fixed):** `BUILTIN_IMAGES["fedora40"]` URL
+        returned a 404 HTML page; the checksum-verification path
+        defensively rejected it but the catalog itself was broken.
+        Dropped in commit `626f272`.
+    - **Defenses-in-depth that fired correctly (positive
+        validations):** `requirements.py` precheck caught missing
+        `virt-install` and gave the exact install command;
+        checksum verification refused the 404 HTML; SSH-key
+        discovery refused to create a VM with no login keys.
 
 ### Smoke-test follow-ups (Typer UX deltas vs. Click)
 
@@ -736,6 +749,53 @@ drifting:
     without `-R`, etc.).
 - [ ] **`[default: 0]` shown for the `-v` count flag.** Slightly
     noisy but informative. No-op fix — accept as-is.
+
+### Smoke-test follow-ups (other findings, deferred for review)
+
+The 2026-05-23 destructive smoke test also surfaced these items.
+None are blockers for the next release — but each represents a
+real UX or documentation gap worth tracking so we don't drift.
+
+- [ ] **`cloud_image_basedir` doubles `/cloud-images/` internally.**
+    Setting `cloud_image_basedir: /var/lib/libvirt/images/cloud-images`
+    in a manifest produces a lookup at
+    `/var/lib/libvirt/images/cloud-images/cloud-images/...` because
+    `CloudImage` appends `/cloud-images/` to the configured
+    basedir. The correct manifest value is the parent directory
+    (e.g. `/var/lib/libvirt/images`) — but nothing in the manifest
+    schema or the CloudImage docstring signals this. Two reasonable
+    fixes: (a) docstring + schema-doc note on
+    `cloud_image_basedir` explaining the append convention; (b)
+    normalize the internal append so it strips a trailing
+    `/cloud-images` if already present. (a) is the smaller change
+    and preserves the historical layout for users who already have
+    things laid out that way.
+- [ ] **Stale-group-session footgun after `usermod -aG libvirt`.**
+    On a fresh libvirt install where the developer's user was just
+    added to the `libvirt` group, the current shell session
+    doesn't see the new group membership until logout/login. Both
+    `createvm` and `lvlab` then fail with permission errors on
+    `/var/lib/libvirt/images/` writes. The workaround is to use
+    `sg libvirt -c "uv run createvm ..."` to run commands under
+    the freshly-added group without re-login. Worth a sentence in
+    CONTRIBUTING.md (or wherever new-contributor host setup is
+    documented) so the next person doesn't lose an hour to it.
+- [ ] **Refresh the catalog with a current Fedora release.**
+    The fedora40 entry was dropped (commit `626f272`) without a
+    replacement because picking the right URL + verifying it
+    actually serves required real-time research that didn't fit
+    in the smoke-test commit. To add e.g. `fedora43`: pick the
+    Fedora `Cloud-Base-Generic.x86_64-<N>-<build>.qcow2` URL from
+    `download.fedoraproject.org`, confirm the matching `--os-variant`
+    string with `virt-install --osinfo list | grep fedora43` (or
+    `osinfo-query os`), and verify the GPG-signed checksum file is
+    in the same directory. Add the entry to
+    `tkc_lvlab/scripts/createvm.py` `BUILTIN_IMAGES` AND to the
+    example manifests (`docs/Lvlab.example.yml` + the working
+    `Lvlab.yml`). Bonus: same time, audit `debian12` — its URL
+    pins `bookworm/20240717-1811`, which may itself age out and
+    eventually 404 the same way fedora40 did. Consider
+    `bookworm/latest/` if Debian guarantees a stable path there.
 
 ### Follow-up: migrate the standalone scripts to Typer too (COMPLETE — 2026-05-23)
 
@@ -818,7 +878,19 @@ option/default preserved.
 
 ______________________________________________________________________
 
-## Phase 10 — Cut the 1.0.0 release
+## Phase 10 — Cut the next release (version target paused — 2026-05-23)
+
+**Status:** the 2026-05-23 destructive smoke test surfaced two real
+bugs (now fixed in commits `bbf6141` and `626f272`) plus several
+follow-up items captured in the "Smoke-test follow-ups (other
+findings, deferred for review)" section above. Per the user's call,
+the previously-queued 1.0.0 target is **paused** — we'll work out
+the version number later, once the follow-ups have been reviewed
+and either addressed or explicitly waived. The pre-tag gate and
+bump procedure documented below still applies whenever the version
+target lands, whether that's 1.0.0 or another number (0.3.0 is also
+a viable signal for "substantial migration work, some loose ends
+acknowledged").
 
 The post-0.2 work landed a lot of substantive change:
 
@@ -836,20 +908,19 @@ The post-0.2 work landed a lot of substantive change:
     `lvlab` and the standalone scripts — from Click to Typer with
     UX preservation.
 
-Interfaces are stable, the suite is green (248 passed, 1 skipped),
-mkdocs `--strict` builds clean. 1.0.0 is the appropriate next tag —
-both as a "we're done with the migration set" signal and to give
-users a stable reference point to pin against.
+Interfaces are stable, the suite is green (254 passed, 1 skipped
+after the Phase 9 follow-up fixes), mkdocs `--strict` builds clean.
 
 ### Pre-tag gate (do all of these before bumping the version)
 
-- [ ] **Destructive smoke test** on a developer workstation with sudo
-    - image-cache access. Walk the full happy path:
-        `lvlab init`, `lvlab up <vm>`, `lvlab status`, `lvlab snapshot create <vm> <snap>`, `lvlab snapshot list <vm>`,
-        `lvlab snapshot delete <vm> <snap> --force`, `lvlab destroy <vm> --force`. Capture any UX regression (Typer Rich-panel output
-        aside). This is the only unchecked item left from Phase 9.
-- [ ] **Standalone-script smoke test**: `createvm <name>   --distro fedora40` → wait for cloud-init → `destroyvm <name>   --force`. Verify both paths cleanly handle the `oneoff-` prefix
-    on the libvirt side.
+- [x] **Destructive smoke test** — completed 2026-05-23 on
+    `podman01.tkclabs.io`. Both manifest (`lvlab up vault.local` →
+    `status` → `snapshot create/list/delete` → `destroy --force`)
+    and standalone (`createvm smoke.test --distro debian13` →
+    `destroyvm --force`) round-trips landed cleanly. Findings are
+    captured in the "Smoke-test follow-ups (other findings,
+    deferred for review)" section above; the two real-bug findings
+    are already fixed (commits `bbf6141` and `626f272`).
 - [ ] **Tag-name dry run**: open `.github/workflows/build-release.yml`
     and confirm the wheel filename glob (`tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl`) still matches what `uv build` produces. Should
     be a no-op since we're staying on the prefix layout and the

@@ -37,6 +37,19 @@ class Machine:
             )
             machine["disks"][index] = {**disk_defaults, **disk}
 
+        # Apply shared_directories defaults.
+        # Defaults always apply; per-machine entries extend the list and override any
+        # default whose mount_tag they share. Result is a list keyed-by-mount_tag.
+        default_shared_dirs = config_defaults.get("shared_directories", []) or []
+        machine_shared_dirs = machine.get("shared_directories", []) or []
+        merged_shared_dirs = {sd["mount_tag"]: sd for sd in default_shared_dirs}
+        for sd in machine_shared_dirs:
+            merged_shared_dirs[sd["mount_tag"]] = {
+                **merged_shared_dirs.get(sd["mount_tag"], {}),
+                **sd,
+            }
+        machine["shared_directories"] = list(merged_shared_dirs.values())
+
         # Apply machine defaults
         machine = {**config_defaults, **machine}
 
@@ -78,6 +91,7 @@ class Machine:
             "nameservers", config_defaults["interfaces"].get("nameservers", {})
         )
         self.disks = machine.get("disks", [])
+        self.shared_directories = machine.get("shared_directories", [])
         self.cloud_init_config = machine.get("cloud_init", {})
         self.config_fpath = config_fpath
 
@@ -239,10 +253,12 @@ class Machine:
             "--noautoconsole",
         ]
 
-        # Extend the command to enable shared_directories if found in the config
-        if config_defaults.get("shared_directories", None):
+        # Extend the command to enable shared_directories if found in the config.
+        # self.shared_directories is the merged result of config_defaults and the
+        # per-machine entries (see Machine.__init__).
+        if self.shared_directories:
             command.append("--memorybacking=source.type=memfd,access.mode=shared")
-            for filesystem in config_defaults.get("shared_directories", None):
+            for filesystem in self.shared_directories:
                 command.append(
                     f'--filesystem={filesystem["source"]},{filesystem["mount_tag"]},driver.type=virtiofs'
                 )

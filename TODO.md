@@ -176,10 +176,20 @@ integration test **bodies** themselves are a follow-up effort.
 ### Phase 3 follow-ups (not blocking)
 
 - [ ] Write actual integration test bodies that exercise real `virsh` /
-    `qemu-img`. The scaffolding is in place; the bodies are not.
-    Cover at least: `Machine.deploy` happy path on `qemu:///session`,
-    full `up`-`status`-`destroy` lifecycle, snapshot create/list/delete
-    against a real domain.
+    `qemu-img`. Original scope had three sub-targets:
+    - [x] Full `up`-`status`-`destroy` lifecycle. Landed 2026-05-23 —
+        `tests/test_integration_createvm.py` (commit `11ee9d9` +
+        `b0c8169`) covers the createvm/destroyvm round-trip;
+        `tests/test_integration_lvlab.py` (commit `f01aa23`) covers
+        the manifest `up` → `status` → `destroy --force` round-trip.
+    - [x] Cross-surface regression-guard. Landed 2026-05-23 —
+        `tests/test_integration_regression_guard.py` (commit
+        `380ed8c`) verifies createvm-made VMs are invisible to
+        `lvlab status` and that `destroyvm` refuses to fall through
+        to manifest VMs.
+    - [ ] Snapshot create/list/delete against a real domain.
+    - [ ] `qemu:///session` URI coverage. Blocked on Phase 12
+        (user-mode networking support).
 - [ ] Add the lint/grep check that fails CI if any test calls
     `virsh destroy` / `virsh undefine` / `os.remove` on a name that
     didn't come from `make_test_name`. (See "Cross-cutting safety
@@ -402,11 +412,16 @@ dict from raw `createvm` arguments.
 
 **Step 6** — tests + docs:
 
-- [ ] Regression-guard integration test: `createvm` a oneoff and verify
+- [x] Regression-guard integration test: `createvm` a oneoff and verify
     `lvlab status` does NOT see it; reciprocally a manifest VM stays
-    invisible to `destroyvm` lookups.
-- [ ] Tests for both surfaces share the `LVLAB_TEST_PREFIX` safety
+    invisible to `destroyvm` lookups. Landed 2026-05-23 in commit
+    `380ed8c` (`tests/test_integration_regression_guard.py`).
+- [x] Tests for both surfaces share the `LVLAB_TEST_PREFIX` safety
     fixture so the session-scoped reaper covers oneoff resources.
+    Done via shared `tests/conftest.py` (`make_test_name`,
+    `assert_owned_by_test`, `_is_owned_by_test` recognises both the
+    plain prefix and the `oneoff-` prefixed form createvm produces)
+    and `tests/integration_helpers.py`.
 - [x] Docs: extend `README.md` and `docs/Walkthrough.md` with the one-off
     workflow. Explain when to use `lvlab` vs `createvm`/`destroyvm` —
     including the explicit "they don't see each other's VMs" property.
@@ -432,15 +447,29 @@ the test suite.
     - [x] A session-scoped teardown that runs `virsh list --all --name`
         *filtered by the prefix* and reaps any that survived a crashing test.
         **Never list all domains; only ones matching the prefix.**
-- [ ] Same prefix applies to:
-    - [ ] On-disk paths (`disk_image_basedir` for tests must be a temp dir,
-        not the developer's shared `~/.local/lvlab/...`).
-    - [ ] Cloud-init ISOs and the per-VM config directory.
+- [x] Same prefix applies to:
+    - [x] On-disk paths (`disk_image_basedir` for tests must be a temp dir,
+        not the developer's shared `~/.local/lvlab/...`). Done — the
+        `lvlab_integration_storage_root` fixture exposes a dedicated
+        `/var/lib/libvirt/images/lvlab-test/` root with the
+        no-overwrite + prefix-recognising session reaper documented
+        in `docs/CONTRIBUTING.md` "Integration test storage layout".
+    - [x] Cloud-init ISOs and the per-VM config directory. Done —
+        the per-VM dir under `lvlab_integration_storage_root`
+        (created by `createvm` / `Machine.deploy`) holds the
+        cidata.iso and rendered cloud-init files, and the storage
+        reaper sweeps the whole prefix-named tree at session end.
 - [ ] Add a lint/grep check (or pytest plugin) that fails CI if a test calls
     `virsh destroy` / `virsh undefine` / `os.remove()` on a name that
     didn't come from `make_test_name`.
-- [ ] Integration tests **must** use a dedicated `libvirt_uri` or at least a
+- [x] Integration tests **must** use a dedicated `libvirt_uri` or at least a
     dedicated network and storage pool so cleanup can be scoped further.
+    Done via the "OR at least dedicated storage" branch —
+    `/var/lib/libvirt/images/lvlab-test/` is the dedicated test
+    storage root; the integration tests don't yet run against a
+    dedicated URI (they share `qemu:///system` with developer VMs)
+    but the LVLAB_TEST_PREFIX guard + storage reaper scope cleanup
+    correctly without one.
 
 ______________________________________________________________________
 

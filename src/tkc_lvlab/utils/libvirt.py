@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._logging import get_logger
 from ..config import parse_config, generate_hosts
+from .subprocess_env import system_first_env
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
 from .network import NETWORK_TYPES, USER_MODE_NETWORK_TYPES
@@ -535,6 +536,7 @@ class Machine:
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=system_first_env(),
             )
             return True
         except subprocess.CalledProcessError as e:

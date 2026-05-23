@@ -54,6 +54,7 @@ from ..utils.passwords import (
     hash_password_sha512,
 )
 from ..utils.requirements import DependencyError, check_createvm_tooling
+from ..utils.subprocess_env import system_first_env
 from ..utils.ssh_keys import (
     PublicKeyError,
     dedupe_public_keys,
@@ -304,6 +305,14 @@ def _create_disk(
 def _run_subprocess(argv: list[str]) -> None:
     """Run a subprocess with check=True, translating errors via :func:`_fail`.
 
+    The environment is set via :func:`system_first_env` so that any
+    binary using a ``#!/usr/bin/env python3`` shebang (e.g.
+    ``virt-install`` on Debian 13) resolves the interpreter to the
+    host's system Python instead of the venv-shadowed one. Without
+    this override, virt-install fails to import ``gi`` from the
+    system ``python3-gi`` package because the venv interpreter
+    doesn't see system site-packages.
+
     Args:
         argv: Command line, first element is the binary name.
 
@@ -313,7 +322,9 @@ def _run_subprocess(argv: list[str]) -> None:
             before exit so the operator sees the real failure.
     """
     try:
-        subprocess.run(argv, check=True, capture_output=True, text=True)
+        subprocess.run(
+            argv, check=True, capture_output=True, text=True, env=system_first_env()
+        )
     except FileNotFoundError as exc:
         raise _fail(f"{argv[0]} not found in PATH.") from exc
     except subprocess.CalledProcessError as exc:

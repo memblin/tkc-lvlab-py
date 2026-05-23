@@ -291,3 +291,39 @@ def test_virt_install_network_arg_user_mode_ignores_network_field() -> None:
         {"name": "eth0", "network": "default", "network_type": "user"}
     )
     assert arg == "user,model=virtio"
+
+
+# ---------------------------------------------------------------------------
+# Machine.deploy — subprocess env sanitization (Debian 13 portability)
+# ---------------------------------------------------------------------------
+
+
+def test_machine_deploy_passes_system_first_env_to_virt_install(tmp_path) -> None:
+    """``Machine.deploy`` invokes virt-install with system-first PATH.
+
+    Regression for the Debian 13 portability bug: virt-install on
+    bookworm-and-newer uses ``#!/usr/bin/env python3``, so unless
+    we pass an env with ``/usr/bin`` first on PATH, the venv's
+    Python gets selected and ``import gi`` fails. Asserts the
+    ``env=`` kwarg's PATH starts with the system bin paths.
+    """
+    from unittest import mock
+
+    from tkc_lvlab.utils.libvirt import Machine
+
+    m = object.__new__(Machine)
+    m.libvirt_vm_name = "web01_lab"
+    m.memory = 1024
+    m.cpu = 1
+    m.os = "debian13"
+    m.interfaces = [{"name": "eth0", "network": "default"}]
+    m.shared_directories = []
+
+    with mock.patch("tkc_lvlab.utils.libvirt.subprocess.run") as run:
+        m.deploy(str(tmp_path), {}, "qemu:///session")
+
+    assert run.call_count == 1
+    env = run.call_args.kwargs["env"]
+    assert env["PATH"].startswith(
+        "/usr/bin:/usr/sbin"
+    ), f"deploy must pass env with system bin paths first; got PATH={env['PATH']!r}"

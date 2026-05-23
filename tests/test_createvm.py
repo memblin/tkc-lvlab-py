@@ -545,6 +545,35 @@ def test_run_network_type_user_with_ip4_rejected(
 # ---------------------------------------------------------------------------
 
 
+def test_run_passes_system_first_env_to_virt_install(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """``createvm`` invokes virt-install with system-first PATH.
+
+    Regression for the Debian 13 portability bug: virt-install on
+    bookworm-and-newer uses ``#!/usr/bin/env python3``. Without the
+    env override, the venv's Python gets selected and ``import gi``
+    fails. Asserts the ``env=`` kwarg on the virt-install call has
+    ``/usr/bin:/usr/sbin`` at the front of PATH.
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        run, ["testvm.local", "--distro", "debian12", "--storage-root", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+
+    virt_install_calls = [
+        c
+        for c in all_external_mocked["subprocess_run"].call_args_list
+        if c.args[0][0] == "virt-install"
+    ]
+    assert len(virt_install_calls) == 1
+    env = virt_install_calls[0].kwargs["env"]
+    assert env["PATH"].startswith(
+        "/usr/bin:/usr/sbin"
+    ), f"createvm must pass env with system bin paths first; got PATH={env['PATH']!r}"
+
+
 def test_builtin_catalog_includes_known_distros() -> None:
     """The catalog has at least one stable distro family — regression guard.
 

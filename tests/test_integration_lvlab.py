@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from textwrap import dedent
 
 import pytest
 
@@ -36,6 +35,7 @@ from tests.conftest import assert_owned_by_test, make_test_name
 from tests.integration_helpers import (
     find_entry_point,
     list_domains,
+    render_manifest,
     wait_for_no_domain,
 )
 
@@ -43,80 +43,6 @@ from tests.integration_helpers import (
 _LVLAB_UP_TIMEOUT_SECONDS = 300
 _LVLAB_STATUS_TIMEOUT_SECONDS = 30
 _LVLAB_DESTROY_TIMEOUT_SECONDS = 60
-
-
-_MANIFEST_TEMPLATE = dedent(
-    """\
-    ---
-    environment:
-      - name: {env_name}
-        libvirt_uri: {uri}
-        config_defaults:
-          domain: local
-          os: debian13
-          cpu: 1
-          memory: 1024
-          disks:
-            - name: primary
-              size: 5G
-          interfaces:
-            network: default
-          cloud_image_basedir: /var/lib/libvirt/images
-          disk_image_basedir: {storage_root}
-          cloud_init:
-            user: root
-            pubkey: {pubkey_path}
-            sudo:
-              - ALL=(ALL) NOPASSWD:ALL
-            shell: /bin/bash
-        machines:
-          - vm_name: {vm_name}
-            hostname: testhost
-            interfaces:
-              - name: eth0
-
-    images:
-      debian13:
-        image_url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
-        checksum_url: https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
-        checksum_type: sha512
-        network_version: 2
-    """
-)
-
-
-def _render_manifest(
-    *,
-    env_name: str,
-    uri: str,
-    storage_root: Path,
-    vm_name: str,
-    pubkey_path: Path,
-) -> str:
-    """Render the test manifest YAML with the per-run values filled in.
-
-    Args:
-        env_name: Prefixed environment name (lvlab uses it as the
-            domain-name suffix and as a storage-path component).
-        uri: libvirt URI selected by the :func:`integration_uri`
-            fixture.
-        storage_root: ``disk_image_basedir`` — the test storage root
-            exposed by :func:`lvlab_integration_storage_root`.
-        vm_name: Prefixed VM name (becomes the domain-name prefix and
-            the per-VM storage subdir).
-        pubkey_path: Absolute path to an existing SSH public key on
-            the test host.
-
-    Returns:
-        A complete ``Lvlab.yml`` YAML document.
-    """
-    return _MANIFEST_TEMPLATE.format(
-        env_name=env_name,
-        uri=uri,
-        storage_root=storage_root,
-        vm_name=vm_name,
-        pubkey_path=pubkey_path,
-    )
 
 
 @pytest.mark.integration
@@ -171,7 +97,7 @@ def test_lvlab_manifest_roundtrip(
 
     manifest_path = tmp_path / "Lvlab.yml"
     manifest_path.write_text(
-        _render_manifest(
+        render_manifest(
             env_name=env_name,
             uri=integration_uri,
             storage_root=lvlab_integration_storage_root,

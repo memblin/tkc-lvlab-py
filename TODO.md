@@ -223,28 +223,54 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-## Phase 5 — Survey `lvscripts-py` (blocked on session restart)
+## Phase 5 — Survey `lvscripts-py` ✅ COMPLETE — 2026-05-23
 
-The sibling repo at `/home/tkcadmin/repos/github/memblin/lvscripts-py` becomes
-readable after the next Claude restart (the `additionalDirectories` grant we
-just added).
+Output landed as [`docs/lvscripts-survey.md`](lvscripts-survey.md) (in
+`exclude_docs`; internal planning artifact). It supersedes the older
+scratch inventory at `/tmp/lvscripts-inventory.md`, which pre-dated
+Phase 2 completion.
 
-- [ ] Read `lvscripts-py/CLAUDE.md` and `README.md` to understand intent.
-- [ ] Inventory the public surface: what scripts ship, what flags they take,
-    what they do top-to-bottom.
-- [ ] Map functional overlap with `tkc-lvlab`:
-    - cloud-image download/verify
-    - cloud-init ISO build
-    - qcow2 backing-disk creation
-    - virt-install invocation
-    - libvirt domain lifecycle (define / start / shutdown / destroy / undefine)
-- [ ] Identify capabilities lvlab does **not** have today, especially:
-    - [ ] One-off `createvm <name> --os ... --memory ... --disk ...` style entry
-        without needing an `Lvlab.yml`.
-    - [ ] Anything around image building / customization, NAT/bridge wiring,
-        or post-create provisioning.
-- [ ] Decide on per-feature disposition: **port**, **adapt**, **skip**, or
-    **leave to lvscripts**.
+- [x] Read `lvscripts-py/CLAUDE.md` and `README.md` to understand intent.
+    lvscripts is a Typer-based CLI that wraps host binaries to create
+    one-off VMs against `qemu:///system`. Two console scripts: `createvm`,
+    `deletevm`.
+- [x] Inventory the public surface (`createvm <vm_name> <vm_distro>` with
+    `--ip4/--memory/--cpu/--disk-size/--network/--public-key/--init-cloud-images/--config`;
+    `deletevm <vm_name> [--force]`) and the module split (config /
+    libvirt / cloud_init / cloud_images / ssh_keys / passwords /
+    requirements).
+- [x] Map functional overlap — both projects now use `virsh`; lvlab's
+    image verification, in-process `pycdlib` ISO build, and backing-file
+    qcow2 strategy are superior. lvscripts is ahead on SSH key
+    discovery, password generation, network validation, DHCP lease
+    polling, and dependency precheck with package-manager hints.
+- [x] Identify lvscripts-exclusive capabilities — section 4 of the
+    survey.
+- [x] Per-feature disposition — section 5 of the survey. **Port:**
+    one-off VM creation (Phase 6 deliverable), SSH key discovery,
+    password generation, network validation, dependency precheck,
+    snapshot-fallback in deletevm. **Adapt:** key-type whitelist
+    (broaden lvlab's validator), config discovery seam, image-init
+    bootstrap. **Skip:** `genisoimage` ISO build, `cp +qemu-img resize`
+    disk strategy. **Leave to lvscripts:** their `libvirt.run()`
+    wrapper (lvlab's is more robust now; lvscripts could adopt
+    lvlab's pattern).
+
+Recap of Phase 6 design questions that the survey resolved or sharpened:
+
+- Namespacing: the `_oneoff` sentinel-environment idea from
+    `/tmp/lvscripts-inventory.md` is **moot** — Phase 6 architecture
+    (createvm/destroyvm are separate console scripts, no Lvlab.yml
+    dependency) eliminated the environment concept entirely. Remaining
+    sub-question: bare name vs `oneoff-<name>` prefix vs distinct URI
+    routing.
+- Storage path: standalone scripts should namespace under
+    `/var/lib/libvirt/images/oneoff/<name>/` so they can't collide
+    with lvlab manifest VMs sharing the default `disk_image_basedir`.
+- Image verification: do NOT port lvscripts' download logic — use
+    lvlab's `CloudImage` GPG/checksum path.
+- Phase 9 reference: lvscripts' `commands/createvm.py` is a working
+    Typer example to reread when Phase 9 starts.
 
 ______________________________________________________________________
 

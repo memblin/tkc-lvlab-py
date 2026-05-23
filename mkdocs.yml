@@ -73,10 +73,11 @@ nav:
   - Home: index.md
   - API Reference: api/index.md
 
-# Pages not listed in `nav` above (Walkthrough.md, Design.md, Why.md, Libvirt.md,
-# releases.md, CONTRIBUTING.md, WIP.md, Lvlab.example.yml) are intentionally
-# excluded from the navigation until the legacy docs conversion lands. They
-# remain in `docs/` for backward reference and direct linking.
+# Pages not listed in `nav` above are intentionally excluded from the
+# navigation. The legacy user-facing docs (Walkthrough.md etc.) remain
+# in `docs/` until the legacy-docs conversion lands; the internal
+# planning artifacts (lvscripts-survey.md etc.) are not meant to render
+# in the public site at all.
 exclude_docs: |
   Walkthrough.md
   Design.md
@@ -86,4 +87,5 @@ exclude_docs: |
   CONTRIBUTING.md
   WIP.md
   Lvlab.example.yml
+  lvscripts-survey.md
   cloud-init.examples/

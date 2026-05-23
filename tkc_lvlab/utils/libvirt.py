@@ -2,15 +2,18 @@
 
 import glob
 import os
-import click
 import libvirt
 import re
 import subprocess
 import sys
 
+from .._logging import get_logger
 from ..config import parse_config, generate_hosts
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
+
+
+logger = get_logger(__name__)
 
 
 class Machine:
@@ -101,7 +104,7 @@ class Machine:
             try:
                 os.makedirs(self.config_fpath)
             except Exception as e:  # pylint: disable=broad-except
-                click.echo(f"Exception creating : {e}")
+                logger.error("Exception creating %s: %s", self.config_fpath, e)
                 sys.exit(1)
 
         # Render and write cloud-init: network-config
@@ -110,7 +113,7 @@ class Machine:
         )
         rendered_network_config = network_config.render_config()
         network_config_fpath = os.path.join(self.config_fpath, "network-config")
-        click.echo(f"Writing cloud-init network config file {network_config_fpath}")
+        logger.info("Writing cloud-init network config file %s", network_config_fpath)
         with open(network_config_fpath, "w", encoding="utf-8") as network_config_file:
             network_config_file.write(rendered_network_config)
 
@@ -118,7 +121,7 @@ class Machine:
         metadata_config = MetaData(self.libvirt_vm_name, self.fqdn)
         rendered_metadata_config = metadata_config.render_config()
         metadata_config_fpath = os.path.join(self.config_fpath, "meta-data")
-        click.echo(f"Writing cloud-init meta-data file {metadata_config_fpath}")
+        logger.info("Writing cloud-init meta-data file %s", metadata_config_fpath)
         with open(metadata_config_fpath, "w", encoding="utf-8") as metadata_config_file:
             metadata_config_file.write(rendered_metadata_config)
 
@@ -127,7 +130,9 @@ class Machine:
 
         # Apply cloud_init defaults
         if self.cloud_init_config.get("runcmd_ignore_defaults", False):
-            click.echo(f"Ignoring config_defaults:cloud_init:runcmd for {self.vm_name}")
+            logger.debug(
+                "Ignoring config_defaults:cloud_init:runcmd for %s", self.vm_name
+            )
             cloud_init_defaults_filtered = {
                 k: v for k, v in cloud_init_defaults.items() if k != "runcmd"
             }
@@ -136,8 +141,8 @@ class Machine:
                 **self.cloud_init_config,
             }
         else:
-            click.echo(
-                f"Including config_defaults:cloud_init:runcmd for {self.vm_name}"
+            logger.debug(
+                "Including config_defaults:cloud_init:runcmd for %s", self.vm_name
             )
             cloud_init_config = {**cloud_init_defaults, **self.cloud_init_config}
 
@@ -152,7 +157,7 @@ class Machine:
         try:
             _, _, _, machines = parse_config()
         except TypeError as e:
-            click.echo("Could not parse config file.")
+            logger.error("Could not parse config file.")
             sys.exit()
 
         hosts_snippet = generate_hosts(
@@ -203,7 +208,7 @@ class Machine:
         )
         rendered_userdata_config = userdata_config.render_config()
         userdata_config_fpath = os.path.join(self.config_fpath, "user-data")
-        click.echo(f"Writing cloud-init user-data file {userdata_config_fpath}")
+        logger.info("Writing cloud-init user-data file %s", userdata_config_fpath)
         with open(userdata_config_fpath, "w", encoding="utf-8") as userdata_config_file:
             userdata_config_file.write(rendered_userdata_config)
 
@@ -223,14 +228,14 @@ class Machine:
             )
 
             if vdisk.exists():
-                click.echo(f"Virtual Disk: {vdisk.name} exists at {vdisk.fpath}")
+                logger.info("Virtual Disk: %s exists at %s", vdisk.name, vdisk.fpath)
             else:
-                click.echo(f"Creating Virtual Disk: {vdisk.fpath} at {vdisk.size}")
+                logger.info("Creating Virtual Disk: %s at %s", vdisk.fpath, vdisk.size)
                 if vdisk.create():
                     if vdisk.exists():
-                        click.echo(f"Virtual Disk Created Successfully")
+                        logger.info("Virtual Disk Created Successfully")
                 else:
-                    click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
+                    logger.error("Failed to create Virtual Disk: %s", vdisk.fpath)
 
     def deploy(self, config_path, config_defaults, uri):
         """Use virt-install to create a virtual machine"""
@@ -272,8 +277,8 @@ class Machine:
             )
             return True
         except subprocess.CalledProcessError as e:
-            click.echo(f"Error in virt-install call: {e}")
-            click.echo(f"{' '.join(command)}")
+            logger.error("Error in virt-install call: %s", e)
+            logger.error("%s", " ".join(command))
             return False
 
     def destroy(self, uri):
@@ -290,22 +295,22 @@ class Machine:
             vm_state, _, _, _ = get_machine_state(vm.state())
 
             if vm_state in ["VIR_DOMAIN_RUNNING", "VIR_DOMAIN_PAUSED"]:
-                click.echo(f"Forcefully shutting down {self.vm_name}")
+                logger.warning("Forcefully shutting down %s", self.vm_name)
                 if vm.destroy() > 0:
-                    click.echo(f"Failed to forcefully shutdown {self.vm_name}")
+                    logger.error("Failed to forcefully shutdown %s", self.vm_name)
                 vm_state, _, _, _ = get_machine_state(vm.state())
 
             if vm_state in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
                 if vm.hasCurrentSnapshot():
-                    click.echo(f"Deleting all snapshots for {self.vm_name}")
+                    logger.warning("Deleting all snapshots for %s", self.vm_name)
                     for snapshot in vm.listAllSnapshots():
-                        click.echo(f"Deleting snapshot {snapshot.getName()}")
+                        logger.info("Deleting snapshot %s", snapshot.getName())
                         snapshot.delete()
 
-                click.echo(f"Undefining {self.vm_name}")
+                logger.info("Undefining %s", self.vm_name)
                 if vm.undefine() > 0:
-                    click.echo(
-                        f"Failed to undefine (remove from Libvirt) {self.vm_name} "
+                    logger.error(
+                        "Failed to undefine (remove from Libvirt) %s ", self.vm_name
                     )
                 else:
                     # Done with libvirt connection
@@ -314,30 +319,31 @@ class Machine:
                         machine_files = glob.glob(os.path.join(self.config_fpath, "*"))
                         for file in machine_files:
                             if os.path.isfile(file):
-                                click.echo(f"Removing file {file}.")
+                                logger.info("Removing file %s.", file)
                                 os.remove(file)
                     except Exception as e:
-                        click.echo(f"Exception when removing machine files {e}")
+                        logger.error("Exception when removing machine files %s", e)
                         return False
 
                     try:
                         # Check if the directory is empty and then remove it
                         if not os.listdir(self.config_fpath):
-                            click.echo(
-                                f"Removing machine directory {self.config_fpath}."
+                            logger.info(
+                                "Removing machine directory %s.", self.config_fpath
                             )
                             os.rmdir(self.config_fpath)
                         else:
-                            click.echo(
-                                f"Machine directory {self.config_fpath} is not empty."
+                            logger.warning(
+                                "Machine directory %s is not empty.", self.config_fpath
                             )
                     except Exception as e:
-                        click.echo(f"Exception when removing machine files {e}")
+                        logger.error("Exception when removing machine files %s", e)
                         return False
 
         else:
-            click.echo(
-                f"The virtual machine {self.vm_name} does not exist in this Libvirt URI"
+            logger.warning(
+                "The virtual machine %s does not exist in this Libvirt URI",
+                self.vm_name,
             )
             conn.close()
             return False
@@ -432,8 +438,9 @@ class Machine:
                 create_status = vm.create()
 
         else:
-            click.echo(
-                f"The virtual machine {self.vm_name} does not exist in this Libvirt URI"
+            logger.warning(
+                "The virtual machine %s does not exist in this Libvirt URI",
+                self.vm_name,
             )
 
         conn.close()
@@ -460,10 +467,12 @@ class Machine:
                 shutdown_status = vm.shutdown()
 
             if shutdown_status > 0:
-                click.echo(f"Error with machine.shutdown")
+                logger.error("Error with machine.shutdown")
 
         else:
-            click.echo(f"The virtual machine {self.vm_name} does not exist in Libvirt")
+            logger.warning(
+                "The virtual machine %s does not exist in Libvirt", self.vm_name
+            )
 
         conn.close()
         return shutdown_status

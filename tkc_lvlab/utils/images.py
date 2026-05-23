@@ -5,10 +5,14 @@ import os
 import re
 from urllib.parse import urlparse
 
-import click
 import gnupg
 import requests
 from tqdm import tqdm
+
+from .._logging import get_logger
+
+
+logger = get_logger(__name__)
 
 
 # pylint: disable=too-many-instance-attributes
@@ -77,7 +81,7 @@ class CloudImage:
     def _download_file(url, destination):
         """Download a file associated with the cloud image."""
 
-        click.echo(f"downloading to: {destination}")
+        logger.info("downloading to: %s", destination)
         response = requests.get(url, stream=True, timeout=10)
 
         total_size = int(response.headers.get("content-length", 0))
@@ -102,7 +106,7 @@ class CloudImage:
             image_dir = self.image_dir
 
         if not os.path.isdir(image_dir):
-            click.echo(f"CloudImage creating image directory: {image_dir}")
+            logger.info("CloudImage creating image directory: %s", image_dir)
             os.makedirs(image_dir, exist_ok=True)
 
     def download_image(self) -> bool:
@@ -147,8 +151,8 @@ class CloudImage:
         if os.path.isfile(self.checksum_gpg_fpath) and os.path.isfile(
             self.checksum_fpath
         ):
-            click.echo(
-                f"CloudImage {self.name} GPG verification of {self.checksum_fpath}"
+            logger.info(
+                "CloudImage %s GPG verification of %s", self.name, self.checksum_fpath
             )
 
             gpg = gnupg.GPG()

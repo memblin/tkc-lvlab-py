@@ -11,7 +11,14 @@ from .._logging import get_logger
 from ..config import parse_config, generate_hosts
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
-from .virsh import VirshError, virsh_domstate_reason, virsh_list_all_names
+from .virsh import (
+    VirshError,
+    _xml_tempfile,
+    run_virsh,
+    virsh_domstate_reason,
+    virsh_list_all_names,
+    virsh_snapshot_names,
+)
 
 
 logger = get_logger(__name__)
@@ -381,64 +388,126 @@ class Machine:
 
         return True, state, reason
 
-    def list_snapshots(self, uri):
-        """List snapshots for a virtual machine"""
-        snapshots = []
-        conn = connect_to_libvirt(uri)
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
+    def list_snapshots(self, uri: str) -> list[str]:
+        """Return the snapshot names defined for this machine's domain.
 
-        if self.libvirt_vm_name in current_vms:
-            vm = conn.lookupByName(self.libvirt_vm_name)
-            snapshots = vm.listAllSnapshots()
+        Uses ``virsh snapshot-list --name`` so the result is a flat list of
+        snapshot names in creation order. When the domain isn't defined at
+        ``uri`` the list is empty — callers can treat "no domain" and
+        "no snapshots" identically (the previous libvirt-python
+        implementation did the same).
 
-        conn.close()
-        return snapshots
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
 
-    def create_snapshot(self, uri, snapshot_name, snapshot_description=None):
-        """Create a snapshot of a virtual machine with optional description"""
-        snapshot_status = 0
-        conn = connect_to_libvirt(uri)
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
+        Returns:
+            Snapshot names in creation order. ``[]`` when the domain isn't
+            defined or has no snapshots.
 
-        if self.libvirt_vm_name in current_vms:
-            vm = conn.lookupByName(self.libvirt_vm_name)
+        Raises:
+            VirshError: If ``virsh`` itself fails for a reason other than
+                "domain not defined" (e.g. cannot reach the URI).
+        """
+        if self.libvirt_vm_name not in virsh_list_all_names(uri):
+            return []
 
-            if not snapshot_description:
-                snapshot_description = f"Snapshot of {vm.name()}"
+        try:
+            return virsh_snapshot_names(uri, self.libvirt_vm_name)
+        except VirshError:
+            # The domain disappeared between the list and the snapshot-list
+            # call. Treat as absent — caller wanted snapshot names, there
+            # are none to report.
+            return []
 
-            snapshot_xml = f"""
-            <domainsnapshot>
-                <name>{snapshot_name}</name>
-                <description>Snapshot of {vm.name()}</description>
-            </domainsnapshot>
-            """
+    def create_snapshot(
+        self,
+        uri: str,
+        snapshot_name: str,
+        snapshot_description: str | None = None,
+    ) -> bool:
+        """Create a snapshot of this machine's domain.
 
-            try:
-                snapshot_status = vm.snapshotCreateXML(snapshot_xml, 0)
-            except libvirt.libvirtError as e:
-                snapshot_status = e
-            finally:
-                conn.close()
-                return snapshot_status
+        Builds a minimal ``<domainsnapshot>`` XML document, writes it to a
+        tempfile, and hands it to ``virsh snapshot-create --xmlfile``. The
+        tempfile is removed after the call (or on exception) by
+        :func:`tkc_lvlab.utils.virsh._xml_tempfile`.
 
-    def delete_snapshot(self, uri, snapshot_name):
-        """Create a snapshot of a virtual machine with optional description"""
-        snapshot_status = 0
-        conn = connect_to_libvirt(uri)
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
+            snapshot_name: Name to assign to the new snapshot.
+            snapshot_description: Optional human-readable description.
+                Defaults to ``"Snapshot of <libvirt_vm_name>"``.
 
-        if self.libvirt_vm_name in current_vms:
-            try:
-                vm = conn.lookupByName(self.libvirt_vm_name)
-                snapshot = vm.snapshotLookupByName(snapshot_name)
+        Returns:
+            ``True`` on success. Failures raise rather than returning a
+            sentinel — the previous libvirt-python implementation returned
+            the exception instance from a ``finally`` block, which silently
+            swallowed errors.
 
-                if snapshot:
-                    snapshot_status = snapshot.delete()
-            except libvirt.libvirtError as e:
-                snapshot_status = e
-            finally:
-                conn.close()
-                return snapshot_status
+        Raises:
+            VirshError: When the domain isn't defined at ``uri`` or when
+                ``virsh snapshot-create`` itself fails (timeout, malformed
+                XML, libvirt error, etc.).
+        """
+        if self.libvirt_vm_name not in virsh_list_all_names(uri):
+            logger.warning(
+                "The virtual machine %s does not exist in this Libvirt URI",
+                self.vm_name,
+            )
+            raise VirshError(
+                1,
+                f"domain {self.libvirt_vm_name} is not defined at {uri}",
+                ["snapshot-create", self.libvirt_vm_name],
+            )
+
+        if not snapshot_description:
+            snapshot_description = f"Snapshot of {self.libvirt_vm_name}"
+
+        snapshot_xml = (
+            "<domainsnapshot>\n"
+            f"    <name>{snapshot_name}</name>\n"
+            f"    <description>{snapshot_description}</description>\n"
+            "</domainsnapshot>\n"
+        )
+
+        with _xml_tempfile(snapshot_xml) as xml_path:
+            run_virsh(
+                uri,
+                ["snapshot-create", self.libvirt_vm_name, "--xmlfile", xml_path],
+                timeout=120.0,
+            )
+        return True
+
+    def delete_snapshot(self, uri: str, snapshot_name: str) -> None:
+        """Delete a named snapshot from this machine's domain.
+
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
+            snapshot_name: Name of the snapshot to delete.
+
+        Raises:
+            VirshError: When the domain isn't defined at ``uri``, when the
+                named snapshot doesn't exist, or when ``virsh
+                snapshot-delete`` itself fails. The previous libvirt-python
+                implementation swallowed errors in a ``finally`` block; this
+                port propagates them so callers get a clean signal.
+        """
+        if self.libvirt_vm_name not in virsh_list_all_names(uri):
+            logger.warning(
+                "The virtual machine %s does not exist in this Libvirt URI",
+                self.vm_name,
+            )
+            raise VirshError(
+                1,
+                f"domain {self.libvirt_vm_name} is not defined at {uri}",
+                ["snapshot-delete", self.libvirt_vm_name, snapshot_name],
+            )
+
+        run_virsh(
+            uri,
+            ["snapshot-delete", self.libvirt_vm_name, snapshot_name],
+            timeout=120.0,
+        )
 
     def poweron(self, uri):
         """Powreon a virtual machine"""

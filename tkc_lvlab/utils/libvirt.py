@@ -1,9 +1,28 @@
-"""Module for libvirt related functions and classes"""
+"""Manifest-side ``Machine`` class and lookup helpers.
+
+This module owns the manifest-driven side of lvlab — every command in
+:mod:`tkc_lvlab.cli` constructs a :class:`Machine` from the
+parsed-manifest tuple and dispatches operations against
+``self.libvirt_vm_name``. The hypervisor side is invoked via
+:mod:`tkc_lvlab.utils.virsh` (a thin ``subprocess.run`` wrapper); no
+``libvirt-python`` import lives in this module — Phase 2 removed that
+C-extension dependency.
+
+The standalone one-off workflow (``createvm`` / ``destroyvm``) does not
+use this module — it talks to virsh directly via the helpers in
+:mod:`tkc_lvlab.utils.virsh`,
+:mod:`tkc_lvlab.utils.snapshot_cleanup`,
+:mod:`tkc_lvlab.utils.network`, and
+:mod:`tkc_lvlab.utils.standalone_cloud_init`.
+"""
+
+from __future__ import annotations
 
 import glob
 import os
 import subprocess
 import sys
+from typing import TYPE_CHECKING, Any
 
 from .._logging import get_logger
 from ..config import parse_config, generate_hosts
@@ -21,14 +40,76 @@ from .virsh import (
     virsh_snapshot_names,
 )
 
+if TYPE_CHECKING:
+    from .images import CloudImage
+
 
 logger = get_logger(__name__)
 
 
 class Machine:
-    """Libvirt Lab Virtual Machine"""
+    """A libvirt-managed lab VM described by the ``Lvlab.yml`` manifest.
 
-    def __init__(self, machine, environment, config_defaults):
+    Constructed from one entry in the manifest's ``machines`` list plus
+    the enclosing environment dict and the manifest's ``config_defaults``.
+    ``__init__`` merges defaults into the machine — interfaces, disks,
+    ``shared_directories``, and top-level keys — so callers can treat
+    the resulting object as fully resolved.
+
+    The libvirt domain name is **not** :attr:`vm_name`; it is
+    :attr:`libvirt_vm_name`, which prepends the environment name. This
+    namespacing is what lets multiple lvlab environments coexist on one
+    hypervisor — anything that looks up a domain by name must use
+    :attr:`libvirt_vm_name`.
+
+    Args:
+        machine: One entry from the manifest's ``machines`` list. Must
+            carry at least ``vm_name``; other keys (``hostname``,
+            ``fqdn``, ``os``, ``cpu``, ``memory``, ``interfaces``,
+            ``disks``, ``cloud_init``, ``shared_directories``) are
+            merged from ``config_defaults`` when absent.
+        environment: The enclosing ``environment`` dict (carries
+            ``name``, ``libvirt_uri``, etc.). The environment name is
+            used to namespace :attr:`libvirt_vm_name`.
+        config_defaults: The manifest's ``config_defaults`` block —
+            applied as a baseline for top-level keys plus interfaces,
+            disks, and ``shared_directories``.
+
+    Attributes:
+        environment: Reference to the environment dict.
+        vm_name: Short name from the manifest (e.g. ``minion1``).
+        libvirt_vm_name: Namespaced domain name —
+            ``f"{vm_name}_{environment['name']}"``. Used for every
+            ``virsh`` lookup.
+        hostname: Short hostname for the guest.
+        domain: Domain (DNS) name from ``config_defaults``.
+        fqdn: Fully-qualified hostname. Honors a manifest ``fqdn`` when
+            set, otherwise built as ``f"{hostname}.{domain}"``.
+        os: OS identifier (e.g. ``fedora40``). The ``virt-install``
+            ``--os-variant`` is derived by splitting on ``-`` and taking
+            the first segment.
+        cpu: vCPU count.
+        memory: RAM in MiB.
+        interfaces: List of resolved interface dicts.
+        nameservers: Resolved nameservers dict — per-machine override
+            with fallback to ``config_defaults['interfaces']['nameservers']``.
+        disks: List of resolved disk dicts.
+        shared_directories: Merged shared-directory list (defaults +
+            per-machine, keyed by ``mount_tag``).
+        cloud_init_config: Per-machine ``cloud_init`` dict from the
+            manifest.
+        config_fpath: On-disk directory holding this machine's artifacts
+            (qcow2 disks, ``cidata.iso``, rendered cloud-init files).
+            Resolved from ``config_defaults['disk_image_basedir']``
+            joined with the environment name and ``vm_name``.
+    """
+
+    def __init__(
+        self,
+        machine: dict[str, Any],
+        environment: dict[str, Any],
+        config_defaults: dict[str, Any],
+    ) -> None:
 
         # Apply interface defaults
         for index, iface in enumerate(machine.get("interfaces", [])):
@@ -107,8 +188,46 @@ class Machine:
         self.cloud_init_config = machine.get("cloud_init", {})
         self.config_fpath = config_fpath
 
-    def cloud_init(self, cloud_image, config_defaults):
-        """Render Cloud Init configuraion files"""
+    def cloud_init(
+        self,
+        cloud_image: "CloudImage",
+        config_defaults: dict[str, Any],
+    ) -> tuple[str, str, str]:
+        """Render this machine's three cloud-init documents to disk.
+
+        Writes ``meta-data``, ``user-data``, and ``network-config`` into
+        :attr:`config_fpath`. The manifest's ``config_defaults['cloud_init']``
+        is merged with :attr:`cloud_init_config` first; when the per-machine
+        ``cloud_init.runcmd_ignore_defaults`` is truthy, the defaults'
+        ``runcmd`` is dropped (every other key in defaults still merges).
+        Otherwise ``runcmd`` from defaults precedes the per-machine list.
+
+        The manifest-wide ``/etc/hosts`` snippet plus the matching
+        ``/etc/cloud/templates/hosts.{debian,redhat}.tmpl`` snippet are
+        injected at the **top** of ``runcmd`` so they land before
+        anything that does DNS-ish work in the guest.
+
+        Args:
+            cloud_image: The :class:`tkc_lvlab.utils.images.CloudImage`
+                for this machine — only its ``network_version`` is
+                consulted (passed to :class:`NetworkConfig`).
+            config_defaults: The manifest's ``config_defaults`` block.
+
+        Returns:
+            ``(meta_data_path, user_data_path, network_config_path)`` —
+            the three rendered file paths. Callers feed these to
+            :class:`tkc_lvlab.utils.cloud_init.CloudInitIso`.
+
+        Raises:
+            ValueError: When :attr:`os` does not match a known
+                ``/etc/cloud/templates/hosts.*.tmpl`` distro family.
+                Extend ``template_file_mapping`` in the method body to
+                add a new family.
+            SystemExit: When :attr:`config_fpath` cannot be created or
+                when ``parse_config`` returns ``None``. This preserves
+                the historical "log + exit" behavior — future cleanup
+                may replace it with a raised exception.
+        """
         if not os.path.exists(self.config_fpath):
             try:
                 os.makedirs(self.config_fpath)
@@ -223,8 +342,43 @@ class Machine:
 
         return metadata_config_fpath, userdata_config_fpath, network_config_fpath
 
-    def create_vdisks(self, environment={}, config_defaults={}, cloud_image=None):
-        """Create all machine virtual disks"""
+    def create_vdisks(
+        self,
+        environment: dict[str, Any] | None = None,
+        config_defaults: dict[str, Any] | None = None,
+        cloud_image: "CloudImage" | None = None,
+    ) -> None:
+        """Create the per-disk qcow2 files declared in :attr:`disks`.
+
+        One :class:`tkc_lvlab.utils.vdisk.VirtualDisk` per entry in
+        :attr:`disks`, named ``disk{index}.qcow2`` under
+        :attr:`config_fpath`. Existing disks are skipped (logged as
+        "exists at <path>"); missing disks are created via ``qemu-img
+        create -b <cloud_image>`` so the cloud image becomes the
+        backing file.
+
+        Per-disk failures are logged but do not raise; the loop
+        continues to the next disk. The original behavior is preserved.
+
+        Args:
+            environment: The enclosing environment dict — passed
+                through to :class:`VirtualDisk`. ``None`` is treated as
+                an empty dict.
+            config_defaults: The manifest's ``config_defaults`` block —
+                passed through to :class:`VirtualDisk` for path
+                resolution. ``None`` is treated as an empty dict.
+            cloud_image: The :class:`tkc_lvlab.utils.images.CloudImage`
+                to use as the qcow2 backing file. ``None`` is accepted
+                in the signature, but :class:`VirtualDisk` requires a
+                usable image to actually create a disk.
+
+        Returns:
+            ``None``. Errors are logged, not raised.
+        """
+        if environment is None:
+            environment = {}
+        if config_defaults is None:
+            config_defaults = {}
 
         for index, disk in enumerate(self.disks):
             vdisk = VirtualDisk(
@@ -246,8 +400,43 @@ class Machine:
                 else:
                     logger.error("Failed to create Virtual Disk: %s", vdisk.fpath)
 
-    def deploy(self, config_path, config_defaults, uri):
-        """Use virt-install to create a virtual machine"""
+    def deploy(
+        self,
+        config_path: str,
+        config_defaults: dict[str, Any],
+        uri: str,
+    ) -> bool:
+        """Define and start the libvirt domain via ``virt-install``.
+
+        Builds the ``virt-install`` command from this machine's
+        resolved config: memory, vCPUs, the qcow2 at
+        ``<config_path>/disk0.qcow2``, the cloud-init ISO at
+        ``<config_path>/cidata.iso``, the first interface's libvirt
+        network, and the ``--os-variant`` derived by splitting
+        :attr:`os` on ``-`` and taking the first segment.
+
+        ``--graphics vnc,listen=0.0.0.0`` is hard-coded; review before
+        exposing the host on an untrusted network.
+
+        When :attr:`shared_directories` is non-empty, adds
+        ``--memorybacking=source.type=memfd,access.mode=shared`` plus
+        one ``--filesystem=...,driver.type=virtiofs`` per entry.
+
+        Args:
+            config_path: On-disk directory containing this machine's
+                ``disk0.qcow2`` and ``cidata.iso``. Usually equals
+                :attr:`config_fpath`.
+            config_defaults: The manifest's ``config_defaults`` block.
+                Currently unused inside the method body — kept in the
+                signature for symmetry with the other ``Machine``
+                methods and for future hooks.
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
+
+        Returns:
+            ``True`` if ``virt-install`` exited cleanly. ``False`` if
+            ``virt-install`` raised :class:`subprocess.CalledProcessError`
+            (the error and the assembled command line are logged).
+        """
         command = [
             "virt-install",
             f"--connect={uri}",
@@ -649,8 +838,21 @@ class Machine:
         return 0
 
 
-def get_machine_by_vm_name(machines, vm_name):
-    """Get a machine by vm_name from the machines list"""
+def get_machine_by_vm_name(
+    machines: list[dict[str, Any]], vm_name: str
+) -> dict[str, Any] | None:
+    """Find a machine dict in the manifest's machines list by ``vm_name``.
+
+    Args:
+        machines: The manifest's ``machines`` list — each entry is a
+            dict from the parsed YAML.
+        vm_name: The short name to match against each entry's
+            ``vm_name`` field.
+
+    Returns:
+        The matching machine dict, or ``None`` if no entry has the
+        requested ``vm_name``.
+    """
     for machine in machines:
         if machine.get("vm_name", None) == vm_name:
             return machine

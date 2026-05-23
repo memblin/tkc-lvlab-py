@@ -22,6 +22,7 @@ via [mkdocstrings](https://mkdocstrings.github.io/).
 - [`tkc_lvlab.utils.snapshot_cleanup`](utils/snapshot_cleanup.md) — snapshot deletion + `undefine` fallback.
 - [`tkc_lvlab.utils.vdisk`](utils/vdisk.md) — per-VM qcow2 creation for the manifest workflow.
 - [`tkc_lvlab.utils.images`](utils/images.md) — cloud-image download + GPG/checksum verification.
+- [`tkc_lvlab.utils.libvirt`](utils/libvirt.md) — manifest-side `Machine` class + lookup helper.
 
 ### `tkc_lvlab.scripts`
 
@@ -36,6 +37,3 @@ reference until the legacy-docstring conversion lands (see `TODO.md`
 Phase 7).
 
 - `tkc_lvlab.cli`
-- `tkc_lvlab.utils.libvirt` *(partially migrated during Phase 2;
-    `Machine` methods that were ported to `virsh` carry the new
-    convention, the rest predate it.)*

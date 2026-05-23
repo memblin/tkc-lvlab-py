@@ -698,6 +698,7 @@ def up(vm_name: str) -> None:
                 typer.echo("Virtual machine deployment complete.")
             else:
                 logger.error("Virtual machine installation failed.")
+                raise typer.Exit(code=1)
 
     else:
         logger.error("Machine %s not found in manifest.", vm_name)

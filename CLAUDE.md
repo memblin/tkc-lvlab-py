@@ -17,7 +17,7 @@ Because state lives in libvirt + on-disk qcow2 files, **bugs here can damage rea
 
 ## Build / dev / lint commands
 
-This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). There is **no test suite yet** — `tests/__init__.py` is empty. Don't claim something is "tested" because CI is green; CI only runs pre-commit.
+This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). The test suite is just getting started — only `tests/test_virsh.py` exists today. CI currently runs pre-commit only; pytest is not yet wired into CI (Phase 3 in `TODO.md`). Don't claim something is "tested" because CI is green — verify locally with `uv run pytest`.
 
 ```bash
 # Sync deps into .venv (needs libvirt-dev / pkg-config on the host until Phase 2
@@ -159,6 +159,67 @@ them as a side effect of unrelated PRs.** A dedicated phase in `TODO.md`
 If you happen to be rewriting a function for unrelated reasons and the new
 shape benefits from a proper docstring + type hints, that's fine — write it
 to the new convention. Don't touch neighbors.
+
+## Testing conventions
+
+### What tests are for
+
+Tests exist to **catch bugs and prevent regressions** — not to hit a coverage
+number. Don't write tests that merely restate the function signature
+(`def test_foo_returns_int: assert isinstance(foo(), int)`); the type
+checker and mkdocstrings already know that. A test that can't fail because
+of a realistic bug is noise.
+
+A useful test names a behavior, sets up the conditions that trigger it,
+exercises the code, and asserts the outcome a reviewer can recognize as
+right. Examples in this codebase:
+
+- ✅ `parse_checksum_file` parses both Fedora's `SHA256 (file) = hash` AND
+    Debian's `hash  file` formats from real fixtures.
+- ✅ `Machine.libvirt_vm_name` namespaces VMs by environment so two
+    environments with the same `vm_name` don't collide.
+- ✅ `run_virsh` translates `FileNotFoundError` (missing `virsh` binary)
+    into a `VirshError` rather than crashing.
+- ❌ `test_run_virsh_returns_completed_process: assert isinstance(...)` —
+    no realistic bug fails this.
+
+Coverage is a **diagnostic**, not a target. If a branch is uncovered, ask
+whether it has a realistic failure mode worth testing; if not, leave it
+uncovered or use `# pragma: no cover` and explain why.
+
+### Unit tests (`tests/test_*.py`)
+
+- Pure: no `virsh`, no `qemu-img`, no libvirt daemon, no network.
+- Patch `subprocess.run` with `unittest.mock.patch` when wrapping shell-outs.
+- Use real fixtures (captured output samples, sample manifests) rather than
+    fabricated round-trip data — fabricated data only catches bugs in the
+    fabrication.
+- Run on every developer's machine with `uv run pytest`. They will run
+    unmodified in CI once the matrix workflow lands (Phase 3).
+
+### Integration tests (Phase 3, opt-in only)
+
+Integration tests actually invoke `virsh`, build cloud-init ISOs, and
+exercise `qemu-img`. They **must run only on machines with libvirt
+installed and no developer VMs the test could possibly clobber.** The
+safety rules are non-negotiable:
+
+1. Marked `@pytest.mark.integration` and skipped by default. Enable with
+    `LVLAB_INTEGRATION=1`. Never enable in CI on shared runners.
+1. Every libvirt domain, qcow2 file, and ISO the test creates **must** be
+    named with the `LVLAB_TEST_PREFIX` from `tests/conftest.py`. Resources
+    that don't carry the prefix are off-limits to test teardown — that
+    prefix is the only guarantee that a runaway test cleanup can't destroy
+    a real developer VM.
+1. Use a dedicated `libvirt_uri` (or at minimum a dedicated network and
+    storage pool) so cleanup can be scoped further. A `qemu:///session`
+    with shared developer VMs is **not** an acceptable target.
+1. The session-scoped teardown enumerates only prefixed domains via
+    `virsh list --all --name | grep "^${LVLAB_TEST_PREFIX}"`. Never list
+    all domains in teardown; never iterate over all qcow2 files in a
+    directory unless every one starts with the prefix.
+
+See `TODO.md` "Cross-cutting safety rules" for the full scaffolding plan.
 
 ## Branching
 

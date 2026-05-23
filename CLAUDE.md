@@ -255,6 +255,12 @@ must carry the prefix. The dedicated test storage root is
 `@pytest.mark.integration` function omits an `assert_owned_by_test()`
 call. Complements the runtime guard.
 
+## Supported host distros
+
+The integration suite is exercised end-to-end against four host distros: **Debian 12** (bookworm, Python 3.11), **Debian 13** (trixie, Python 3.13), **AlmaLinux 10** (Python 3.12), and **Fedora 44** (Python 3.14). That set naturally covers our 3.11–3.14 support window via each distro's system Python. Out of scope: Debian 11, Ubuntu 22.04 (Python 3.10 < floor), Ubuntu 24.04 (dropped 2026-05-23), AlmaLinux 9 (same Python-floor reason), older Fedora.
+
+`docs-extra/host-validation.md` holds the canonical matrix, the validation log, and the per-host procedure (`scripts/host-bootstrap.sh` for fresh hosts, then `scripts/run-validation.sh` for the unit + integration run). New-host work that touches the bootstrap or validation flow should keep that document in sync. The host matrix is manual-only — never wired to CI, since no shared runner can host the libvirt + qemu state these tests create.
+
 ## Branching
 
 **Work directly on `main`.** This is a solo-maintained project and topic branches were adding friction without delivering PR-review benefits while the codebase has a single maintainer. Make focused, well-scoped commits directly on `main`. The user is the one who pushes, so an unintended local commit is recoverable with `git reset` before push — but that means the bar for commit quality on `main` is the same bar you'd apply to a PR head: each commit should stand on its own and pass `pre-commit run --all-files`.

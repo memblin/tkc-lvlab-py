@@ -4,7 +4,6 @@ import os
 import sys
 
 import click
-import libvirt
 
 from ._logging import configure_logging, get_logger
 from .config import (
@@ -425,7 +424,7 @@ def list(vm_name):
                 snapshots = machine.list_snapshots(libvirt_endpoint)
                 if snapshots:
                     for snapshot in snapshots:
-                        click.echo(f"  - {snapshot.getName()}")
+                        click.echo(f"  - {snapshot}")
                 else:
                     click.echo(f"No snapshots found for {machine.vm_name}")
             else:
@@ -461,15 +460,20 @@ def create(vm_name, snapshot_name, snapshot_description=None):
         if machine:
             exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
             if exists:
-                snapshot_status = machine.create_snapshot(
-                    libvirt_endpoint, snapshot_name, snapshot_description
-                )
-                if type(snapshot_status) == libvirt.virDomainSnapshot:
-                    click.echo(
-                        f"Snapshot {snapshot_status.getName()} created for {machine.vm_name}"
+                try:
+                    machine.create_snapshot(
+                        libvirt_endpoint, snapshot_name, snapshot_description
                     )
-                else:
-                    logger.error("Snapshot creation failed for %s", machine.vm_name)
+                    click.echo(
+                        f"Snapshot {snapshot_name} created for {machine.vm_name}"
+                    )
+                except VirshError as e:
+                    logger.error(
+                        "Failed to create snapshot %s for %s: %s",
+                        snapshot_name,
+                        machine.vm_name,
+                        e,
+                    )
             else:
                 logger.warning(
                     "Machine %s is not deployed to the configured in %s.",
@@ -512,16 +516,17 @@ def delete(vm_name, snapshot_name, force=False):
                     click.echo(f"Snapshot deletion aborted for {machine.vm_name}.")
                     return
 
-                snapshot_status = machine.delete_snapshot(
-                    libvirt_endpoint, snapshot_name
-                )
-                if snapshot_status == 0:
-                    click.echo(f"Snapshot deleted for {machine.vm_name}")
-                else:
+                try:
+                    machine.delete_snapshot(libvirt_endpoint, snapshot_name)
+                    click.echo(
+                        f"Snapshot {snapshot_name} deleted from {machine.vm_name}"
+                    )
+                except VirshError as e:
                     logger.error(
-                        "Snapshot deletion failed for %s: %s",
+                        "Failed to delete snapshot %s from %s: %s",
+                        snapshot_name,
                         machine.vm_name,
-                        snapshot_status,
+                        e,
                     )
             else:
                 logger.warning(

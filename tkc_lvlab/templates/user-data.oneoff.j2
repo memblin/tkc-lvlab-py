@@ -1,0 +1,32 @@
+#cloud-config
+
+manage_etc_hosts: true
+hostname: {{ config.hostname }}
+fqdn: {{ config.fqdn }}
+
+users:
+  - name: {{ config.username }}
+    lock_passwd: false
+    passwd: {{ config.password_hash }}
+    sudo: {{ config.sudo }}
+    shell: {{ config.shell }}
+    ssh_authorized_keys:
+    {%- for key in config.ssh_public_keys %}
+      - {{ key }}
+    {%- endfor %}
+{%- if config.runcmd is defined and config.runcmd | length > 0 %}
+runcmd:
+  {%- for command in config.runcmd %}
+  {%- if '\n' in command %}
+  - |
+    {{ command.split('\n')[0] }}
+    {%- for line in command.split('\n')[1:] %}
+    {{ line }}
+    {%- endfor %}
+  {%- else %}
+  - {{ command | indent(4) }}
+  {%- endif %}
+  {%- endfor %}
+{%- endif %}
+
+{# Ensure a blank line at end of rendered file #}

@@ -68,11 +68,11 @@ Commands:
 - Libvirt w/ QEMU configured and functional
 - The user should be a member of the `libvirt` group on the system
 - Utilities: virt-install, qemu-img (For now until we can implement these
-              parts via libvirt-python)
+    parts via libvirt-python)
 - `cloud_image_basedir` and `disk_image_basedir` configuration paths need
-  to be writable by the user to run w/o sudo.
-  - I usually create these directories in advance and chown them for my
-    user.
+    to be writable by the user to run w/o sudo.
+    - I usually create these directories in advance and chown them for my
+        user.
 
 ### Ubuntu 22.04
 

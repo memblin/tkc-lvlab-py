@@ -10,11 +10,11 @@ workstation — not for production VM management.
 `lvlab init` followed by `lvlab up <vm_name>` will:
 
 1. Download and verify a cloud image (checksum + optional GPG of the checksum file).
-2. Create a qcow2 disk that uses the cloud image as a backing file (via `qemu-img`).
-3. Render cloud-init `meta-data`, `user-data`, and `network-config` from Jinja2
-   templates, pack them into a `cidata.iso` (built in-process with `pycdlib`),
-   and attach it as a cdrom.
-4. Shell out to `virt-install` to define and launch the domain.
+1. Create a qcow2 disk that uses the cloud image as a backing file (via `qemu-img`).
+1. Render cloud-init `meta-data`, `user-data`, and `network-config` from Jinja2
+    templates, pack them into a `cidata.iso` (built in-process with `pycdlib`),
+    and attach it as a cdrom.
+1. Shell out to `virt-install` to define and launch the domain.
 
 ## Install
 

@@ -34,7 +34,7 @@ about proper use.
 ## Goals
 
 - First, and foremost; A functional tool that is safe and easy to use for
-  local libvirt+qemu based integration testing of systems management code.
+    local libvirt+qemu based integration testing of systems management code.
 
-  Think full end-to-end environmental testing of Salt, Ansible, Chef, or
-  Puppet environments.
+    Think full end-to-end environmental testing of Salt, Ansible, Chef, or
+    Puppet environments.

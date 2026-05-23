@@ -42,7 +42,7 @@ pre-commit run --all-files
 The project uses..
 
 - [Poetry](https://python-poetry.org/docs/) for dependency management and
-  packaging. Poetry install directions are in the docs linked here.
+    packaging. Poetry install directions are in the docs linked here.
 
 These are some common poetry commands:
 
@@ -62,11 +62,11 @@ poetry build
 ```
 
 - [pre-commit](https://pre-commit.com/)
-  - hooks
-      - id: check-yaml
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
-      - id: black
+    - hooks
+        - id: check-yaml
+        - id: end-of-file-fixer
+        - id: trailing-whitespace
+        - id: black
 
 ```bash
 # Install our pre-commit hooks in the repo after cloning

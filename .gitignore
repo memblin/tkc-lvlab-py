@@ -167,3 +167,7 @@ cython_debug/
 # Custom
 .sonar
 .envrc
+
+# Claude
+.claude/settings.local.json
+.claude/worktrees

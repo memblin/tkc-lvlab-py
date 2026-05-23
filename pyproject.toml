@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 lvlab = "tkc_lvlab.cli:run"
+createvm = "tkc_lvlab.scripts.createvm:run"
 
 [tool.uv.build-backend]
 module-root = ""

@@ -43,11 +43,19 @@ def test_capabilities_prints_xml_from_virsh_capabilities() -> None:
 
 
 def test_capabilities_does_not_reach_libvirt_python() -> None:
-    """Regression guard: command must not call connect_to_libvirt."""
+    """Regression guard: command must not call connect_to_libvirt.
+
+    ``cli.py`` stopped importing ``connect_to_libvirt`` as of Phase 2
+    step 5 (status command rewrite), so we patch the helper on the
+    ``tkc_lvlab.utils.libvirt`` module where it still lives (step 6
+    will delete it). The patch will start to AttributeError once that
+    deletion lands — at which point the regression guard has lost its
+    target and this whole test can be retired with the function.
+    """
     runner = CliRunner()
     with (
         mock.patch.object(cli, "virsh_capabilities", return_value=SAMPLE_CAPS_XML),
-        mock.patch.object(cli, "connect_to_libvirt") as connect_mock,
+        mock.patch("tkc_lvlab.utils.libvirt.connect_to_libvirt") as connect_mock,
     ):
         result = runner.invoke(capabilities, [])
 

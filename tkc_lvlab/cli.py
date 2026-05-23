@@ -14,14 +14,18 @@ from .config import (
 )
 from .utils.cloud_init import CloudInitIso, MetaData, NetworkConfig, UserData
 from .utils.libvirt import (
-    connect_to_libvirt,
-    get_machine_state,
     get_machine_by_vm_name,
     Machine,
 )
 from .utils.vdisk import VirtualDisk
 from .utils.images import CloudImage
-from .utils.virsh import VirshError, virsh_capabilities
+from .utils.virsh import (
+    VirshError,
+    humanize_state,
+    virsh_capabilities,
+    virsh_domstate,
+    virsh_list_all_names,
+)
 
 
 logger = get_logger(__name__)
@@ -539,40 +543,58 @@ def delete(vm_name, snapshot_name, force=False):
 
 
 @click.command()
-def status():
-    """Show the status of the environment."""
+def status() -> None:
+    """Show the status of the environment.
+
+    Lists the configured environment, every machine in the manifest with
+    its current libvirt state, and the cloud images referenced by the
+    manifest. Machines that are not present on the hypervisor are
+    reported as ``undeployed``.
+
+    Phase 2 note: this command now uses ``virsh`` exclusively. The
+    parenthesized state-reason suffix that previous releases printed
+    (e.g. ``the machine is running (normal startup from boot)``) has
+    been dropped to avoid an N+1 ``virsh domstate --reason`` call per
+    machine.
+    """
     try:
         environment, images, _, machines = parse_config()
-    except TypeError as e:
+    except TypeError:
         logger.error("Could not parse config file.")
         sys.exit(1)
 
-    click.echo()
-    click.echo(f'LvLab Environment Name: {environment.get("name", "no-name-lvlab")}\n')
-    conn = connect_to_libvirt(environment.get("libvirt_uri", None))
+    uri = environment.get("libvirt_uri", "qemu:///session")
+    env_name = environment.get("name", "no-name-lvlab")
 
-    # Get a list of current VMs
-    current_vms = [dom.name() for dom in conn.listAllDomains()]
+    click.echo()
+    click.echo(f"LvLab Environment Name: {env_name}\n")
+
+    try:
+        current_vms = virsh_list_all_names(uri)
+    except VirshError as exc:
+        logger.error("Failed to list domains at %s: %s", uri, exc)
+        sys.exit(1)
 
     click.echo("Machines Defined:\n")
     for machine in machines:
-        libvirt_vm_name = (
-            machine["vm_name"] + "_" + environment.get("name", "LvLabEnvironment")
-        )
+        libvirt_vm_name = f"{machine['vm_name']}_{env_name}"
         if libvirt_vm_name in current_vms:
-            vm = conn.lookupByName(libvirt_vm_name)
-            _, _, vm_status, vm_status_reason = get_machine_state(vm.state())
-            click.echo(
-                f"  - { machine['vm_name'] } is {vm_status} ({vm_status_reason})"
-            )
+            try:
+                state = virsh_domstate(uri, libvirt_vm_name)
+            except VirshError as exc:
+                logger.error("Failed to query state for %s: %s", libvirt_vm_name, exc)
+                click.echo(f"  - {machine['vm_name']} is unknown (virsh error)")
+                continue
+            human_state, _ = humanize_state(state, "")
+            click.echo(f"  - {machine['vm_name']} is {human_state}")
         else:
-            click.echo(f"  - { machine['vm_name'] } is undeployed")
+            click.echo(f"  - {machine['vm_name']} is undeployed")
 
     click.echo()
     click.echo("Images Used:\n")
-    for image_name, image_date in images.items():
+    for image_name, image_data in images.items():
         click.echo(
-            f'  - {image_name} from {image_date.get("image_url", "Missing Image URL.")}'
+            f"  - {image_name} from {image_data.get('image_url', 'Missing Image URL.')}"
         )
 
     click.echo()

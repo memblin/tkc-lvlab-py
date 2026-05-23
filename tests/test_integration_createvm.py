@@ -24,106 +24,21 @@ cache is read-only after download, and forcing tests to re-download a
 
 from __future__ import annotations
 
-import os
-import shutil
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
 from tests.conftest import assert_owned_by_test, make_test_name
+from tests.integration_helpers import (
+    find_entry_point,
+    list_domains,
+    wait_for_no_domain,
+)
 
 
-_VIRSH_TIMEOUT_SECONDS = 30
 _CREATEVM_TIMEOUT_SECONDS = 300
 _DESTROYVM_TIMEOUT_SECONDS = 60
-_DOMAIN_GONE_POLL_SECONDS = 0.5
-_DOMAIN_GONE_TIMEOUT_SECONDS = 20
-
-
-def _run_virsh(uri: str, *args: str) -> subprocess.CompletedProcess[str]:
-    """Run ``virsh -c <uri> <args>`` with locale-stable env, returning the result.
-
-    Args:
-        uri: libvirt URI to operate against.
-        *args: Remaining ``virsh`` arguments.
-
-    Returns:
-        The :class:`subprocess.CompletedProcess` — caller decides whether
-        non-zero exit is fatal.
-    """
-    return subprocess.run(
-        ["virsh", "-c", uri, *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=_VIRSH_TIMEOUT_SECONDS,
-        env={**os.environ, "LC_ALL": "C"},
-    )
-
-
-def _list_domains(uri: str) -> list[str]:
-    """Return the list of every defined libvirt domain name on ``uri``.
-
-    Args:
-        uri: libvirt URI to query.
-
-    Returns:
-        Domain names (running and stopped). Empty list if the listing
-        command failed; the caller should treat that as a test
-        environment problem.
-    """
-    result = _run_virsh(uri, "list", "--all", "--name")
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
-def _wait_for_no_domain(uri: str, domain_name: str) -> None:
-    """Poll ``virsh list --all --name`` until ``domain_name`` is absent.
-
-    Args:
-        uri: libvirt URI to query.
-        domain_name: The fully-qualified domain name to wait for.
-
-    Raises:
-        AssertionError: ``domain_name`` is still present after
-            :data:`_DOMAIN_GONE_TIMEOUT_SECONDS`.
-    """
-    deadline = time.monotonic() + _DOMAIN_GONE_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if domain_name not in _list_domains(uri):
-            return
-        time.sleep(_DOMAIN_GONE_POLL_SECONDS)
-    raise AssertionError(
-        f"Domain {domain_name!r} still present on {uri} after "
-        f"{_DOMAIN_GONE_TIMEOUT_SECONDS}s — destroyvm did not converge"
-    )
-
-
-def _find_entry_point(name: str) -> str:
-    """Resolve a console-script entry point's absolute path.
-
-    ``uv run pytest`` puts ``.venv/bin`` on PATH, so the
-    ``createvm`` / ``destroyvm`` scripts installed by ``uv sync``
-    resolve via ``shutil.which``. Fall back to ``pytest.fail`` (not
-    ``pytest.skip``) if the entry point is missing — that's a broken
-    test environment, not a runtime skip condition.
-
-    Args:
-        name: Console-script name (``"createvm"`` or ``"destroyvm"``).
-
-    Returns:
-        Absolute path to the executable.
-    """
-    found = shutil.which(name)
-    if found is None:
-        pytest.fail(
-            f"console script {name!r} not found on PATH — run "
-            f"'uv sync' before invoking integration tests"
-        )
-    return found
 
 
 @pytest.mark.integration
@@ -152,8 +67,8 @@ def test_createvm_destroyvm_roundtrip(
         lvlab_integration_storage_root: libvirt-readable test storage
             root (``/var/lib/libvirt/images/lvlab-test/``).
     """
-    createvm = _find_entry_point("createvm")
-    destroyvm = _find_entry_point("destroyvm")
+    createvm = find_entry_point("createvm")
+    destroyvm = find_entry_point("destroyvm")
 
     # Distinguish parametrized URI runs so each gets its own per-VM
     # name (and thus its own per-VM dir). ``make_test_name`` keeps the
@@ -197,7 +112,7 @@ def test_createvm_destroyvm_roundtrip(
             f"stderr:\n{create_result.stderr}"
         )
 
-        assert expected_domain in _list_domains(integration_uri), (
+        assert expected_domain in list_domains(integration_uri), (
             f"createvm reported success but domain {expected_domain!r} "
             f"is not in virsh list on {integration_uri}"
         )
@@ -239,4 +154,4 @@ def test_createvm_destroyvm_roundtrip(
         f"stderr:\n{destroy_result.stderr}"
     )
 
-    _wait_for_no_domain(integration_uri, expected_domain)
+    wait_for_no_domain(integration_uri, expected_domain)

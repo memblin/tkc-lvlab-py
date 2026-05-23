@@ -62,7 +62,7 @@ sudo createvm testvm.local --distro debian12
 
 # Same, but with a static IP (validated against the network's
 # subnet + DHCP range before any VM state is written).
-sudo createvm testvm.local --distro fedora40 --ip4 192.168.122.50
+sudo createvm testvm.local --distro debian13 --ip4 192.168.122.50
 
 # Same, but with a standalone qcow2 disk (cp + qemu-img resize) so
 # you can wipe and re-init the cloud-images dir later without

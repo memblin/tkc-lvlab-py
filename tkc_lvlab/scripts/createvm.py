@@ -95,22 +95,15 @@ class CatalogEntry:
     default_username: str
 
 
+# Catalog of cloud-image URLs the standalone ``createvm`` script can
+# resolve via ``--distro``. Entries point at specific pinned point
+# releases; when a distro release goes EOL, its URL eventually returns
+# a 404 HTML page (the checksum-verification path defensively catches
+# that — discovered in the Phase 9 destructive smoke test on
+# 2026-05-23, when Fedora 40's URL had aged out). Adding a current
+# Fedora release is tracked as a follow-up in TODO.md; for now this
+# catalog is Debian-only.
 BUILTIN_IMAGES: dict[str, CatalogEntry] = {
-    "fedora40": CatalogEntry(
-        image_url=(
-            "https://download.fedoraproject.org/pub/fedora/linux/releases/40/"
-            "Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2"
-        ),
-        checksum_url=(
-            "https://download.fedoraproject.org/pub/fedora/linux/releases/40/"
-            "Cloud/x86_64/images/Fedora-Cloud-40-1.14-x86_64-CHECKSUM"
-        ),
-        checksum_type="sha256",
-        checksum_url_gpg="https://fedoraproject.org/fedora.gpg",
-        network_version=2,
-        os_variant="fedora40",
-        default_username="fedora",
-    ),
     "debian12": CatalogEntry(
         image_url=(
             "https://cloud.debian.org/images/cloud/bookworm/20240717-1811/"

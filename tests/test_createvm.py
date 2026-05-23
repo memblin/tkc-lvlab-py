@@ -442,8 +442,8 @@ def test_builtin_catalog_includes_known_distros() -> None:
     keys) would silently break the --distro click.Choice. This locks
     the minimum surface.
     """
-    assert "fedora40" in BUILTIN_IMAGES
     assert "debian12" in BUILTIN_IMAGES
+    assert "debian13" in BUILTIN_IMAGES
     # Every entry must have the required fields populated.
     for name, entry in BUILTIN_IMAGES.items():
         assert entry.image_url.startswith("https://"), name

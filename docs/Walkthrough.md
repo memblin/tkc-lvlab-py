@@ -274,7 +274,7 @@ Both scripts are intentionally separate from `lvlab`:
 
 | Flag           | Purpose                                                                                                                        |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `--distro`     | Required. Key into the built-in image catalog (`debian12`, `fedora40`, `debian13`).                                            |
+| `--distro`     | Required. Key into the built-in image catalog (`debian12`, `debian13`).                                                        |
 | `--memory`     | RAM in MiB. Default 2048.                                                                                                      |
 | `--cpu`        | vCPU count. Default 2.                                                                                                         |
 | `--disk-size`  | qcow2 disk size. Default `20G`.                                                                                                |

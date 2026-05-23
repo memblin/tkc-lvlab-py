@@ -1,0 +1,33 @@
+name: test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+  push:
+    branches: [main]
+
+# Phase 3 wired this up. Integration tests are NEVER enabled in CI — see
+# tests/conftest.py and the cross-cutting safety rules in TODO.md. The
+# `-m "not integration"` filter below is the belt; the LVLAB_INTEGRATION
+# env var being unset is the suspenders.
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13', '3.14']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Sync dev deps
+        run: uv sync --group dev
+      - name: Run pytest (unit tests only)
+        run: uv run pytest -m "not integration"

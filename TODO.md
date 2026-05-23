@@ -444,30 +444,32 @@ the test suite.
 
 ______________________________________________________________________
 
-## Phase 7 — Legacy docstring + type-hint conversion
+## Phase 7 — Legacy docstring + type-hint conversion (IN PROGRESS, 5/7 done — 2026-05-23)
 
-The `docs/conventions-and-toolchain` PR established **MkDocs + Material +
-mkdocstrings** as the documentation toolchain and codified Google-style
-docstrings + type hints as the rule for new code (see CLAUDE.md's
-"Documentation conventions" section). The existing codebase predates that
-rule and is excluded from the API reference until this phase lands.
+API reference pages for every already-converted module landed first
+(commit `1228c85`), then per-module conversions.
 
-Modules to convert (one PR per module is fine; one PR for the whole sweep is
-also fine — pick what reviews cleanly):
+Status:
 
-- [ ] `tkc_lvlab/cli.py` — biggest surface, Click commands and docstrings
-    become the `--help` output. Mind that black-formatted Click decorator
-    output and Google `Args:` headings interact awkwardly; verify with
-    `uv run lvlab --help` after conversion.
-- [ ] `tkc_lvlab/config.py` — `parse_config`, `generate_hosts`,
-    `generate_hosts_entries`, `parse_hosts_file`.
-- [ ] `tkc_lvlab/_logging.py` — `get_logger`, `configure_logging`.
-- [ ] `tkc_lvlab/utils/cloud_init.py` — three dataclasses and `CloudInitIso`.
-- [ ] `tkc_lvlab/utils/images.py` — `CloudImage` and its parsers.
-- [ ] `tkc_lvlab/utils/libvirt.py` — `Machine` and its methods. **Wait until
-    Phase 2 ports finish** — the methods change shape and types in Phase 2,
-    so converting here too early just creates rework.
-- [ ] `tkc_lvlab/utils/vdisk.py` — `VirtualDisk` (small).
+- [x] `tkc_lvlab/_logging.py` — already conformant before Phase 7;
+    added to API ref in `1228c85`.
+- [x] `tkc_lvlab/config.py` — converted in `a5957ba`.
+- [x] `tkc_lvlab/utils/vdisk.py` — converted in `6cbd74a`.
+- [x] `tkc_lvlab/utils/images.py` — converted in `4ac789e`.
+- [x] `tkc_lvlab/utils/cloud_init.py` — converted in `2398d96`.
+- [ ] `tkc_lvlab/utils/libvirt.py` — partial. The Phase 2-ported
+    methods (`virsh_*` callers — `exists_in_libvirt`, `destroy`,
+    `poweron`, `shutdown`, list/create/delete snapshot, status) carry
+    the new convention. The pre-Phase-2 methods (`__init__`,
+    `cloud_init`, `deploy`, `manage_vdisks`) still need it. Worth
+    doing as a focused module-rewrite session because the class is
+    657 lines.
+- [ ] `tkc_lvlab/cli.py` — the biggest surface. Click command bodies
+    have intricate flow control; mind the interaction between
+    black-formatted Click decorator output and Google `Args:`
+    headings. Verify with `uv run lvlab --help` after each command's
+    conversion. Probably worth doing one command at a time rather
+    than the whole file in one shot.
 
 After each module is converted, remove its name from the "Modules pending
 migration" list in `docs/api/index.md` and add the corresponding

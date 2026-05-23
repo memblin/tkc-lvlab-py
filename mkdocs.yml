@@ -71,7 +71,20 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - API Reference: api/index.md
+  - API Reference:
+      - Overview: api/index.md
+      - Logging: api/logging.md
+      - utils:
+          - virsh: api/utils/virsh.md
+          - ssh_keys: api/utils/ssh_keys.md
+          - passwords: api/utils/passwords.md
+          - requirements: api/utils/requirements.md
+          - network: api/utils/network.md
+          - standalone_cloud_init: api/utils/standalone_cloud_init.md
+          - snapshot_cleanup: api/utils/snapshot_cleanup.md
+      - scripts:
+          - createvm: api/scripts/createvm.md
+          - destroyvm: api/scripts/destroyvm.md
 
 # Pages not listed in `nav` above are intentionally excluded from the
 # navigation. The legacy user-facing docs (Walkthrough.md etc.) remain

@@ -13,6 +13,11 @@ repos:
     rev: 0.7.21
     hooks:
       - id: mdformat
+        # docs/api/ pages contain `:::` mkdocstrings directives that must
+        # not be re-escaped by mdformat — particularly leading-underscore
+        # module names like ``tkc_lvlab._logging`` that mdformat would
+        # otherwise rewrite to ``\_logging`` and break the directive.
+        exclude: ^docs/api/
         additional_dependencies:
           - mdformat-mkdocs==4.1.2
           - mdformat-gfm==0.4.1

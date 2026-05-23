@@ -17,6 +17,7 @@ via [mkdocstrings](https://mkdocstrings.github.io/).
 - [`tkc_lvlab.utils.passwords`](utils/passwords.md) — password phrase generator + SHA-512-crypt hashing.
 - [`tkc_lvlab.utils.requirements`](utils/requirements.md) — `createvm` host-binary dependency check.
 - [`tkc_lvlab.utils.network`](utils/network.md) — libvirt network introspection + static-IP validation.
+- [`tkc_lvlab.utils.cloud_init`](utils/cloud_init.md) — manifest-side cloud-init artifacts (`UserData`, `MetaData`, `NetworkConfig`, `CloudInitIso`).
 - [`tkc_lvlab.utils.standalone_cloud_init`](utils/standalone_cloud_init.md) — cloud-init artifacts for the standalone workflow.
 - [`tkc_lvlab.utils.snapshot_cleanup`](utils/snapshot_cleanup.md) — snapshot deletion + `undefine` fallback.
 - [`tkc_lvlab.utils.vdisk`](utils/vdisk.md) — per-VM qcow2 creation for the manifest workflow.
@@ -35,10 +36,6 @@ reference until the legacy-docstring conversion lands (see `TODO.md`
 Phase 7).
 
 - `tkc_lvlab.cli`
-- `tkc_lvlab.utils.cloud_init` *(the manifest workflow's `UserData` /
-    `MetaData` / `NetworkConfig` / `CloudInitIso` — see
-    [`tkc_lvlab.utils.standalone_cloud_init`](utils/standalone_cloud_init.md)
-    for the post-convention sibling.)*
 - `tkc_lvlab.utils.libvirt` *(partially migrated during Phase 2;
     `Machine` methods that were ported to `virsh` carry the new
     convention, the rest predate it.)*

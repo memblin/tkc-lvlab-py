@@ -224,25 +224,32 @@ See `TODO.md` "Cross-cutting safety rules" for the full scaffolding plan.
 
 ## Branching
 
-**Never start work directly on `main`.** This project requires PRs into `main`; release tags on `main` trigger `.github/workflows/build-release.yml`, so anything that lands on `main` outside a reviewed PR risks ending up in a release. Before making code changes, check the current branch — if it is `main`, stop and confirm with the user which topic branch to use (or which to create). Do not invent a branch name and create it yourself without checking first.
+**Work directly on `main`.** This is a solo-maintained project and topic branches were adding friction without delivering PR-review benefits while the codebase has a single maintainer. Make focused, well-scoped commits directly on `main`. The user is the one who pushes, so an unintended local commit is recoverable with `git reset` before push — but that means the bar for commit quality on `main` is the same bar you'd apply to a PR head: each commit should stand on its own and pass `pre-commit run --all-files`.
+
+Release tags on `main` still trigger `.github/workflows/build-release.yml`, so the "never push tags without an explicit, scoped request" rule (see "Git pushes" below) remains in effect — that's the actual guardrail against accidental releases.
+
+Topic branches are still appropriate in two cases — **ask before creating one**, don't invent the name:
+
+- A multi-commit experiment the user may want to discard wholesale.
+- Work the user has explicitly asked be isolated for review or testing.
+
+When a topic branch lands, prefer a fast-forward merge to preserve the individual commits; squash-merge only when the user asks for it. (Earlier guidance preferred squash-merge as the default; that was tied to the topic-branch-per-change pattern that's no longer in use.)
 
 ## Git pushes
 
-**Pushes via `gh`'s authenticated PAT are allowed when the user has asked for them**, scoped to the PAT's `contents:write` + `pull-requests:write`. That means `git push` of feature/topic branches and `gh pr create` against `main` are fine in those cases.
+**Pushes via `gh`'s authenticated PAT are allowed when the user has asked for them**, scoped to the PAT's `contents:write` + `pull-requests:write`. The user normally pushes themselves from their own terminal (via the SSH remote — see "Repo remotes" memory); if the user asks you to push, use the HTTPS PAT path.
 
 The remote `origin` is configured for SSH (`git@github.com:...`) but the gh PAT only authenticates HTTPS. Two consequences:
 
-- For pushes, push to the HTTPS URL explicitly (`git push -u https://github.com/memblin/tkc-lvlab-py.git <branch>`) — `gh auth git-credential` is wired into the global gitconfig and supplies the token. Don't rewrite `origin`; the user uses SSH from their own terminal.
+- For pushes, push to the HTTPS URL explicitly (`git push https://github.com/memblin/tkc-lvlab-py.git main`) — `gh auth git-credential` is wired into the global gitconfig and supplies the token. Don't rewrite `origin`; the user uses SSH from their own terminal.
 - Fetches in this environment will also need the HTTPS URL (e.g. `git pull https://github.com/memblin/tkc-lvlab-py.git main`) because no SSH key here has read access.
 
 **Still off-limits without an explicit, scoped request:**
 
-- Force-push of any kind (`--force`, `--force-with-lease`).
+- Force-push of any kind (`--force`, `--force-with-lease`) — `main` is the live branch, not a topic-branch sandbox.
 - Pushing tags — tag pushes on `main` trigger `.github/workflows/build-release.yml` and cut a real GitHub release. See "Releasing".
-- Pushes directly to `main` (the "Branching" rule still applies — work goes through PRs).
+- Pushes to `main` (the user pushes themselves; only push when explicitly asked).
 - `gh pr merge`, `gh pr close`, branch deletion on the remote, or any write to issues/discussions/releases the user hasn't asked for.
-
-If a PR is already open on a branch, prefer adding follow-up commits over force-pushing.
 
 ## Releasing
 

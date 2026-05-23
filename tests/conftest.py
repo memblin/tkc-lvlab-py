@@ -85,6 +85,34 @@ def make_test_name(base: str) -> str:
     return f"{LVLAB_TEST_PREFIX}{base}"
 
 
+def _is_owned_by_test(name: str) -> bool:
+    """Return True iff ``name`` carries the per-session test prefix.
+
+    Two patterns are recognized as test-owned:
+
+    1. ``LVLAB_TEST_PREFIX`` at the start of ``name`` — the normal case
+        for resources whose name is built directly via
+        :func:`make_test_name`.
+    2. ``f"oneoff-{LVLAB_TEST_PREFIX}"`` at the start of ``name`` — the
+        :mod:`tkc_lvlab.scripts.createvm` case, where the standalone
+        script hard-codes a leading ``oneoff-`` on every domain it
+        creates (Phase 6 collision-prevention). Tests pass a
+        ``make_test_name(...)`` value as the user-facing ``vm_name`` and
+        the resulting libvirt domain name becomes
+        ``oneoff-{LVLAB_TEST_PREFIX}{base}``, which the reaper still
+        needs to recognize.
+
+    Args:
+        name: The libvirt domain name or filesystem path basename.
+
+    Returns:
+        True if either pattern matches.
+    """
+    return name.startswith(LVLAB_TEST_PREFIX) or name.startswith(
+        f"oneoff-{LVLAB_TEST_PREFIX}"
+    )
+
+
 def assert_owned_by_test(name: str) -> None:
     """Raise unless ``name`` is a test-owned resource.
 
@@ -93,17 +121,22 @@ def assert_owned_by_test(name: str) -> None:
     snapshot deletion, etc. If a name without the prefix slips through,
     we fail loudly rather than risk damaging a developer VM.
 
+    Recognizes both the plain ``LVLAB_TEST_PREFIX`` form and the
+    ``oneoff-{LVLAB_TEST_PREFIX}`` form that ``createvm`` produces —
+    see :func:`_is_owned_by_test`.
+
     Args:
         name: The libvirt domain name or filesystem path basename.
 
     Raises:
-        AssertionError: If ``name`` does not start with
-            :data:`LVLAB_TEST_PREFIX`.
+        AssertionError: If ``name`` does not match either recognized
+            test-owned pattern.
     """
-    if not name.startswith(LVLAB_TEST_PREFIX):
+    if not _is_owned_by_test(name):
         raise AssertionError(
             f"Refusing to operate on {name!r}: not owned by this test session "
-            f"(expected prefix {LVLAB_TEST_PREFIX!r}). This guard exists to "
+            f"(expected prefix {LVLAB_TEST_PREFIX!r} or "
+            f"{f'oneoff-{LVLAB_TEST_PREFIX}'!r}). This guard exists to "
             f"prevent test teardown from touching developer VMs."
         )
 
@@ -226,7 +259,7 @@ def _reap_test_prefixed_domains(uri: str) -> None:
         return
     for raw in result.stdout.splitlines():
         name = raw.strip()
-        if not name or not name.startswith(LVLAB_TEST_PREFIX):
+        if not name or not _is_owned_by_test(name):
             continue
         assert_owned_by_test(name)  # belt-and-suspenders
         # Best-effort destroy (may already be off) then undefine.
@@ -247,9 +280,11 @@ def _session_reaper() -> Iterator[None]:
     """Session-scoped teardown that reaps prefixed leftovers after integration runs.
 
     No-op unless integration is enabled. Even when enabled, only touches
-    domains whose name starts with :data:`LVLAB_TEST_PREFIX`. This is the
-    last line of defense against a crashing integration test leaving
-    state behind — it must NEVER expand its scope to "all domains".
+    domains whose name starts with :data:`LVLAB_TEST_PREFIX` (or the
+    ``oneoff-`` prefixed variant — see :func:`_is_owned_by_test`). This
+    is the last line of defense against a crashing integration test
+    leaving state behind — it must NEVER expand its scope to "all
+    domains".
     """
     yield
     if not _integration_enabled():
@@ -259,3 +294,66 @@ def _session_reaper() -> Iterator[None]:
     # the prefix guard is not.
     for uri in ("qemu:///session", "qemu:///system"):
         _reap_test_prefixed_domains(uri)
+
+
+# ---------------------------------------------------------------------------
+# Integration test URI selection
+# ---------------------------------------------------------------------------
+
+
+_INTEGRATION_URIS: tuple[str, ...] = ("qemu:///session", "qemu:///system")
+
+
+def _can_access_uri(uri: str) -> bool:
+    """Return True iff the current process can talk to ``virsh -c <uri> list``.
+
+    Used to auto-skip integration tests against URIs the test runner
+    can't reach. ``qemu:///session`` is normally always reachable
+    (rootless, per-user). ``qemu:///system`` requires libvirt-group
+    membership; this probe checks that without attempting sudo
+    elevation — adding a test user to a group is straightforward,
+    granting sudo often is not, so we honour group membership and
+    skip otherwise.
+
+    Args:
+        uri: libvirt URI to probe.
+
+    Returns:
+        True if ``virsh -c <uri> list`` exits 0 within a couple of
+        seconds; False on non-zero exit, timeout, or missing binary.
+    """
+    try:
+        result = subprocess.run(
+            ["virsh", "-c", uri, "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+@pytest.fixture(scope="session", params=_INTEGRATION_URIS)
+def integration_uri(request: pytest.FixtureRequest) -> str:
+    """Parametrize each integration test across reachable libvirt URIs.
+
+    Yields ``qemu:///session`` always (rootless) and ``qemu:///system``
+    only when the test runner has access — i.e. libvirt-group
+    membership. URIs the runner can't reach are skipped per-parameter,
+    not per-test, so a partially-accessible host still gets coverage
+    on the URIs that work.
+
+    Returns:
+        A reachable libvirt URI string. The test is skipped (via
+        :func:`pytest.skip`) for URIs the runner can't access.
+    """
+    uri = request.param
+    if not _can_access_uri(uri):
+        pytest.skip(
+            f"cannot reach {uri} (no libvirt-group access or daemon "
+            f"unavailable) — sudo elevation not attempted"
+        )
+    return uri

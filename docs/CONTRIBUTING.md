@@ -112,6 +112,42 @@ A smoke-test checklist for verifying CLI changes against a real
 intentional, since the test resources are real VMs on the developer's
 own machine.
 
+### Host setup
+
+The smoke tests assume your user can talk to `qemu:///system` (or
+`qemu:///session` if you prefer rootless). Typical one-time setup on
+a fresh box:
+
+```bash
+# Install host binaries the createvm/lvlab paths need at runtime
+sudo dnf install -y libvirt libvirt-clients qemu-kvm virt-install   # RHEL/Fedora family
+# (or) sudo apt install -y libvirt-daemon-system libvirt-clients qemu-kvm virt-install   # Debian family
+
+# Add yourself to the libvirt group so /var/lib/libvirt/images is writable
+sudo usermod -aG libvirt "$USER"
+```
+
+**Footgun after `usermod -aG`:** the new group membership doesn't take
+effect in your current shell session — you need a fresh login (or
+`newgrp libvirt`) before `lvlab` / `createvm` can write to
+`/var/lib/libvirt/images/`. The smoke-test failure mode is a
+`PermissionError` on the image cache directory, which can look like
+a code bug when it's really a stale shell.
+
+If re-logging in is inconvenient (e.g. an SSH session you don't want
+to drop), you can run any single command under the new group with
+`sg`:
+
+```bash
+sg libvirt -c "uv run createvm smoketest --distro debian13"
+sg libvirt -c "uv run lvlab up vault.local"
+sg libvirt -c "uv run lvlab destroy vault.local --force"
+```
+
+`id -G` will show `libvirt`'s GID (typically 990 on Fedora/RHEL) once
+the group is effective. Inside the `sg`-wrapped command it should
+appear; in the parent shell it won't until you re-login.
+
 ```bash
 # Capabilities command
 lvlab capabilities

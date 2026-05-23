@@ -766,16 +766,14 @@ real UX or documentation gap worth tracking so we don't drift.
     tests under `tests/test_images_basedir.py` pin all 4 cases
     (default basedir, parent-dir style, already-cache style, trailing
     slash, ~ expansion).
-- [ ] **Stale-group-session footgun after `usermod -aG libvirt`.**
-    On a fresh libvirt install where the developer's user was just
-    added to the `libvirt` group, the current shell session
-    doesn't see the new group membership until logout/login. Both
-    `createvm` and `lvlab` then fail with permission errors on
-    `/var/lib/libvirt/images/` writes. The workaround is to use
-    `sg libvirt -c "uv run createvm ..."` to run commands under
-    the freshly-added group without re-login. Worth a sentence in
-    CONTRIBUTING.md (or wherever new-contributor host setup is
-    documented) so the next person doesn't lose an hour to it.
+- [x] **Stale-group-session footgun after `usermod -aG libvirt`** —
+    documented 2026-05-23. `docs/CONTRIBUTING.md` now has a "Host
+    setup" subsection under "End-to-End Testing" covering the
+    one-time `sudo usermod -aG libvirt` step, the re-login
+    requirement, and the `sg libvirt -c "..."` workaround for
+    single-command use without re-login. Smoke-test failure mode
+    (`PermissionError` on `/var/lib/libvirt/images/`) is called
+    out so it doesn't look like a code bug.
 - [ ] **Refresh the catalog with a current Fedora release.**
     The fedora40 entry was dropped (commit `626f272`) without a
     replacement because picking the right URL + verifying it

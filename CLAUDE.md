@@ -235,6 +235,18 @@ Topic branches are still appropriate in two cases — **ask before creating one*
 
 When a topic branch lands, prefer a fast-forward merge to preserve the individual commits; squash-merge only when the user asks for it. (Earlier guidance preferred squash-merge as the default; that was tied to the topic-branch-per-change pattern that's no longer in use.)
 
+## Spawning agents in worktrees
+
+When the orchestrator spawns a subagent with `isolation: "worktree"`, the worktree is **not guaranteed to be branched from current `main` HEAD** — in practice it has come up branched from an older commit, which silently breaks anything that depends on recent test infrastructure, helpers, or policy changes. This bit us during the 2026-05-23 parallel-agent run for Phases 11 and 12.
+
+**Rule for worktree-isolated agents:** the agent's first action must be to sync the worktree to current `main` HEAD before doing any other work. The orchestrator should put this literal step at the top of the prompt:
+
+> Before doing anything else, run `git fetch origin main && git reset --hard origin/main` inside this worktree, then verify with `git log -1 --oneline`. Stop and report if the reset fails.
+
+Alternatively the orchestrator can hand the agent the current `main` HEAD SHA in the prompt and require the agent to verify its worktree matches before starting. Either form is fine; the absence of any sync step is what fails.
+
+For short, single-file changes that don't need a separate branch, prefer spawning the agent without `isolation: "worktree"` so it works directly on `main` — same risk profile as the orchestrator working on `main`, no stale-base trap.
+
 ## Git pushes
 
 **Pushes via `gh`'s authenticated PAT are allowed when the user has asked for them**, scoped to the PAT's `contents:write` + `pull-requests:write`. The user normally pushes themselves from their own terminal (via the SSH remote — see "Repo remotes" memory); if the user asks you to push, use the HTTPS PAT path.

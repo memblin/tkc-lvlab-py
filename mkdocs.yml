@@ -74,6 +74,7 @@ nav:
   - API Reference:
       - Overview: api/index.md
       - Logging: api/logging.md
+      - Config: api/config.md
       - utils:
           - virsh: api/utils/virsh.md
           - ssh_keys: api/utils/ssh_keys.md

@@ -5,9 +5,10 @@ via [mkdocstrings](https://mkdocstrings.github.io/).
 
 ## Modules with migrated docs
 
-### Logging
+### Top-level
 
 - [`tkc_lvlab._logging`](logging.md) — centralized project logger configuration.
+- [`tkc_lvlab.config`](config.md) — manifest loading + `/etc/hosts` rendering.
 
 ### `tkc_lvlab.utils`
 
@@ -33,7 +34,6 @@ reference until the legacy-docstring conversion lands (see `TODO.md`
 Phase 7).
 
 - `tkc_lvlab.cli`
-- `tkc_lvlab.config`
 - `tkc_lvlab.utils.cloud_init` *(the manifest workflow's `UserData` /
     `MetaData` / `NetworkConfig` / `CloudInitIso` — see
     [`tkc_lvlab.utils.standalone_cloud_init`](utils/standalone_cloud_init.md)

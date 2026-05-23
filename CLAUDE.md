@@ -7,10 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `tkc-lvlab` (binary: `lvlab`) is a Click-based CLI that manages local libvirt+QEMU lab VMs from a single declarative YAML manifest (`Lvlab.yml`). It is meant for end-to-end integration testing of configuration-management code (Salt, Ansible, etc.) on a developer workstation — not for production VM management.
 
 A run of `lvlab init` followed by `lvlab up <vm_name>` will:
+
 1. Download and verify a cloud image (checksum + optional GPG of the checksum file).
-2. Create a qcow2 disk that uses the cloud image as a backing file (via `qemu-img`).
-3. Render cloud-init `meta-data`, `user-data`, and `network-config` from Jinja2 templates, pack them into a `cidata.iso` (built in-process with `pycdlib`), and attach it as a cdrom.
-4. Shell out to `virt-install` to define and launch the domain.
+1. Create a qcow2 disk that uses the cloud image as a backing file (via `qemu-img`).
+1. Render cloud-init `meta-data`, `user-data`, and `network-config` from Jinja2 templates, pack them into a `cidata.iso` (built in-process with `pycdlib`), and attach it as a cdrom.
+1. Shell out to `virt-install` to define and launch the domain.
 
 Because state lives in libvirt + on-disk qcow2 files, **bugs here can damage real VMs the developer cares about.** Treat destructive paths (`destroy`, `down`, snapshot `delete`) with care — there is no separate test hypervisor.
 
@@ -43,6 +44,7 @@ Python floor is `>=3.11` in `pyproject.toml`. The release workflow builds with 3
 The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` first — every command starts there.
 
 `Lvlab.yml` has two top-level sections:
+
 - `environment[0]` — exactly one environment with `name`, `libvirt_uri`, `config_defaults` (cpu/memory/disks/interfaces/cloud_init that apply to every machine), and a list of `machines`.
 - `images` — a dict of named cloud images (URL + checksum + GPG + cloud-init network schema version).
 
@@ -51,11 +53,12 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 `tkc_lvlab/cli.py` defines the Click command group. Every command follows the same shape:
 
 1. `parse_config()` returns `(environment, images, config_defaults, machines)`.
-2. `get_machine_by_vm_name(machines, vm_name)` finds the manifest entry.
-3. `Machine(machine_config, environment, config_defaults)` merges defaults into the machine and exposes operations against libvirt.
-4. For `up`, a `CloudImage` + `VirtualDisk` + `CloudInitIso` are constructed alongside the `Machine`.
+1. `get_machine_by_vm_name(machines, vm_name)` finds the manifest entry.
+1. `Machine(machine_config, environment, config_defaults)` merges defaults into the machine and exposes operations against libvirt.
+1. For `up`, a `CloudImage` + `VirtualDisk` + `CloudInitIso` are constructed alongside the `Machine`.
 
 `tkc_lvlab/utils/libvirt.py` — `Machine` is the central object. Key things to know:
+
 - The libvirt domain name is **not** `vm_name`; it's `f"{vm_name}_{environment_name}"` (see `self.libvirt_vm_name`). This namespacing is what lets multiple lvlab environments coexist on one hypervisor. Anything that looks up a domain by name must use `libvirt_vm_name`.
 - `Machine.__init__` merges `config_defaults` into the machine dict (interfaces, disks, and top-level keys). When adding a new configurable field, follow that same pattern instead of reading from `config_defaults` at call sites.
 - `Machine.deploy()` shells out to `virt-install`. The `--os-variant` value is derived by splitting `self.os` on `-` and taking the first segment — this is why custom images must be named `{os_variant}-{anything}` (see `docs/Walkthrough.md` "Image Naming").
@@ -64,6 +67,7 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 `tkc_lvlab/utils/cloud_init.py` — three dataclasses (`NetworkConfig`, `MetaData`, `UserData`) each render one Jinja template from `tkc_lvlab/templates/`. `CloudInitIso` uses `pycdlib` to build an ISO9660 + Joliet + Rock Ridge image with the three files at the names cloud-init's NoCloud datasource expects (`meta-data`, `user-data`, `network-config`). `UserData.__post_init__` will read an SSH public key from disk if `cloud_init.pubkey` looks like a path; otherwise it treats the value as a literal key.
 
 `tkc_lvlab/utils/images.py` — `CloudImage` knows how to download, GPG-verify the checksum file, and checksum-verify the image. Two non-obvious bits:
+
 - Debian's `SHA512SUMS` file is the **same filename** across releases, so Debian images get a per-image-prefix checksum filename to avoid clobber when multiple Debian versions are configured. The detector is a regex on `debian-(\d+)` in the image filename.
 - The checksum file parser handles both Fedora's `SHA256 (file) = hash` format and Debian's `hash  file` format.
 - When GPG verification succeeds, the verified plaintext is written to `<checksum>.verified` and subsequent operations prefer that file.
@@ -110,12 +114,12 @@ are out-of-nav until the legacy docs conversion lands (see `TODO.md`).
 ### For new code — required
 
 - **Type hints on every public function, method, parameter, and return value.**
-  mkdocstrings reads the signature as the source of truth; do not restate types
-  in the docstring body.
+    mkdocstrings reads the signature as the source of truth; do not restate types
+    in the docstring body.
 - **Google-style docstrings on every public symbol** (module, class, function,
-  method). Section order: one-line summary → blank line → optional longer
-  description → `Args:` → `Returns:` (or `Yields:`) → `Raises:` → `Example:`.
-  Skip sections that don't apply.
+    method). Section order: one-line summary → blank line → optional longer
+    description → `Args:` → `Returns:` (or `Yields:`) → `Raises:` → `Example:`.
+    Skip sections that don't apply.
 
 Example shape:
 
@@ -138,9 +142,9 @@ def parse_checksum_file(path: Path) -> dict[str, str]:
     """
 ```
 
-For classes, document the class itself (one-liner plus an ``Attributes:`` block
+For classes, document the class itself (one-liner plus an `Attributes:` block
 if useful), and document each method separately. `__init__` parameters go in
-the **class-level** docstring's ``Args:`` section, not in `__init__`'s own
+the **class-level** docstring's `Args:` section, not in `__init__`'s own
 docstring — mkdocstrings renders them under the class.
 
 For modules, put a docstring at the top of the file describing what the module
@@ -165,10 +169,12 @@ to the new convention. Don't touch neighbors.
 **Pushes via `gh`'s authenticated PAT are allowed when the user has asked for them**, scoped to the PAT's `contents:write` + `pull-requests:write`. That means `git push` of feature/topic branches and `gh pr create` against `main` are fine in those cases.
 
 The remote `origin` is configured for SSH (`git@github.com:...`) but the gh PAT only authenticates HTTPS. Two consequences:
+
 - For pushes, push to the HTTPS URL explicitly (`git push -u https://github.com/memblin/tkc-lvlab-py.git <branch>`) — `gh auth git-credential` is wired into the global gitconfig and supplies the token. Don't rewrite `origin`; the user uses SSH from their own terminal.
 - Fetches in this environment will also need the HTTPS URL (e.g. `git pull https://github.com/memblin/tkc-lvlab-py.git main`) because no SSH key here has read access.
 
 **Still off-limits without an explicit, scoped request:**
+
 - Force-push of any kind (`--force`, `--force-with-lease`).
 - Pushing tags — tag pushes on `main` trigger `.github/workflows/build-release.yml` and cut a real GitHub release. See "Releasing".
 - Pushes directly to `main` (the "Branching" rule still applies — work goes through PRs).

@@ -15,6 +15,7 @@
 ## Test plan
 
 <!-- How to verify locally. Check what you actually ran. -->
+
 - [ ] `uv sync --group dev`
 - [ ] `uv run pytest` (or note why a test isn't applicable)
 - [ ] `pre-commit run --all-files`

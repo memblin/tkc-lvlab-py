@@ -27,5 +27,5 @@ sudo chown -R $user:$group /var/lib/libvirt/images/lvlab
 ```
 
 - With `/var/lib/libvirt/images/lvlab` writeable we can create the subdirs
-  ourselves without root privileges.
+    ourselves without root privileges.
 - Libvirt will sometimes change the uid/gid on a image file or iso

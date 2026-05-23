@@ -1,12 +1,16 @@
 """Module containing all things cloud-init"""
 
-import click
 import os
 import re
 import pycdlib
 from dataclasses import dataclass
 from enum import Enum
 from jinja2 import Environment, PackageLoader, select_autoescape
+
+from .._logging import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class NetworkVersion(Enum):
@@ -86,7 +90,9 @@ class UserData:
     def __post_init__(self):
         pubkey_config = self.cloud_init.get("pubkey", None)
         if "~" in pubkey_config or "/" in pubkey_config:
-            click.echo("Pubkey appears to be a file path, attempting to read contents")
+            logger.debug(
+                "Pubkey appears to be a file path, attempting to read contents"
+            )
             pubkey_path = os.path.expanduser(self.cloud_init.get("pubkey", None))
             if os.path.isfile(pubkey_path):
                 with open(pubkey_path, "r", encoding="utf-8") as pubkey_file:
@@ -96,16 +102,16 @@ class UserData:
                 is_pubkey, pubkey_type = self._is_valid_ssh_public_key(pubkey_content)
 
                 if is_pubkey:
-                    click.echo(f"Successfully read {pubkey_type} pubkey")
+                    logger.debug("Successfully read %s pubkey", pubkey_type)
                     # Swap the file path for the content
                     self.cloud_init["pubkey"] = pubkey_content.strip()
                 else:
-                    click.echo(
-                        f"Read file contents does not appear to be an SSH pubkey"
+                    logger.warning(
+                        "Read file contents does not appear to be an SSH pubkey"
                     )
         else:
             if self._is_valid_ssh_public_key(pubkey_config):
-                click.echo("Pubkey appears to be a pubkey, using as-is")
+                logger.debug("Pubkey appears to be a pubkey, using as-is")
 
     def render_config(self) -> str:
         """Render a Jinja2 template with the data"""
@@ -164,5 +170,5 @@ class CloudInitIso:
             return True
 
         except Exception as e:
-            click.echo(f"Error writting ISO: {e}")
+            logger.error("Error writting ISO: %s", e)
             return False

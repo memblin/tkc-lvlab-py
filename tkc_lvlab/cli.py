@@ -6,6 +6,7 @@ import sys
 import click
 import libvirt
 
+from ._logging import configure_logging, get_logger
 from .config import (
     parse_config,
     generate_hosts,
@@ -23,10 +24,26 @@ from .utils.vdisk import VirtualDisk
 from .utils.images import CloudImage
 
 
+logger = get_logger(__name__)
+
+
 @click.group(context_settings=dict(help_option_names=["-h", "--help"]))
-def run():
+@click.option(
+    "-v",
+    "--verbose",
+    count=True,
+    help="Increase log verbosity (-v for INFO, -vv for DEBUG).",
+)
+@click.option(
+    "-q",
+    "--quiet",
+    is_flag=True,
+    default=False,
+    help="Suppress informational logs (ERROR only). Overrides -v.",
+)
+def run(verbose, quiet):
     """A command-line tool for managing VMs."""
-    pass
+    configure_logging(verbosity=verbose, quiet=quiet)
 
 
 @click.command()
@@ -47,7 +64,7 @@ def cloudinit(vm_name):
     try:
         environment, images, config_defaults, machines = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit(1)
 
     machine = Machine(
@@ -70,7 +87,7 @@ def destroy(vm_name, force=False):
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit(1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -92,18 +109,21 @@ def destroy(vm_name, force=False):
                             f"Destruction appears successful for {machine.vm_name}."
                         )
                     else:
-                        click.echo(
-                            f"Destruction appears to have failed for {machine.vm_name}."
+                        logger.error(
+                            "Destruction appears to have failed for %s.",
+                            machine.vm_name,
                         )
 
                 else:
                     click.echo(f"Destruction aborted for {machine.vm_name}.")
             else:
-                click.echo(
-                    f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
+                logger.warning(
+                    "Machine %s is not deployed to the configured in %s.",
+                    machine.vm_name,
+                    libvirt_endpoint,
                 )
     else:
-        click.echo(f"Machine not found in manifest: {vm_name}")
+        logger.error("Machine not found in manifest: %s", vm_name)
 
 
 @click.command()
@@ -113,7 +133,7 @@ def down(vm_name):
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit(1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -134,7 +154,7 @@ def down(vm_name):
                     machine.shutdown(environment.get("libvirt_uri", "qemu:///session"))
                     > 0
                 ):
-                    click.echo(f"Shutdown appears to have failed.")
+                    logger.error("Shutdown appears to have failed.")
                 else:
                     click.echo(
                         f"Shutdown appears successful. The virtual machine may take a short time to complete shutdown."
@@ -145,7 +165,7 @@ def down(vm_name):
                 )
 
     else:
-        click.echo(f"Machine {vm_name} not found in manifest.")
+        logger.error("Machine %s not found in manifest.", vm_name)
 
 
 @click.command()
@@ -175,7 +195,7 @@ def hosts(append=False, heredoc=False):
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit()
 
     hosts_snippet = generate_hosts(environment, config_defaults, machines)
@@ -185,7 +205,7 @@ def hosts(append=False, heredoc=False):
         try:
             existing_ips, existing_names = parse_hosts_file(etc_hosts)
         except OSError as e:
-            click.echo(f"Unable to read {etc_hosts}: {e}")
+            logger.error("Unable to read %s: %s", etc_hosts, e)
             sys.exit(1)
 
         candidates = generate_hosts_entries(config_defaults, machines)
@@ -213,7 +233,7 @@ def hosts(append=False, heredoc=False):
             not os.path.exists(etc_hosts)
             and os.access(os.path.dirname(etc_hosts) or ".", os.W_OK)
         ):
-            click.echo("Appending hosts file snippet to /etc/hosts")
+            logger.info("Appending hosts file snippet to %s", etc_hosts)
             header = f"\n# Libvirt Labs /etc/hosts snippet\n# Environment: {environment.get('name', '')}\n"
             try:
                 with open(etc_hosts, "a", encoding="utf-8") as hosts_file:
@@ -223,10 +243,10 @@ def hosts(append=False, heredoc=False):
                         hosts_file.write(line)
                         click.echo(f"Appended: {line.rstrip()}")
             except OSError as e:
-                click.echo(f"Unable to write {etc_hosts}: {e}")
+                logger.error("Unable to write %s: %s", etc_hosts, e)
                 sys.exit(1)
         else:
-            click.echo("No write access available for /etc/hosts")
+            logger.error("No write access available for /etc/hosts")
 
     if heredoc:
         hosts_snippet = generate_hosts(
@@ -242,7 +262,7 @@ def init():
     try:
         environment, images, config_defaults, _ = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit()
 
     click.echo()
@@ -256,11 +276,11 @@ def init():
         if image.exists_locally("image"):
             click.echo(f"CloudImage {image.name} exists locally: {image.image_fpath}")
         else:
-            click.echo(f"Attempting to download image: {image.image_url}")
+            logger.info("Attempting to download image: %s", image.image_url)
             if image.download_image():
                 click.echo(f"CloudImage downloaded to {image.image_fpath}")
             else:
-                click.echo("CloudImage download failed")
+                logger.error("CloudImage download failed")
 
         if image.checksum_url_gpg:
             if image.exists_locally(file_type=("checksum_gpg")):
@@ -273,7 +293,7 @@ def init():
                         f"CloudImage checksum GPG file downloaded to {image.checksum_gpg_fpath}"
                     )
                 else:
-                    click.echo(f"CloudImage checksum GPG file download failed")
+                    logger.error("CloudImage checksum GPG file download failed")
 
         if image.checksum_url:
             if image.exists_locally(file_type="checksum"):
@@ -281,27 +301,31 @@ def init():
                     f"CloudImage {image.name} checksum file exists locally: {image.checksum_fpath}"
                 )
             else:
-                click.echo(
-                    f"Attempting to download checksum file URL: {image.checksum_url}"
+                logger.info(
+                    "Attempting to download checksum file URL: %s", image.checksum_url
                 )
                 if image.download_checksum():
                     click.echo(
                         f"CloudImage {image.name} checksum file downloaded to {image.checksum_fpath}"
                     )
                 else:
-                    click.echo("CloudImage {image.name} checksum file download failed")
+                    logger.error(
+                        "CloudImage %s checksum file download failed", image.name
+                    )
 
         if image.checksum_url_gpg and image.exists_locally(file_type=("checksum_gpg")):
             if image.gpg_verify_checksum_file():
                 click.echo(f"CloudImage {image.name} checksum file GPG validation OK")
             else:
-                click.echo(f"CloudImage {image.name} checksum file GPG validation BAD")
+                logger.error(
+                    "CloudImage %s checksum file GPG validation BAD", image.name
+                )
 
         if image.checksum_url and image.exists_locally(file_type=("checksum")):
             if image.checksum_verify_image():
                 click.echo(f"CloudImage {image.name} checksum verification OK")
             else:
-                click.echo(f"CloudImage {image.name} checksum verification BAD")
+                logger.error("CloudImage %s checksum verification BAD", image.name)
 
         click.echo()
 
@@ -319,7 +343,7 @@ def list(vm_name):
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit(1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -341,11 +365,13 @@ def list(vm_name):
                 else:
                     click.echo(f"No snapshots found for {machine.vm_name}")
             else:
-                click.echo(
-                    f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
+                logger.warning(
+                    "Machine %s is not deployed to the configured in %s.",
+                    machine.vm_name,
+                    libvirt_endpoint,
                 )
     else:
-        click.echo(f"Machine not found in manifest: {vm_name}")
+        logger.error("Machine not found in manifest: %s", vm_name)
 
 
 @snapshot.command()
@@ -357,7 +383,7 @@ def create(vm_name, snapshot_name, snapshot_description=None):
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit(1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -379,13 +405,15 @@ def create(vm_name, snapshot_name, snapshot_description=None):
                         f"Snapshot {snapshot_status.getName()} created for {machine.vm_name}"
                     )
                 else:
-                    click.echo(f"Snapshot creation failed for {machine.vm_name}")
+                    logger.error("Snapshot creation failed for %s", machine.vm_name)
             else:
-                click.echo(
-                    f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
+                logger.warning(
+                    "Machine %s is not deployed to the configured in %s.",
+                    machine.vm_name,
+                    libvirt_endpoint,
                 )
     else:
-        click.echo(f"Machine not found in manifest: {vm_name}")
+        logger.error("Machine not found in manifest: %s", vm_name)
 
 
 @snapshot.command()
@@ -397,7 +425,7 @@ def delete(vm_name, snapshot_name, force=False):
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit(1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -426,15 +454,19 @@ def delete(vm_name, snapshot_name, force=False):
                 if snapshot_status == 0:
                     click.echo(f"Snapshot deleted for {machine.vm_name}")
                 else:
-                    click.echo(
-                        f"Snapshot deletion failed for {machine.vm_name}: {snapshot_status}"
+                    logger.error(
+                        "Snapshot deletion failed for %s: %s",
+                        machine.vm_name,
+                        snapshot_status,
                     )
             else:
-                click.echo(
-                    f"Machine {machine.vm_name} is not deployed to the configured in {libvirt_endpoint}."
+                logger.warning(
+                    "Machine %s is not deployed to the configured in %s.",
+                    machine.vm_name,
+                    libvirt_endpoint,
                 )
     else:
-        click.echo(f"Machine not found in manifest: {vm_name}")
+        logger.error("Machine not found in manifest: %s", vm_name)
 
 
 @click.command()
@@ -443,7 +475,7 @@ def status():
     try:
         environment, images, _, machines = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit(1)
 
     click.echo()
@@ -484,7 +516,7 @@ def up(vm_name):
     try:
         environment, images, config_defaults, machines = parse_config()
     except TypeError as e:
-        click.echo("Could not parse config file.")
+        logger.error("Could not parse config file.")
         sys.exit(1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -499,7 +531,7 @@ def up(vm_name):
             if status in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
                 click.echo(f"Starting virtual machine {machine.vm_name}")
                 if machine.poweron(environment.get("libvirt_uri", None)) > 0:
-                    click.echo(f"Problem powering on VM {machine.vm_name}")
+                    logger.error("Problem powering on VM %s", machine.vm_name)
             elif status in ["VIR_DOMAIN_RUNNING"]:
                 click.echo(f"The virtual machine {machine.vm_name} is running already")
 
@@ -524,11 +556,11 @@ def up(vm_name):
                 network_config_fpath,
                 os.path.join(machine.config_fpath, "cidata.iso"),
             )
-            click.echo(f"Writing cloud-init config ISO file {iso.fpath}")
+            logger.info("Writing cloud-init config ISO file %s", iso.fpath)
             if iso.write(iso.fpath):
-                click.echo(f"Writing cloud-init config ISO successful")
+                logger.info("Writing cloud-init config ISO successful")
             else:
-                click.echo(f"Writing cloud-init config ISO failed.")
+                logger.error("Writing cloud-init config ISO failed.")
                 sys.exit(1)
 
             # virt-install the VM and check status
@@ -540,10 +572,10 @@ def up(vm_name):
             ):
                 click.echo(f"Virtual machine deployment complete.")
             else:
-                click.echo(f"Virtual machine installation failed.")
+                logger.error("Virtual machine installation failed.")
 
     else:
-        click.echo(f"Machine {vm_name} not found in manifest.")
+        logger.error("Machine %s not found in manifest.", vm_name)
 
 
 # Bulid the CLI

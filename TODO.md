@@ -637,10 +637,43 @@ Typer is a thin layer over Click that:
 - [x] **CLAUDE.md update**: "What this is" section + the cli.py
     Architecture note both call out the Typer migration. `docs/index.md`
     and `docs/api/{cli,index}.md` updated to match.
-- [ ] Manual smoke test the full happy path against a real libvirt
-    URI before pushing (`uv run lvlab init`, `up`, `status`,
-    `snapshot create/list/delete`, `destroy`). Unit tests cover
-    parsing + flow but not the actual hypervisor side.
+- [x] Manual smoke test (2026-05-23, no-VM path). Verified clean on
+    the manifest in the repo (`qemu:///system`, 4 undeployed
+    machines): `lvlab --help`, `capabilities`, `status`, `hosts`,
+    `hosts --heredoc`, `ssh-config`, `ssh-config <vm>`, `snapshot`
+    (`--help` for the group + every subcommand), `snapshot list <vm>`
+    against a not-deployed VM. All exit 0; output matches the Click
+    UX modulo Typer/Rich panel rendering.
+- [ ] Manual smoke test the destructive happy path (`lvlab init`,
+    `lvlab up`, `lvlab snapshot create/delete`, `lvlab destroy`) —
+    not executed in the 2026-05-23 pass because `disk_image_basedir`
+    defaults to `/var/lib/libvirt/images/lvlab` (sudo-only on the
+    dev host) and `init` would pull ~1GB of cloud images. Schedule
+    on a developer workstation with image cache + sudo access.
+
+### Smoke-test follow-ups (Typer UX deltas vs. Click)
+
+Three Typer UX deltas surfaced in the 2026-05-23 smoke test. Each
+is a deliberate decision — neither blocking nor a bug, just a
+delta from Click. Recording so we make the call rather than
+drifting:
+
+- [ ] **`--install-completion` / `--show-completion` are new options
+    on every Typer command.** Click had no equivalent. They're
+    harmless opt-in shell-completion helpers but they ARE a UX
+    delta — any user scripting `lvlab --help | grep` will see
+    options that didn't exist before. To suppress: pass
+    `add_completion=False` to the top-level `typer.Typer(...)`.
+    Default position: leave them on (low cost, modern UX feature).
+- [ ] **Help output uses Rich Unicode panel boxes** (`╭ │ ╰`). The
+    content is preserved but the bytes differ from Click. To
+    suppress and get plain text: `rich_markup_mode=None` on the
+    `typer.Typer(...)`. Default position: leave Rich enabled
+    (matches lvscripts-py + every other modern Typer CLI). Revisit
+    only if a user reports terminal issues (piping to `less`
+    without `-R`, etc.).
+- [ ] **`[default: 0]` shown for the `-v` count flag.** Slightly
+    noisy but informative. No-op fix — accept as-is.
 
 ### Follow-up: migrate the standalone scripts to Typer too
 

@@ -150,7 +150,7 @@ class UserData:
     fqdn: str
 
     @staticmethod
-    def _is_valid_ssh_public_key(key_str: str) -> tuple[bool, str] | bool:
+    def _is_valid_ssh_public_key(key_str: str) -> tuple[bool, str]:
         """Light SSH-key syntax check for the manifest pubkey field.
 
         Recognizes three classic key types (rsa, dss, ed25519). For a
@@ -159,25 +159,37 @@ class UserData:
         the standalone workflow's path that the manifest workflow
         will adopt in a follow-up.
 
+        The match anchors at the start of the string and requires a
+        recognized key-type prefix followed by a base64 blob. Anything
+        after that — whitespace, multi-word comments, trailing
+        newlines — is tolerated. SSH key comments are free-form (they
+        can legitimately contain spaces, parens, anything up to
+        end-of-line); the previous pattern required at most a single
+        non-whitespace token there, which rejected real keys generated
+        with multi-word ``-C`` comments and crashed the manifest
+        ``up`` path.
+
         Args:
             key_str: Raw string to check.
 
         Returns:
-            ``(True, key_type)`` on a match, or bare ``False`` on miss.
-            The inconsistent return shape is a known quirk of this
-            legacy validator; callers handle both forms.
+            ``(True, key_type)`` on a match, or ``(False, "")`` on
+            miss. The return shape is consistent so callers can
+            unconditionally unpack — previously the legacy version
+            returned a bare ``False`` on miss which crashed any
+            caller doing tuple-unpack.
         """
         patterns = {
-            "ssh-rsa": r"^ssh-rsa\s+[A-Za-z0-9+/=]+\s*(?:[^\s]+)?$",
-            "ssh-dss": r"^ssh-dss\s+[A-Za-z0-9+/=]+\s*(?:[^\s]+)?$",
-            "ssh-ed25519": r"^ssh-ed25519\s+[A-Za-z0-9+/=]+\s*(?:[^\s]+)?$",
+            "ssh-rsa": r"^ssh-rsa\s+[A-Za-z0-9+/=]+",
+            "ssh-dss": r"^ssh-dss\s+[A-Za-z0-9+/=]+",
+            "ssh-ed25519": r"^ssh-ed25519\s+[A-Za-z0-9+/=]+",
         }
 
         for key_type, pattern in patterns.items():
             if re.match(pattern, key_str):
                 return (True, key_type)
 
-        return False
+        return (False, "")
 
     def __post_init__(self) -> None:
         """Resolve ``cloud_init.pubkey`` — read from disk when it's a path.
@@ -208,7 +220,8 @@ class UserData:
                         "Read file contents does not appear to be an SSH pubkey"
                     )
         else:
-            if self._is_valid_ssh_public_key(pubkey_config):
+            is_pubkey, _ = self._is_valid_ssh_public_key(pubkey_config)
+            if is_pubkey:
                 logger.debug("Pubkey appears to be a pubkey, using as-is")
 
     def render_config(self) -> str:

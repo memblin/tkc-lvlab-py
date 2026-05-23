@@ -107,6 +107,12 @@ plus one stray `conn.getCapabilities()` in `tkc_lvlab/cli.py`.
       Regenerate `uv.lock`. Update `CLAUDE.md`'s "Install deps" note — at
       build time we no longer need `libvirt-dev` / `pkg-config`, only
       `libvirt-clients` (or distro equivalent) at runtime.
+- [ ] After regenerating `uv.lock`, diff it against the previous lock and
+      confirm the only changes are `libvirt-python` removal plus any
+      transitives uniquely brought in by it. Surprise shifts in
+      `requests` / `urllib3` / `idna` / `jinja2` / `cryptography` resolved
+      versions should be investigated before merging — those are the
+      packages Dependabot has historically flagged.
 - [ ] Update `CLAUDE.md` Architecture section: remove `libvirt-python` API
       references, document the `virsh` subprocess pattern and the
       `tkc_lvlab/utils/virsh.py` helper.

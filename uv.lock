@@ -256,6 +256,18 @@ wheels = [
 ]
 
 [[package]]
+name = "jproperties"
+version = "2.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/be/27/00abf648c6d573275d409b70196b66d9fb40ef03b8d1baf671ae3774e145/jproperties-2.1.2.tar.gz", hash = "sha256:036fcd52c10a8a1c21e6fa2a1c292c93892e759b76490acc4809213a36ddc329", size = 23860, upload-time = "2024-07-21T20:40:50.29Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/6f/55bc5837e9fe7a86a5acb553adec901257d709062bfaef7debd4d8cfee12/jproperties-2.1.2-py2.py3-none-any.whl", hash = "sha256:4108e868353a9f4a12bb86a92df5462d0e18d00119169533972ce473029be79a", size = 17981, upload-time = "2024-07-21T20:40:49.034Z" },
+]
+
+[[package]]
 name = "libvirt-python"
 version = "12.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -372,6 +384,20 @@ wheels = [
 ]
 
 [[package]]
+name = "pysonar"
+version = "1.5.0.4793"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jproperties" },
+    { name = "requests" },
+    { name = "tomli" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f1/36/563d1e96dc7105b33d65cba2cc25df3eeb838aabd87a6e821051cce07c37/pysonar-1.5.0.4793.tar.gz", hash = "sha256:52791bcb8b01efd7dc203a5428f2b1b48b19269bc2982582d6e4e5f127716ac3", size = 28328, upload-time = "2026-04-30T12:38:40.371Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/9b/33b693c772e662d47bbde5890b939690e0ba9a5dff252bcd6e6ceae8285d/pysonar-1.5.0.4793-py3-none-any.whl", hash = "sha256:c55113e592562a5eddab6090c437cc60dde73e4cc6fea74b1292d438c62865d6", size = 42470, upload-time = "2026-04-30T12:38:39.464Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "9.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -481,6 +507,15 @@ wheels = [
 ]
 
 [[package]]
+name = "six"
+version = "1.17.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
 name = "tkc-lvlab"
 version = "0.2.4"
 source = { editable = "." }
@@ -497,6 +532,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pysonar" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
@@ -504,17 +540,18 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "jinja2", specifier = ">=3.1" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "libvirt-python", specifier = ">=10.5" },
     { name = "pycdlib", specifier = ">=1.14" },
     { name = "python-gnupg", specifier = ">=0.5" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "requests", specifier = ">=2.32" },
+    { name = "requests", specifier = ">=2.33" },
     { name = "tqdm", specifier = ">=4.66" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pysonar" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-cov", specifier = ">=5" },
 ]

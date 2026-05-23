@@ -67,18 +67,21 @@ Commands:
 
 - Libvirt w/ QEMU configured and functional
 - The user should be a member of the `libvirt` group on the system
-- Utilities: virt-install, qemu-img (For now until we can implement these
-    parts via libvirt-python)
+- Utilities: `virsh`, `virt-install`, `qemu-img`. `lvlab` shells out to all
+    three; there is no longer a `libvirt-python` C-extension dependency, so
+    `libvirt-dev` / `pkg-config` are not needed at build time.
 - `cloud_image_basedir` and `disk_image_basedir` configuration paths need
     to be writable by the user to run w/o sudo.
     - I usually create these directories in advance and chown them for my
         user.
 
-### Ubuntu 22.04
+### Ubuntu 22.04 / 24.04
 
 These packages are required to install and use the lvlab application.
 
 ```bash
-# installs qemu-kvm, libvirt, python3, git, and 2 dependencies needed by python-libvirt
-apt install qemu-system-x86 libvirt-daemon-system virt-manager python3 python3-venv python3-pip git pkg-config libvirt-dev
+# qemu-kvm, libvirt daemon + client tools (provides `virsh`), virt-install,
+# Python 3, and git. No libvirt-dev / pkg-config since the libvirt-python
+# build-time dep was dropped in 0.2.x.
+apt install qemu-system-x86 libvirt-daemon-system libvirt-clients virtinst python3 python3-venv git
 ```

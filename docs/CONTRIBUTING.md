@@ -41,48 +41,76 @@ pre-commit run --all-files
 
 The project uses..
 
-- [Poetry](https://python-poetry.org/docs/) for dependency management and
-    packaging. Poetry install directions are in the docs linked here.
+- [uv](https://docs.astral.sh/uv/) for dependency management and packaging.
+    Install via the [official installer](https://docs.astral.sh/uv/getting-started/installation/).
+    The build backend is `uv_build` (declared in `pyproject.toml`).
 
-These are some common poetry commands:
+These are some common uv commands:
 
 ```bash
-# By default, Poetry creates a virtual environment in {cache-dir}/virtualenvs.
-# Activate the poetry virtual env
-poetry shell
+# Sync runtime deps into .venv
+uv sync
 
-# Add dependency; when needing a new library added to the project
-poetry add
+# Sync runtime + dev tools (pytest, mkdocs, mkdocstrings, mdformat, etc.)
+uv sync --group dev
 
-# To install the defined dependencies for your project, just run the install command.
-poetry install
+# Run the CLI from a checkout without installing
+uv run lvlab --help
 
-# Buiding; artifacts show up in ./dist
-poetry build
+# Add a runtime dependency to [project.dependencies]
+uv add <package>
+
+# Add a dev-only dependency to [dependency-groups].dev
+uv add --group dev <package>
+
+# Build wheel + sdist into ./dist
+uv build
 ```
 
-- [pre-commit](https://pre-commit.com/)
-    - hooks
-        - id: check-yaml
-        - id: end-of-file-fixer
-        - id: trailing-whitespace
-        - id: black
+- [pre-commit](https://pre-commit.com/) runs the formatting + hygiene checks
+    that CI also runs on every PR. Hooks: `check-yaml`, `end-of-file-fixer`,
+    `trailing-whitespace`, `black`, `mdformat`.
 
 ```bash
 # Install our pre-commit hooks in the repo after cloning
 pre-commit install
+
+# Run all hooks against every file (useful before opening a PR)
+pre-commit run --all-files
 ```
 
-- [Black - The uncompromising formatter](https://black.readthedocs.io/en/stable/)
+- [black](https://black.readthedocs.io/en/stable/) handles Python formatting;
+    pre-commit runs it for you. Line length is `150` per `.pylintrc` (black's
+    default `88` still applies for new code — pylint just won't yell at lines
+    that black accepted, like long string literals or URLs).
+
+## Unit tests
+
+The unit test suite runs against Python 3.11, 3.12, 3.13, and 3.14 in CI
+(see `.github/workflows/test.yml`).
 
 ```bash
-# Run black on the whole project
-black ./tkc_lvlab
+# Run the full suite locally — fast (subseconds), no libvirt required
+uv run pytest
+
+# Run just one file
+uv run pytest tests/test_virsh.py
 ```
+
+Integration tests that touch real `virsh` / `qemu-img` / libvirt are gated
+by the `LVLAB_INTEGRATION=1` environment variable and are **never** enabled
+in CI. See `tests/conftest.py` and the cross-cutting safety rules in
+`TODO.md` before writing one — every test-owned libvirt domain, qcow2
+file, or ISO must carry the per-session `LVLAB_TEST_PREFIX`, and the
+session-scoped reaper will only ever touch resources whose name starts
+with that prefix.
 
 ## End-to-End Testing
 
-Manual for now, make sure all operations still function after changes
+A smoke-test checklist for verifying CLI changes against a real
+`qemu:///session` hypervisor. There is no automated end-to-end suite —
+intentional, since the test resources are real VMs on the developer's
+own machine.
 
 ```bash
 # Capabilities command

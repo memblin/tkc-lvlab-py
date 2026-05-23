@@ -190,15 +190,36 @@ integration test **bodies** themselves are a follow-up effort.
 
 ______________________________________________________________________
 
-## Phase 4 — Documentation pass after uv + virsh migrations
+## Phase 4 — Documentation pass after uv + virsh migrations ✅ COMPLETE — 2026-05-23
 
-- [ ] `docs/Walkthrough.md` — replace any `poetry build` / pip-install lines
-    with uv equivalents. Remove any "needs libvirt-dev" notes that no
-    longer apply.
-- [ ] `docs/CONTRIBUTING.md` (if it references Poetry — verify).
-- [ ] `README.md` Requirements section: replace `libvirt-python` build
-    requirements with the runtime `libvirt-clients` requirement. Confirm
-    no Poetry remnants.
+- [x] `docs/Walkthrough.md` — full rewrite to match the current CLI
+    (capabilities, cloudinit, destroy, down, hosts, init, snapshot,
+    ssh-config, status, up) and current toolchain (virsh, pycdlib —
+    no `libvirt-python`, no `genisoimage`).
+- [x] `docs/CONTRIBUTING.md` — Tools section rewritten from Poetry to uv
+    (sync/run/add/build), added a Unit tests subsection that documents
+    `uv run pytest` and the `LVLAB_INTEGRATION=1` gate. Kept the
+    branch-naming example and the manual end-to-end smoke checklist.
+- [x] `docs/releases.md` — `poetry version` commands replaced with a
+    direct `pyproject.toml` edit + `uv lock` regeneration. Workflow
+    trigger note made explicit (tag-on-main → wheel build).
+- [x] `README.md` Requirements section: `libvirt-python` C-extension
+    reference dropped; apt install line refreshed to
+    `libvirt-clients` + `virtinst` (no more `libvirt-dev` /
+    `pkg-config`). Title widened to "Ubuntu 22.04 / 24.04".
+
+### Phase 4 follow-ups (deferred to Phase 7)
+
+- API reference pages (`docs/api/*.md`) and mkdocs nav entries for
+    migrated modules belong to Phase 7 (legacy docstring + type-hint
+    conversion). `tkc_lvlab.utils.virsh` was written to the new
+    convention from day one; it's a natural first entry when Phase 7
+    starts.
+- `docs/Why.md` / `docs/Design.md` / `docs/Libvirt.md` / `docs/WIP.md`
+    were skimmed; they are author-narrative or notes-style and don't
+    carry stale toolchain claims. They stay in `exclude_docs` until
+    individually modernized as part of Phase 7's user-facing-docs
+    sweep.
 
 ______________________________________________________________________
 

@@ -295,55 +295,107 @@ Outcome:
     that doesn't know whether its caller is reading `Lvlab.yml` or accepting
     CLI args.
 
-### Architecture (lock these in before implementation)
+### Architecture (locked 2026-05-23)
 
-- [ ] **Library / CLI split.** The shared logic moves to a stable library
-    surface (likely `tkc_lvlab.<core>` or its Phase 8 equivalent
-    `tkc.lvlab.<core>`). The lvlab CLI and the standalone scripts both
-    depend on it; neither imports the other's CLI module.
-- [ ] **No cross-contamination.** `createvm` / `destroyvm` MUST NOT read
+- [x] **Library / CLI split.** Shared logic in `tkc_lvlab.utils.*` (and the
+    higher-level `Machine` / `CloudImage` / `VirtualDisk` / `CloudInitIso`
+    classes already there). Both the lvlab CLI and the standalone scripts
+    depend on this surface; neither imports the other's CLI module.
+- [x] **No cross-contamination.** `createvm` / `destroyvm` MUST NOT read
     `Lvlab.yml`, MUST NOT look up manifest-driven VMs, MUST NOT mutate
-    lvlab's per-environment state directories. `lvlab` reciprocally
-    MUST NOT enumerate or destroy domains that the standalone scripts
-    created. Cross-listing in `lvlab status` is acceptable as a
-    read-only convenience IF and only if it can clearly distinguish
-    one-offs from manifest VMs (see naming below).
-- [ ] **Naming.** Decide explicitly — affects whether the two surfaces can
-    tell each other's VMs apart. The previous `_oneoff` sentinel
-    environment is moot now (one-offs don't have an environment).
-    Candidates:
-    - [ ] **Flat:** standalone scripts use the user-provided name verbatim
-        as the libvirt domain name. Simplest. Risk: name collision with a
-        lvlab manifest VM whose `libvirt_vm_name` happens to match.
-    - [ ] **Prefix:** standalone scripts use e.g. `oneoff-<name>`. Cleanly
-        distinguishable from `<vm_name>_<env>` lvlab names. Recommended.
-    - [ ] **Distinct namespace via libvirt URI:** route standalone scripts
-        to a different `qemu:///...` (e.g. always `qemu:///system` for
-        one-offs, `qemu:///session` for lvlab). Heavier-weight; only worth
-        it if the user already wants the segmentation.
-- [ ] **Distribution shape.** Same wheel ships all three commands. After
-    Phase 8 (src-layout + namespace), `[project.scripts]` reads roughly:
-    `toml     lvlab = "tkc.lvlab.cli:run"     createvm = "tkc.lvlab.scripts.createvm:run"     destroyvm = "tkc.lvlab.scripts.destroyvm:run"     `
+    lvlab's per-environment state directories. `lvlab` reciprocally MUST
+    NOT enumerate or destroy domains that the standalone scripts created.
+- [x] **Naming: `oneoff-<name>` prefix.** Standalone-script domains become
+    `oneoff-<vm_name>` so they're trivially distinguishable from lvlab's
+    `<vm_name>_<env>` (underscore-separated) names. Storage path:
+    `/var/lib/libvirt/images/oneoff/<name>/`. Regression-guard test:
+    `createvm testvm`, then `lvlab status` must not see it.
+- [x] **Distribution shape.** Same wheel ships all three commands. While
+    Phase 8 is deferred, entry points read:
+    `toml     lvlab = "tkc_lvlab.cli:run"     createvm = "tkc_lvlab.scripts.createvm:run"     destroyvm = "tkc_lvlab.scripts.destroyvm:run"     `
+    Phase 8 will rename to `tkc.lvlab.*` later.
+- [x] **Layout ordering: Phase 8 deferred.** Phase 6 lands in the current
+    `tkc_lvlab/` tree. Phase 8 picks up the new `scripts/*.py` files
+    when its sweep runs.
+- [x] **Disk strategy (locked 2026-05-23):** default = current
+    `qemu-img create -b` backing-file behavior. Standalone `createvm`
+    grows an opt-in `--copy`-style flag (name TBD) that flips to
+    lvscripts-style `cp` + `qemu-img resize`, producing a standalone
+    qcow2 with no cloud-images dependency. Lets the operator wipe and
+    re-init `cloud-images/` without breaking VMs that were created with
+    the flag. Manifest workflow (`lvlab up`) stays backing-file always.
 
 ### Implementation work
 
-- [ ] Port lvscripts `createvm` / `deletevm` logic into the lvlab package as
-    `tkc_lvlab/scripts/createvm.py` and `tkc_lvlab/scripts/destroyvm.py`
-    (post-Phase 8: `tkc/lvlab/scripts/...`). Each module exposes a `run()`
-    Click command.
-- [ ] Refactor `tkc_lvlab.utils.{libvirt,cloud_init,images,vdisk}` to expose
-    a clean public library API the standalone scripts can consume without
-    duplication. If lvscripts has a cleaner abstraction, port it and have
-    lvlab use it too — don't keep two implementations.
-- [ ] Port the high-value lvscripts capabilities flagged in
-    `/tmp/lvscripts-inventory.md` (SSH key discovery, password phrase
-    generation, `virsh net-dumpxml` network validation, optional DHCP
-    lease polling).
-- [ ] Sanity-check that `lvlab status` and the standalone scripts cannot
-    observe or touch each other's VMs. A test that creates a one-off via
-    `createvm` and then runs `lvlab status` expecting the one-off to be
-    absent is a useful regression guard.
-- [ ] Tests for both surfaces share the `LVLAB_TEST_PREFIX` safety fixture.
+**Step 1 ✅ COMPLETE** (commit `6151d2e` on `main`, 2026-05-23) —
+ported the three pure lvscripts helpers into `tkc_lvlab/utils/` as the
+CLI-agnostic library foundation:
+
+- `tkc_lvlab/utils/ssh_keys.py` — 7-type key whitelist incl. hardware sk-,
+    home-walk discovery (including `$SUDO_USER`), validation, dedupe.
+- `tkc_lvlab/utils/passwords.py` — 4-word phrase generator with mixed-case
+    floor, `openssl passwd -6` shellout via stdin.
+- `tkc_lvlab/utils/requirements.py` — `check_createvm_tooling()` with
+    apt/dnf/zypper/pacman install hints. Required-binary set adapted to
+    lvlab's reality (no `genisoimage`, no `cp` — pycdlib + qemu-img -b).
+- 56 new tests across the three modules. No new pyproject.toml deps.
+
+**Step 2** (next branch `phase6/02-network-validation`):
+
+- [ ] Port lvscripts `libvirt.get_network_info()` →
+    `tkc_lvlab/utils/network.py` (new module). Parse `virsh net-dumpxml`
+    via stdlib ElementTree; expose `LibvirtNetworkInfo` dataclass with
+    forward_mode, gateway_ip, netmask, dhcp_start, dhcp_end, and a
+    `.subnet` property.
+- [ ] Add `validate_static_ip(ip, info)` that rejects IPs outside the
+    subnet AND inside the DHCP range.
+- [ ] Forward-mode policy helper: NAT → derive gateway/DNS from the
+    network XML; bridge → require explicit gateway/DNS at the call
+    site or raise `LibvirtNetworkError`.
+- [ ] Tests with `virsh net-dumpxml` XML fixtures for NAT and bridge
+    networks, IPv4 boundary cases for `validate_static_ip`.
+
+**Step 3** — cloud-init template adapter for standalone use (no manifest
+context). Either generalize `tkc_lvlab.utils.cloud_init.UserData` to
+accept an explicit dict (no `cloud_init.pubkey` indirection through a
+Machine), or add a thin helper that constructs a UserData-compatible
+dict from raw `createvm` arguments.
+
+**Step 4** — `tkc_lvlab/scripts/createvm.py`:
+
+- [ ] Click-based command. Typer migration is Phase 9 for the whole suite.
+- [ ] Args: `vm_name`, `--distro`, `--memory`, `--cpu`, `--disk-size`,
+    `--network`, `--ip4`, `--public-key`, `--copy` (disk strategy
+    opt-in, see locked decision above), `--uri` (default
+    `qemu:///system`).
+- [ ] Calls `check_createvm_tooling()` first; then network validation;
+    then SSH key discovery + optional `--public-key` merge; then
+    password generation + hash; then cloud-init render; then disk
+    create (backing-file by default, `cp`+resize when `--copy`);
+    then `virt-install`; then optional DHCP-lease polling (NAT only).
+- [ ] Domain name = `oneoff-<vm_name>` per locked naming. Storage path
+    = `/var/lib/libvirt/images/oneoff/<vm_name>/`.
+- [ ] `[project.scripts] createvm = "tkc_lvlab.scripts.createvm:run"`.
+
+**Step 5** — `tkc_lvlab/scripts/destroyvm.py`:
+
+- [ ] Click-based command, takes `vm_name` and `--force`.
+- [ ] Translates the user-supplied name to `oneoff-<vm_name>` before
+    touching libvirt — operator types `destroyvm testvm`, the script
+    operates on domain `oneoff-testvm`.
+- [ ] Snapshot fallback: lvscripts pattern (try undefine, on "has
+    snapshots" failure delete them with `--children` or `--metadata`,
+    retry undefine). Lift into `tkc_lvlab/utils/libvirt.py` as a
+    helper so `Machine.destroy` can use it too.
+- [ ] `[project.scripts] destroyvm = "tkc_lvlab.scripts.destroyvm:run"`.
+
+**Step 6** — tests + docs:
+
+- [ ] Regression-guard integration test: `createvm` a oneoff and verify
+    `lvlab status` does NOT see it; reciprocally a manifest VM stays
+    invisible to `destroyvm` lookups.
+- [ ] Tests for both surfaces share the `LVLAB_TEST_PREFIX` safety
+    fixture so the session-scoped reaper covers oneoff resources.
 - [ ] Docs: extend `README.md` and `docs/Walkthrough.md` with the one-off
     workflow. Explain when to use `lvlab` vs `createvm`/`destroyvm` —
     including the explicit "they don't see each other's VMs" property.

@@ -88,6 +88,10 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 - Several `destroy`/cleanup paths leave files behind on purpose or by oversight — see `docs/Walkthrough.md`. Don't "fix" this without checking whether the user relied on it.
 - A sibling project `lvscripts-py` (allowed via `.claude/settings.local.json`) is referenced for porting advanced features into this repo. Don't import from it; read it and adapt.
 
+## Branching
+
+**Never start work directly on `main`.** This project requires PRs into `main`; release tags on `main` trigger `.github/workflows/build-release.yml`, so anything that lands on `main` outside a reviewed PR risks ending up in a release. Before making code changes, check the current branch — if it is `main`, stop and confirm with the user which topic branch to use (or which to create). Do not invent a branch name and create it yourself without checking first.
+
 ## Git pushes
 
 **Never `git push` from this environment.** There are no push credentials available here, and the user does not want you to try — even if asked. Pushes (and `gh pr create`, tag pushes, etc. that hit the remote) are done by the user from a separate terminal. Commit locally if asked, but stop at the push boundary and let the user take it from there.

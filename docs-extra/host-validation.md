@@ -48,12 +48,13 @@ export PATH="${HOME}/.local/bin:${PATH}"
 cd tkc-lvlab-py
 uv sync --group dev
 
-# 6. Unit tests (fast, no libvirt activity)
-uv run pytest -q
+# 6. Run the full validation in one shot — emits a paste-back-ready
+#    block and tees to scripts/results/<distro>-<sha>.txt.
+scripts/run-validation.sh
 
-# 7. Integration tests (creates real prefixed VMs under
-#    /var/lib/libvirt/images/lvlab-test/, tears them down at the end)
-LVLAB_INTEGRATION=1 uv run pytest tests/test_integration_*.py -v
+# (Or run the two suites individually if you want to iterate:)
+#    uv run pytest -q
+#    LVLAB_INTEGRATION=1 uv run pytest tests/test_integration_*.py -v
 ```
 
 The unit suite should report `272 passed, 9 skipped` (Python 3.11–3.14;
@@ -65,16 +66,23 @@ rather than failing the run.
 
 ## What to record from each host run
 
-For each newly validated host, capture:
+`scripts/run-validation.sh` already captures everything below into a
+single artifact at `scripts/results/<distro>-<sha>.txt` and prints the
+same block to stdout. That file is the paste-back artifact — feed its
+contents back when reporting a host result.
 
-1. `uname -r` and `cat /etc/os-release | grep PRETTY_NAME`
-1. `python3 --version`
-1. The pytest summary lines from both runs (unit + integration).
-1. Any URI skipped, with the skip reason printed by the test.
+The block includes:
+
+1. Distro `PRETTY_NAME`, kernel, system Python, uv version.
+1. Git SHA and branch the run was made against.
+1. Hostname, run timestamp (UTC), invoking user.
+1. Full pytest output for both unit and integration suites, including
+    any per-URI skip reasons.
+1. `OVERALL: PASS` or `OVERALL: FAIL` summary line.
 
 When the matrix is fully green, update the "Supported host distros"
 section at the top of this file with the validation date and the git
-SHA the run was made against.
+SHA each row was validated against.
 
 ## Why these specific distros
 

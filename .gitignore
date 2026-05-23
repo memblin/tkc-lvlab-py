@@ -46,6 +46,10 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *.cover
+
+# Per-host validation outputs written by scripts/run-validation.sh —
+# paste-back artifacts for the host matrix, not source-of-truth.
+scripts/results/
 *.py,cover
 .hypothesis/
 .pytest_cache/

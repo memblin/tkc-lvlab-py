@@ -86,11 +86,75 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 ## Conventions and gotchas
 
 - **Line length is 150** (`.pylintrc`). black is configured by default (88) via pre-commit; both are in effect — black formats, pylint just won't yell about long lines. If you see a line over 88, black either accepted it (string literal, URL, etc.) or it hasn't been run.
-- **No type-hint discipline yet.** `docs/Design.md` calls this out as a known inconsistency; don't refactor existing signatures just to add annotations unless asked.
+- **Type hints are required on new code; existing code is uneven.** See the "Documentation conventions" section below for the full rule. `docs/Design.md` records that this used to be project-wide; the post-mkdocstrings policy supersedes that note for new work. Don't bulk-convert existing signatures as a side effect of an unrelated PR — there's a dedicated Phase in `TODO.md` for that.
 - The CLI mixes business logic into `cli.py` (e.g. orchestration of vdisk creation, ISO writing, deploy). When extending, prefer adding methods to the relevant `Machine` / `CloudImage` / etc. class rather than growing the command body.
 - `parse_config()` is called repeatedly (e.g. once in the command, again inside `Machine.cloud_init` to regenerate the hosts list). Cheap because it's just a file read, but keep that in mind if you ever cache state.
 - Several `destroy`/cleanup paths leave files behind on purpose or by oversight — see `docs/Walkthrough.md`. Don't "fix" this without checking whether the user relied on it.
 - A sibling project `lvscripts-py` (allowed via `.claude/settings.local.json`) is referenced for porting advanced features into this repo. Don't import from it; read it and adapt.
+
+## Documentation conventions
+
+The project uses **MkDocs + Material + mkdocstrings** to generate API docs from
+Google-style docstrings + type hints. Preview locally with:
+
+```bash
+uv sync --group dev
+uv run mkdocs serve   # http://127.0.0.1:8000
+```
+
+The site is configured in `mkdocs.yml`. The `docs/` directory holds both the
+existing user-facing markdown (Walkthrough.md, Design.md, Why.md, etc.) and the
+new mkdocs site files (`index.md`, `api/`). Existing pages remain reachable but
+are out-of-nav until the legacy docs conversion lands (see `TODO.md`).
+
+### For new code — required
+
+- **Type hints on every public function, method, parameter, and return value.**
+  mkdocstrings reads the signature as the source of truth; do not restate types
+  in the docstring body.
+- **Google-style docstrings on every public symbol** (module, class, function,
+  method). Section order: one-line summary → blank line → optional longer
+  description → `Args:` → `Returns:` (or `Yields:`) → `Raises:` → `Example:`.
+  Skip sections that don't apply.
+
+Example shape:
+
+```python
+def parse_checksum_file(path: Path) -> dict[str, str]:
+    """Parse a cloud-image checksum manifest.
+
+    Handles both Fedora's ``SHA256 (file) = hash`` syntax and Debian's
+    ``hash  file`` syntax. When a ``.verified`` companion file exists
+    (post-GPG verification), it takes precedence.
+
+    Args:
+        path: Filesystem path to the checksum file.
+
+    Returns:
+        A dict mapping filename to hex digest.
+
+    Raises:
+        ChecksumParseError: When neither syntax matches any line.
+    """
+```
+
+For classes, document the class itself (one-liner plus an ``Attributes:`` block
+if useful), and document each method separately. `__init__` parameters go in
+the **class-level** docstring's ``Args:`` section, not in `__init__`'s own
+docstring — mkdocstrings renders them under the class.
+
+For modules, put a docstring at the top of the file describing what the module
+provides.
+
+### For existing code — out of scope here
+
+Existing docstrings are free-form and largely untyped. **Do not sweep-convert
+them as a side effect of unrelated PRs.** A dedicated phase in `TODO.md`
+("Legacy docstring conversion") tracks that work.
+
+If you happen to be rewriting a function for unrelated reasons and the new
+shape benefits from a proper docstring + type hints, that's fine — write it
+to the new convention. Don't touch neighbors.
 
 ## Branching
 

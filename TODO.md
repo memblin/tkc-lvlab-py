@@ -1,7 +1,7 @@
 # TODO
 
 Roadmap for the next few sessions. Phases are ordered by dependency, not strict
-calendar. Phase 3 onward is blocked until the Claude session is restarted so
+calendar. Phase 5 onward is blocked until the Claude session is restarted so
 the `.claude/settings.local.json` grant for `lvscripts-py` takes effect.
 
 ---
@@ -34,8 +34,10 @@ matrix that runs on Python 3.11, 3.12, 3.13, and 3.14.
 - [ ] Remove `requirements.txt` (only used by old CI). If we still want a
       pinned export, generate it with `uv export --format requirements-txt`.
 - [ ] Refresh all dep versions to current latest-compatible. Spot-check:
-  - [ ] `libvirt-python` — confirm a wheel exists for 3.13 / 3.14.
-  - [ ] `pycdlib`, `python-gnupg` — same.
+  - [ ] `libvirt-python` — keep pinned in Phase 1 (drops entirely in Phase 2).
+        Don't waste time chasing a 3.13/3.14 wheel — Phase 2 makes the wheel
+        irrelevant.
+  - [ ] `pycdlib`, `python-gnupg` — confirm wheel coverage on 3.11–3.14.
   - [ ] `click`, `jinja2`, `requests`, `tqdm`, `pyyaml` — bump as resolver allows.
 - [ ] Update `.github/workflows/build-release.yml`:
   - [ ] Replace `pip install --user poetry; poetry build` with
@@ -50,13 +52,109 @@ matrix that runs on Python 3.11, 3.12, 3.13, and 3.14.
 - [ ] Verify `pre-commit` still works after the migration (it's independent
       of the build backend; mostly checking nothing references Poetry).
 
-### Phase 1.5 — Test infrastructure (lands together with Phase 1 matrix)
+---
+
+## Phase 2 — Replace `libvirt-python` with `virsh` subprocess calls
+
+**Goal:** eliminate the `libvirt-python` C-extension dependency entirely.
+lvlab already shells out to `virt-install`; mirror that pattern for every
+other libvirt operation via `virsh -c <uri> ...`. This removes our biggest
+supply-chain trap (no more `libvirt-dev` + `pkg-config` build requirement,
+no more waiting for wheels on new Python versions) and unblocks Python 3.14
+in the matrix.
+
+Audit scope (the ~15 call sites we're replacing): every `libvirt.*` /
+`conn.*` / `vm.*` / `snapshot.*` reference in `tkc_lvlab/utils/libvirt.py`
+plus one stray `conn.getCapabilities()` in `tkc_lvlab/cli.py`.
+
+### Implementation
+
+- [ ] Build a small subprocess wrapper at `tkc_lvlab/utils/virsh.py`:
+  - [ ] `run_virsh(uri, args, check=True, capture=True) -> CompletedProcess`
+        — wraps `subprocess.run(["virsh", "-c", uri, *args], env={..., "LC_ALL": "C"})`
+        so output is locale-stable.
+  - [ ] Custom `VirshError(returncode, stderr)` so callers can `except VirshError`
+        without leaking `subprocess.CalledProcessError` everywhere.
+- [ ] Port the `Machine` methods in `tkc_lvlab/utils/libvirt.py`:
+  - [ ] `Machine.exists_in_libvirt` → `virsh list --all --name`, exact match.
+  - [ ] `Machine.destroy` / `Machine.shutdown` / `Machine.poweron` →
+        `virsh destroy|shutdown|start <name>`.
+  - [ ] `Machine.list_snapshots` → `virsh snapshot-list <name> --name`.
+  - [ ] `Machine.create_snapshot` → `virsh snapshot-create <name> --xmlfile <path>`.
+        **Sharp edge:** `--xmlfile` needs a real path. Use `tempfile.NamedTemporaryFile`
+        (delete after) rather than relying on stdin redirection — virsh's stdin
+        handling for `--xmlfile -` varies by version.
+  - [ ] `Machine.delete_snapshot` → `virsh snapshot-delete <name> <snapshot_name>`.
+  - [ ] `Machine.hasCurrentSnapshot` equivalent — `virsh snapshot-list <name> --name`
+        and check non-empty (used in `destroy()` cleanup path).
+  - [ ] `capabilities` command (`cli.py:30-35`) → `virsh capabilities` stdout.
+  - [ ] `status` command (`cli.py:385-422`) → single `virsh list --all` parse,
+        not one `domstate` call per declared VM (cuts startup overhead).
+- [ ] Replace dynamic state-constant reflection. Drop `get_machine_state`
+      (libvirt.py:546) and `_humanize_machine_status` (libvirt.py:493) in
+      their current form:
+  - [ ] `virsh domstate <name>` returns a human string: `running`, `idle`,
+        `paused`, `in shutdown`, `shut off`, `crashed`, `pmsuspended`.
+        Replace the integer-keyed dynamic dict with a hardcoded `str → human`
+        map keyed on those exact strings.
+  - [ ] Use `virsh domstate <name> --reason` for the reason string. Build the
+        analogous reason map.
+  - [ ] Audit every caller that compares against `"VIR_DOMAIN_*"` strings
+        (`cli.py:126`, `cli.py:137`, `cli.py:443`, `cli.py:447`,
+        `libvirt.py:301`, `libvirt.py:307`, `libvirt.py:440`, `libvirt.py:463`)
+        and switch them to the new lowercase virsh state strings.
+- [ ] Drop `libvirt-python` from `[project.dependencies]` in `pyproject.toml`.
+      Regenerate `uv.lock`. Update `CLAUDE.md`'s "Install deps" note — at
+      build time we no longer need `libvirt-dev` / `pkg-config`, only
+      `libvirt-clients` (or distro equivalent) at runtime.
+- [ ] Update `CLAUDE.md` Architecture section: remove `libvirt-python` API
+      references, document the `virsh` subprocess pattern and the
+      `tkc_lvlab/utils/virsh.py` helper.
+- [ ] Remove `continue-on-error: true` for Python 3.14 in the test workflow
+      (Phase 3); 3.14 should be a first-class matrix entry once libvirt-python
+      is gone.
+
+### Standardize destructive-path UX (do it here, not as a separate pass)
+
+We're rewriting all destructive code paths in this phase anyway. Land the
+hardening at the same time so we don't churn these files twice.
+
+- [ ] `snapshot delete` gets a `--force` flag + confirmation prompt, mirroring
+      `destroy` (already done in the Phase 0 incidentals commit, but verify
+      consistency once the underlying call is virsh-based).
+- [ ] Every destructive command surfaces the actual `virsh` stderr on failure
+      paths — no more silent "deletion failed" with no detail.
+- [ ] Audit `down` for whether it should consume the same `--force` semantics
+      as `destroy` (decision pending).
+
+### Phase 2 risks / sharp edges
+
+- **Snapshot XML handoff:** confirm tempfile approach works on all target
+  distros' `virsh` versions. Backup plan: keep XML as a Python heredoc string
+  and write to a temp file inside `run_virsh`.
+- **Locale:** force `LC_ALL=C` for every `virsh` invocation; output parsing
+  depends on it.
+- **Performance:** each `virsh` call pays subprocess startup overhead
+  (~50ms). Fine for interactive CLI use; `status` should batch via a single
+  `virsh list --all` rather than N `domstate` calls.
+- **Error surface change:** existing code catches `libvirt.libvirtError`.
+  After the port it catches `VirshError`. Don't broaden to bare `except Exception`.
+- **Pre-port incidentals already landed:** dead `delete_vdisks()` removed,
+  unused snapshot params cleaned, `snapshot delete` confirm/`--force` added
+  in the pre-Phase-1 housekeeping commit. Don't re-do these.
+
+---
+
+## Phase 3 — Test infrastructure (depends on Phase 1 matrix + Phase 2 port)
+
+Land after Phase 2 — the conftest is dramatically simpler with no
+`libvirt-python` C extension to mock around.
 
 - [ ] Add `.github/workflows/test.yml`:
   - [ ] Matrix: `python-version: ['3.11', '3.12', '3.13', '3.14']`.
   - [ ] Job step: `uv sync --all-extras && uv run pytest -m "not integration"`.
-  - [ ] Mark Python 3.14 `continue-on-error: true` until libvirt-python ships
-        a 3.14 wheel (revisit when it does).
+  - [ ] 3.14 is a first-class entry, **not** `continue-on-error` (libvirt-python
+        is gone by now).
 - [ ] Create `tests/conftest.py` with the safety scaffolding (see
       "Cross-cutting safety rules" below).
 - [ ] Seed a small set of pure-unit tests (no libvirt, no qemu-img) to prove
@@ -67,23 +165,27 @@ matrix that runs on Python 3.11, 3.12, 3.13, and 3.14.
         including the `.verified` swap.
   - [ ] `UserData._is_valid_ssh_public_key()`.
   - [ ] `Machine.libvirt_vm_name` construction (`vm_name_environment`).
-- [ ] Mark anything that touches libvirt or `qemu-img` with
-      `@pytest.mark.integration`; require `LVLAB_INTEGRATION=1` to opt in
-      and never enable it in CI.
+  - [ ] `run_virsh()` wrapper — stub `subprocess.run`, verify args / env /
+        error translation.
+- [ ] Mark anything that touches `virsh` for real, `qemu-img`, or libvirt
+      with `@pytest.mark.integration`; require `LVLAB_INTEGRATION=1` to opt
+      in and never enable it in CI.
 
 ---
 
-## Phase 2 — Documentation pass after uv migration
+## Phase 4 — Documentation pass after uv + virsh migrations
 
 - [ ] `docs/Walkthrough.md` — replace any `poetry build` / pip-install lines
-      with uv equivalents.
+      with uv equivalents. Remove any "needs libvirt-dev" notes that no
+      longer apply.
 - [ ] `docs/CONTRIBUTING.md` (if it references Poetry — verify).
-- [ ] `README.md` Requirements section is libvirt-focused (good) but confirm
+- [ ] `README.md` Requirements section: replace `libvirt-python` build
+      requirements with the runtime `libvirt-clients` requirement. Confirm
       no Poetry remnants.
 
 ---
 
-## Phase 3 — Survey `lvscripts-py` (blocked on session restart)
+## Phase 5 — Survey `lvscripts-py` (blocked on session restart)
 
 The sibling repo at `/home/tkcadmin/repos/github/memblin/lvscripts-py` becomes
 readable after the next Claude restart (the `additionalDirectories` grant we
@@ -108,7 +210,7 @@ just added).
 
 ---
 
-## Phase 4 — Merge `createvm` / `destroyvm` into `lvlab`
+## Phase 6 — Merge `createvm` / `destroyvm` into `lvlab`
 
 Outcome: one package providing both the lab manifest workflow and one-off VM
 creation, sharing the same `Machine` / `CloudImage` / `VirtualDisk` /
@@ -152,26 +254,29 @@ the test suite.
   - [ ] `assert_owned_by_test(name) -> None` — raises if `name` does not
         start with `LVLAB_TEST_PREFIX`. Called before every destructive op
         in test helpers.
-  - [ ] A session-scoped teardown that lists libvirt domains *filtered by
-        the prefix* and reaps any that survived a crashing test. **Never
-        list all domains; only ones matching the prefix.**
+  - [ ] A session-scoped teardown that runs `virsh list --all --name`
+        *filtered by the prefix* and reaps any that survived a crashing test.
+        **Never list all domains; only ones matching the prefix.**
 - [ ] Same prefix applies to:
   - [ ] On-disk paths (`disk_image_basedir` for tests must be a temp dir,
         not the developer's shared `~/.local/lvlab/...`).
   - [ ] Cloud-init ISOs and the per-VM config directory.
 - [ ] Add a lint/grep check (or pytest plugin) that fails CI if a test calls
-      `virDomain.undefine()` / `destroy()` / `os.remove()` on a name that
+      `virsh destroy` / `virsh undefine` / `os.remove()` on a name that
       didn't come from `make_test_name`.
 - [ ] Integration tests **must** use a dedicated `libvirt_uri` or at least a
       dedicated network and storage pool so cleanup can be scoped further.
 
 ---
 
-## Decisions still open (call these out before Phase 4 lands)
+## Decisions still open (call these out before Phase 6 lands)
 
 1. ~~Build backend~~ — decided: `uv_build`. No hatchling, no setuptools.
-2. One-off VM namespacing: sentinel environment `_oneoff` vs distinct prefix.
-3. Whether to keep `createvm` / `destroyvm` as separate console_scripts, or
+2. ~~Python floor~~ — decided: drop 3.10, `requires-python = ">=3.11"`.
+   Phase 2 makes this consequence-free since libvirt-python is gone.
+3. One-off VM namespacing: sentinel environment `_oneoff` vs distinct prefix.
+4. Whether to keep `createvm` / `destroyvm` as separate console_scripts, or
    only expose `lvlab vm create` / `lvlab vm destroy`.
-4. Whether to drop Python 3.10 (currently `^3.10` in `pyproject.toml`) when
-   moving to 3.11+ as the floor. Tentative: yes, drop it.
+5. Phase 2: snapshot XML handoff — tempfile (default plan) vs stdin to
+   `virsh snapshot-create --xmlfile -`. Resolve when implementing.
+6. Phase 2: should `down` consume the same `--force` semantics as `destroy`?

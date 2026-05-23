@@ -146,6 +146,30 @@ Conventions:
     `oneoff/` or any other neighbour, even though they share a
     parent.
 
+### Running integration tests
+
+On a host where the libvirt-group setup from "Host setup" below is
+complete **and the shell session post-dates the `usermod -aG`**, the
+default invocation is plain:
+
+```bash
+LVLAB_INTEGRATION=1 uv run pytest tests/test_integration_*.py
+```
+
+No `sg`, no `sudo`, no extra wrapping. Each test is parametrized over
+`qemu:///session` and `qemu:///system`; URIs that aren't ready (no
+network, no storage-root write access, daemon unreachable) get
+skipped per-URI with a clear reason rather than failing the test.
+
+If integration tests start skipping with the message *"test storage
+root /var/lib/libvirt/images/lvlab-test cannot be created … not
+writable by test user"*, the host is set up correctly but your shell
+session is from before the libvirt-group addition — see the
+"Footgun after `usermod -aG`" callout below. The durable fix is to
+log out and back in; `sg libvirt -c "…"` is an in-session escape
+hatch, **not** the intended invocation pattern for ongoing
+development work.
+
 ## End-to-End Testing
 
 A smoke-test checklist for verifying CLI changes against a real

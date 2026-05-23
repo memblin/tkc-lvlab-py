@@ -11,7 +11,16 @@ from .._logging import get_logger
 from ..config import parse_config, generate_hosts
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
-from .virsh import VirshError, virsh_domstate_reason, virsh_list_all_names
+from .virsh import (
+    DEAD_STATES,
+    SHUTDOWNABLE_STATES,
+    VirshError,
+    run_virsh,
+    virsh_domstate,
+    virsh_domstate_reason,
+    virsh_list_all_names,
+    virsh_snapshot_names,
+)
 
 
 logger = get_logger(__name__)
@@ -282,71 +291,127 @@ class Machine:
             logger.error("%s", " ".join(command))
             return False
 
-    def destroy(self, uri):
-        """Destroy a machine by shutting it down, undefining it, and deleting the directory
+    def destroy(self, uri: str) -> bool:
+        """Forcefully power off, undefine, and clean up files for this machine.
 
-        config_path is to be used in the fugure
+        The sequence is: force-off (if running/paused) -> delete all snapshots
+        -> undefine the domain -> remove on-disk files under
+        ``self.config_fpath``. Each ``virsh`` step is independent; if any step
+        fails the method logs and returns ``False`` without attempting later
+        steps (this preserves the previous "stop at first error" behavior).
+
+        Args:
+            uri: libvirt connection URI (e.g. ``qemu:///session``).
+
+        Returns:
+            ``True`` if the domain was undefined and file cleanup succeeded.
+            ``False`` if the domain was not found, any ``virsh`` call failed,
+            or file cleanup raised.
         """
-        conn = connect_to_libvirt(uri)
+        try:
+            current_vms = virsh_list_all_names(uri)
+        except VirshError as e:
+            logger.error("Failed to list domains at %s: %s", uri, e)
+            return False
 
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
-
-        if self.libvirt_vm_name in current_vms:
-            vm = conn.lookupByName(self.libvirt_vm_name)
-            vm_state, _, _, _ = get_machine_state(vm.state())
-
-            if vm_state in ["VIR_DOMAIN_RUNNING", "VIR_DOMAIN_PAUSED"]:
-                logger.warning("Forcefully shutting down %s", self.vm_name)
-                if vm.destroy() > 0:
-                    logger.error("Failed to forcefully shutdown %s", self.vm_name)
-                vm_state, _, _, _ = get_machine_state(vm.state())
-
-            if vm_state in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
-                if vm.hasCurrentSnapshot():
-                    logger.warning("Deleting all snapshots for %s", self.vm_name)
-                    for snapshot in vm.listAllSnapshots():
-                        logger.info("Deleting snapshot %s", snapshot.getName())
-                        snapshot.delete()
-
-                logger.info("Undefining %s", self.vm_name)
-                if vm.undefine() > 0:
-                    logger.error(
-                        "Failed to undefine (remove from Libvirt) %s ", self.vm_name
-                    )
-                else:
-                    # Done with libvirt connection
-                    conn.close()
-                    try:
-                        machine_files = glob.glob(os.path.join(self.config_fpath, "*"))
-                        for file in machine_files:
-                            if os.path.isfile(file):
-                                logger.info("Removing file %s.", file)
-                                os.remove(file)
-                    except Exception as e:
-                        logger.error("Exception when removing machine files %s", e)
-                        return False
-
-                    try:
-                        # Check if the directory is empty and then remove it
-                        if not os.listdir(self.config_fpath):
-                            logger.info(
-                                "Removing machine directory %s.", self.config_fpath
-                            )
-                            os.rmdir(self.config_fpath)
-                        else:
-                            logger.warning(
-                                "Machine directory %s is not empty.", self.config_fpath
-                            )
-                    except Exception as e:
-                        logger.error("Exception when removing machine files %s", e)
-                        return False
-
-        else:
+        if self.libvirt_vm_name not in current_vms:
             logger.warning(
                 "The virtual machine %s does not exist in this Libvirt URI",
                 self.vm_name,
             )
-            conn.close()
+            return False
+
+        try:
+            vm_state = virsh_domstate(uri, self.libvirt_vm_name)
+        except VirshError as e:
+            logger.error("Failed to query state of %s: %s", self.vm_name, e)
+            return False
+
+        # Force-off if the domain is still running. virsh destroy is the
+        # power-cord-pull equivalent; the previous libvirt-python code called
+        # this on RUNNING or PAUSED.
+        if vm_state in {"running", "paused"}:
+            logger.warning("Forcefully shutting down %s", self.vm_name)
+            try:
+                run_virsh(uri, ["destroy", self.libvirt_vm_name])
+            except VirshError as e:
+                logger.error("Failed to forcefully shutdown %s: %s", self.vm_name, e)
+                return False
+            try:
+                vm_state = virsh_domstate(uri, self.libvirt_vm_name)
+            except VirshError as e:
+                logger.error(
+                    "Failed to query state of %s after destroy: %s", self.vm_name, e
+                )
+                return False
+
+        # Only proceed with snapshot cleanup + undefine when the domain has
+        # actually reached a dead state. If destroy didn't take effect (state
+        # is still running, in shutdown, etc.) we abort rather than undefining
+        # a live domain.
+        if vm_state not in DEAD_STATES:
+            logger.error(
+                "Machine %s is in state %r; refusing to undefine.",
+                self.vm_name,
+                vm_state,
+            )
+            return False
+
+        # Delete every snapshot before undefining. ``virsh undefine`` will
+        # refuse if snapshot metadata exists, so this is mandatory cleanup,
+        # not a courtesy.
+        try:
+            snapshots = virsh_snapshot_names(uri, self.libvirt_vm_name)
+        except VirshError as e:
+            logger.error("Failed to list snapshots for %s: %s", self.vm_name, e)
+            return False
+
+        if snapshots:
+            logger.warning("Deleting all snapshots for %s", self.vm_name)
+            for snap in snapshots:
+                logger.info("Deleting snapshot %s", snap)
+                try:
+                    run_virsh(uri, ["snapshot-delete", self.libvirt_vm_name, snap])
+                except VirshError as e:
+                    logger.error(
+                        "Failed to delete snapshot %s of %s: %s",
+                        snap,
+                        self.vm_name,
+                        e,
+                    )
+                    return False
+
+        logger.info("Undefining %s", self.vm_name)
+        try:
+            run_virsh(uri, ["undefine", self.libvirt_vm_name])
+        except VirshError as e:
+            logger.error(
+                "Failed to undefine (remove from Libvirt) %s: %s", self.vm_name, e
+            )
+            return False
+
+        # Remove on-disk machine files. Mirrors the previous behavior: a
+        # filesystem error here logs and returns False even though libvirt
+        # state has already been cleaned up.
+        try:
+            machine_files = glob.glob(os.path.join(self.config_fpath, "*"))
+            for file in machine_files:
+                if os.path.isfile(file):
+                    logger.info("Removing file %s.", file)
+                    os.remove(file)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error("Exception when removing machine files %s", e)
+            return False
+
+        try:
+            # Check if the directory is empty and then remove it
+            if not os.listdir(self.config_fpath):
+                logger.info("Removing machine directory %s.", self.config_fpath)
+                os.rmdir(self.config_fpath)
+            else:
+                logger.warning("Machine directory %s is not empty.", self.config_fpath)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error("Exception when removing machine files %s", e)
             return False
 
         return True
@@ -440,58 +505,87 @@ class Machine:
                 conn.close()
                 return snapshot_status
 
-    def poweron(self, uri):
-        """Powreon a virtual machine"""
-        create_status = 0
-        conn = connect_to_libvirt(uri)
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
+    def poweron(self, uri: str) -> int:
+        """Start the virtual machine if it is currently shut off or crashed.
 
-        if self.libvirt_vm_name in current_vms:
-            vm = conn.lookupByName(self.libvirt_vm_name)
-            vm_state, _, _, _ = get_machine_state(vm.state())
+        Returns ``0`` on success or when the machine is already running (or
+        absent — preserving the pre-port behavior of warning + returning 0).
+        Returns ``1`` when the ``virsh start`` invocation fails.
 
-            if vm_state in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
-                create_status = vm.create()
+        Args:
+            uri: libvirt connection URI (e.g. ``qemu:///session``).
 
-        else:
+        Returns:
+            ``0`` on success / no-op, ``1`` on ``VirshError``. The integer
+            return type matches the ``> 0`` truthy check in ``cli.py``.
+        """
+        try:
+            current_vms = virsh_list_all_names(uri)
+        except VirshError as e:
+            logger.error("Failed to list domains at %s: %s", uri, e)
+            return 1
+
+        if self.libvirt_vm_name not in current_vms:
             logger.warning(
                 "The virtual machine %s does not exist in this Libvirt URI",
                 self.vm_name,
             )
+            return 0
 
-        conn.close()
-        return create_status
+        try:
+            vm_state = virsh_domstate(uri, self.libvirt_vm_name)
+        except VirshError as e:
+            logger.error("Failed to query state of %s: %s", self.vm_name, e)
+            return 1
 
-    def shutdown(self, uri):
-        """Shutdown the virtual machine"""
-        shutdown_status = 0
-        conn = connect_to_libvirt(uri)
+        if vm_state in DEAD_STATES:
+            try:
+                run_virsh(uri, ["start", self.libvirt_vm_name])
+            except VirshError as e:
+                logger.error("Failed to power on %s: %s", self.vm_name, e)
+                return 1
 
-        # Get a list of current VMs
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
+        return 0
 
-        if self.libvirt_vm_name in current_vms:
-            vm = conn.lookupByName(self.libvirt_vm_name)
-            vm_state, _, _, _ = get_machine_state(vm.state())
+    def shutdown(self, uri: str) -> int:
+        """Gracefully shut down the virtual machine if it is currently active.
 
-            if vm_state in [
-                "VIR_DOMAIN_RUNNING",
-                "VIR_DOMAIN_BLOCKED",
-                "VIR_DOMAIN_PAUSED",
-                "VIR_DOMAIN_PMSUSPENDED",
-            ]:
-                shutdown_status = vm.shutdown()
+        Active means any of ``running``, ``idle`` (i.e. blocked on resource),
+        ``paused``, or ``pmsuspended``. Already-stopped domains are a no-op.
 
-            if shutdown_status > 0:
-                logger.error("Error with machine.shutdown")
+        Args:
+            uri: libvirt connection URI (e.g. ``qemu:///session``).
 
-        else:
+        Returns:
+            ``0`` on success / no-op, ``1`` on ``VirshError``. The integer
+            return type matches the ``> 0`` truthy check in ``cli.py``.
+        """
+        try:
+            current_vms = virsh_list_all_names(uri)
+        except VirshError as e:
+            logger.error("Failed to list domains at %s: %s", uri, e)
+            return 1
+
+        if self.libvirt_vm_name not in current_vms:
             logger.warning(
                 "The virtual machine %s does not exist in Libvirt", self.vm_name
             )
+            return 0
 
-        conn.close()
-        return shutdown_status
+        try:
+            vm_state = virsh_domstate(uri, self.libvirt_vm_name)
+        except VirshError as e:
+            logger.error("Failed to query state of %s: %s", self.vm_name, e)
+            return 1
+
+        if vm_state in SHUTDOWNABLE_STATES:
+            try:
+                run_virsh(uri, ["shutdown", self.libvirt_vm_name])
+            except VirshError as e:
+                logger.error("Error with machine.shutdown: %s", e)
+                return 1
+
+        return 0
 
 
 def connect_to_libvirt(uri=None):

@@ -3,7 +3,10 @@
 import os
 import subprocess
 
-import click
+from .._logging import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class VirtualDisk:
@@ -54,7 +57,9 @@ class VirtualDisk:
             try:
                 os.makedirs(os.path.dirname(self.fpath))
             except Exception as e:  # pylint: disable=broad-except
-                click.echo(f"Exception creating : {e}")
+                logger.error(
+                    "Exception creating %s: %s", os.path.dirname(self.fpath), e
+                )
                 return False
 
         try:
@@ -66,7 +71,7 @@ class VirtualDisk:
             )
             return True
         except subprocess.CalledProcessError as e:
-            click.echo(f"Error in qemu-img call: {e}")
+            logger.error("Error in qemu-img call: %s", e)
             return False
 
     def delete(self):
@@ -75,4 +80,4 @@ class VirtualDisk:
             try:
                 os.remove(self.fpath)
             except Exception as e:  # pylint: disable=broad-except
-                click.echo(f"Exception removing vdisk: {e}")
+                logger.error("Exception removing vdisk: %s", e)

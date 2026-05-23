@@ -179,6 +179,13 @@ own machine.
 
 ### Host setup
 
+For the validated host distros — Debian 12/13, Ubuntu 24.04, AlmaLinux 10,
+Fedora 44 — `scripts/host-bootstrap.sh` does the package install,
+libvirt group setup, and `/var/lib/libvirt/images/lvlab-test/`
+creation in one go. See `docs-extra/host-validation.md` for the full
+matrix and the procedure for recording a validated run. The manual
+notes below remain authoritative for any host outside that set.
+
 The smoke tests assume your user can talk to `qemu:///system` (or
 `qemu:///session` if you prefer rootless). The two URIs need different
 host setup:

@@ -433,6 +433,127 @@ Reshape the package so:
 
 ______________________________________________________________________
 
+## Phase 9 — Migrate CLI from Click to Typer
+
+**Hard constraint: preserve current user experience.** Every command name,
+positional argument, option name, default value, exit code, and visible
+behavior must stay identical. Users who scripted against `lvlab` today
+should not need to change a single character. The migration is a refactor
+under the hood, not a CLI redesign.
+
+### Why
+
+Typer is a thin layer over Click that:
+
+- Drives argument parsing from type hints, which aligns with the
+    Phase 7 docstring + typing convention already in flight.
+- Reduces decorator boilerplate (`@click.option(...)` repeated once per
+    parameter becomes a typed function-arg default).
+- Gives us richer `--help` output (Rich-rendered) and shell-completion
+    generation as freebies — opt-in, not forced.
+- Plays nicely with mkdocstrings since command functions look like
+    normal typed Python functions, not stacks of decorators.
+
+### Work this implies
+
+- [ ] Add `typer>=0.12` to `[project] dependencies` in `pyproject.toml`.
+    Keep `click` as a transitive (Typer pulls it in) — do **not** add it
+    as a direct dep just to use a couple of helpers; if you need
+    `click.confirm`, use `typer.confirm` instead.
+- [ ] Replace `@click.group()` on `run` with `typer.Typer(...)`. Pass
+    `context_settings={"help_option_names": ["-h", "--help"]}` so `-h`
+    still works. Set `no_args_is_help=True` to match current behavior
+    (Click's group shows help by default; Typer needs this opt-in).
+- [ ] Replace `@click.command()` with `@app.command()` for every
+    subcommand (`up`, `down`, `destroy`, `init`, `status`, `hosts`,
+    `ssh-config`, `cloudinit`, `capabilities`, `snapshot list/create/delete`).
+- [ ] Replace `@click.argument("vm_name")` with a typed positional:
+    `vm_name: str`. For optional args that default to None
+    (`snapshot_description`), use
+    `snapshot_description: Optional[str] = typer.Argument(None)`.
+- [ ] Replace `@click.option("--force", is_flag=True, ...)` with
+    `force: bool = typer.Option(False, "--force", help="...")`. Make
+    sure both short and long forms (where present today) are listed.
+- [ ] Replace verbosity flags (`-v/--verbose count` and `-q/--quiet`)
+    with `verbose: int = typer.Option(0, "-v", "--verbose", count=True)`
+    and `quiet: bool = typer.Option(False, "-q", "--quiet")` on the
+    main callback. Typer's callback is the analog of Click's group
+    body. **Verify the call to `configure_logging(verbosity=verbose, quiet=quiet)` still fires before any subcommand body runs** — Typer's
+    callback semantics differ slightly from Click's group.
+- [ ] Replace `click.echo` / `click.confirm` with `typer.echo` /
+    `typer.confirm`. Audit each: a few cli.py call sites currently
+    write to stderr via `click.echo(..., err=True)` — Typer's
+    equivalent is `typer.echo(..., err=True)`. The status command's
+    table output should look identical char-for-char.
+- [ ] Subcommand groups (`snapshot list/create/delete`) become
+    `snapshot_app = typer.Typer()` + `app.add_typer(snapshot_app, name="snapshot")`.
+- [ ] **Help-text parity check.** Run `uv run lvlab --help` and
+    `uv run lvlab <each command> --help` before and after; the
+    rendered text should match (or you must justify each diff). Rich
+    rendering can be turned off with
+    `app = typer.Typer(rich_markup_mode=None)` if it shifts column
+    widths or color in ways that break user expectations.
+- [ ] **Exit-code parity check.** Verify failure paths still
+    `sys.exit(1)` exactly where they did before. Typer translates
+    raised exceptions differently than raw Click; double-check
+    `VirshError` / `TypeError` handling in commands that have
+    explicit try/except blocks.
+- [ ] **Test migration.** Click's `CliRunner` works on Typer apps
+    (since Typer uses Click under the hood) — call
+    `CliRunner().invoke(app, [...])` against the Typer app object
+    the same way you do today. **Do not rewrite the test surface as
+    part of this PR** unless a test breaks for a real reason; just
+    swap the app instance.
+- [ ] **CLAUDE.md update**: Architecture section mentions "Click-based
+    CLI" — change to "Typer-based CLI (Click under the hood)." Note
+    that subcommand bodies should still grow via methods on
+    `Machine` / `CloudImage` / etc., not by bloating the command
+    function.
+- [ ] Manual smoke test the full happy path (`lvlab init`, `lvlab up`,
+    `lvlab status`, `lvlab snapshot create`, `lvlab snapshot list`,
+    `lvlab destroy`) before merging. Type-checker and test suite
+    catch a lot but not help-text drift.
+
+### Optimization opportunities (do only if they don't shift UX)
+
+- Replace ad-hoc `parse_config()` + `get_machine_by_vm_name()` boilerplate
+    at the top of every subcommand with a Typer `Depends`-style helper
+    (Typer doesn't have native DI, but a simple callable injected as a
+    default works). Saves ~10 lines per subcommand.
+- Enable shell completion (`lvlab --install-completion`) as an opt-in
+    flag. Don't auto-install.
+- Use `typer.style` / `rich` for `lvlab status` color formatting —
+    **only** if the user opts in via `--color/--no-color` or a config
+    flag. Default must remain plain to match today.
+
+### When to schedule
+
+- **After Phase 8 (src-layout)** is the natural slot — Phase 8 rewrites
+    every import path anyway, and Typer's callback semantics are
+    sensitive to module structure. Doing both at once would tangle two
+    unrelated diffs; doing Phase 9 right after means a clean rebase on
+    the new layout.
+- **Not during Phase 2/3** — too much CLI surface still moving.
+
+### Risk flags
+
+- **Help-text drift is the easiest way to break UX without noticing.**
+    Snapshot `--help` output for every command before/after and diff it
+    in the PR description.
+- **`typer.Argument` vs `typer.Option` defaulting for positional with default**:
+    Click allows `@click.argument(..., default=None, required=False)` cleanly.
+    Typer is stricter about Optional. Confirm
+    `lvlab snapshot create <vm> <snap>` (without description) still works.
+- **`no_args_is_help=True`** behavior differs from Click's group default
+    — Click shows help with exit 0; Typer with this flag also exits 0
+    but the message routing changes. Test with `uv run lvlab` (no args)
+    and confirm exit code + stderr/stdout split matches today.
+- **Rich rendering may swallow ANSI in some terminals** (e.g. piped to
+    `less` without `-R`). Disable with `rich_markup_mode=None` if any
+    user-reported regression.
+
+______________________________________________________________________
+
 ## Decisions still open (call these out before Phase 6 lands)
 
 1. ~~Build backend~~ — decided: `uv_build`. No hatchling, no setuptools.

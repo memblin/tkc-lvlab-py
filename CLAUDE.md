@@ -16,23 +16,27 @@ Because state lives in libvirt + on-disk qcow2 files, **bugs here can damage rea
 
 ## Build / dev / lint commands
 
-This project uses Poetry. There is **no test suite yet** — `tests/__init__.py` is empty. Don't claim something is "tested" because CI is green; CI only runs pre-commit.
+This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). There is **no test suite yet** — `tests/__init__.py` is empty. Don't claim something is "tested" because CI is green; CI only runs pre-commit.
 
 ```bash
-# Install deps (needs libvirt-dev / pkg-config on the host for libvirt-python)
-poetry install
+# Sync deps into .venv (needs libvirt-dev / pkg-config on the host until Phase 2
+# of TODO.md lands — libvirt-python is a C extension that compiles against them)
+uv sync
+
+# Sync with dev tools (pytest etc. from the [dependency-groups] dev table)
+uv sync --group dev
 
 # Run the CLI from a checkout without installing
-poetry run lvlab --help
+uv run lvlab --help
 
-# Build a wheel into ./dist
-poetry build
+# Build a wheel and sdist into ./dist
+uv build
 
 # Format + basic hygiene (black, trailing whitespace, EOF, yaml check)
 pre-commit run --all-files
 ```
 
-Python is pinned to `^3.10` in `pyproject.toml`. The release workflow builds with 3.13.
+Python floor is `>=3.11` in `pyproject.toml`. The release workflow builds with 3.13.
 
 ## Architecture
 

@@ -21,17 +21,14 @@ the base image information.
 
 ## Installation
 
-- Install the repo latest release into a native Python 3 venv
+- Install the latest release wheel as an isolated tool with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-# Create a venv if you don't have one you already want to use
-python -m venv ~/.venvs/lvlab
+# Install uv if you don't already have it
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Activate the venv
-source ~/.venvs/lvlab/bin/activate
-
-# Use pip to install the release wheel for the latest package
-pip install https://github.com/memblin/tkc-lvlab-py/releases/download/0.2.1/tkc_lvlab-0.2.1-py3-none-any.whl
+# Install the release wheel directly
+uv tool install https://github.com/memblin/tkc-lvlab-py/releases/download/0.2.4/tkc_lvlab-0.2.4-py3-none-any.whl
 
 # lvlab should be ready for use
 lvlab up salt.local
@@ -40,7 +37,9 @@ lvlab up salt.local
 virsh -c qemu:///system list
 ```
 
-- Option B: Clone this repo local, build with `poetry build` and install the wheel from the ./dist directory.
+- Option B: Clone this repo, build a wheel with `uv build`, and `uv tool install ./dist/tkc_lvlab-*.whl`.
+
+- Option C (for active development): Clone, then `uv sync` to create a dev env and `uv run lvlab --help` to invoke the CLI from a checkout.
 
 ## Help Output
 

@@ -17,7 +17,9 @@ environment:
       shared_directories:
         # requires mounting in guest like:
         # mount -t virtiofs gitrepos /srv/git
-        - source: /home/crow/repos
+        # ``~`` and ``$HOME`` are expanded against the user running lvlab,
+        # so the example stays portable across machines.
+        - source: ~/repos
           mount_tag: gitrepos
       cloud_init:
         user: root
@@ -43,7 +45,7 @@ environment:
         # other defaults still apply. Below, salt.local mounts both `gitrepos`
         # (from defaults) and an additional `saltsrc` mount.
         shared_directories:
-          - source: /home/crow/salt
+          - source: ~/salt
             mount_tag: saltsrc
 
       - vm_name: vault.local

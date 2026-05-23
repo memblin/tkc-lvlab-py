@@ -110,3 +110,51 @@ def test_exists_in_libvirt_list_failure_propagates(machine: Machine) -> None:
     ):
         with pytest.raises(VirshError):
             machine.exists_in_libvirt(URI)
+
+
+# ---------------------------------------------------------------------------
+# __init__ — shared_directories source-path expansion
+# ---------------------------------------------------------------------------
+
+
+def test_shared_directories_source_expands_tilde(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """``~/path`` in a manifest's shared_directories source gets expanded
+    against the user's $HOME so the same manifest works across machines."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_defaults = {
+        "shared_directories": [
+            {"source": "~/repos", "mount_tag": "gitrepos"},
+        ],
+        "interfaces": {"nameservers": {}},
+    }
+    environment = {"name": "lab"}
+    machine_cfg = {"vm_name": "web01"}
+
+    m = Machine(machine_cfg, environment, config_defaults)
+
+    assert m.shared_directories == [
+        {"source": str(tmp_path / "repos"), "mount_tag": "gitrepos"},
+    ]
+
+
+def test_shared_directories_source_expands_envvar(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """``$VAR``-style references in shared_directories source are also
+    expanded — matches the behavior of disk_image_basedir."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LVLAB_TEST_SRC", str(tmp_path / "custom"))
+    config_defaults = {
+        "shared_directories": [
+            {"source": "$LVLAB_TEST_SRC", "mount_tag": "custom"},
+        ],
+        "interfaces": {"nameservers": {}},
+    }
+    environment = {"name": "lab"}
+    machine_cfg = {"vm_name": "web01"}
+
+    m = Machine(machine_cfg, environment, config_defaults)
+
+    assert m.shared_directories[0]["source"] == str(tmp_path / "custom")

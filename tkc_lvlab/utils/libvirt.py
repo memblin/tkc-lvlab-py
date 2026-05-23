@@ -143,6 +143,14 @@ class Machine:
             }
         machine["shared_directories"] = list(merged_shared_dirs.values())
 
+        # Expand ``~`` and ``$HOME`` references in shared_directories source
+        # paths so the manifest can stay portable across users without
+        # hardcoding a specific home dir. Matches the expansion behavior
+        # already applied to ``disk_image_basedir`` further down.
+        for sd in machine["shared_directories"]:
+            if "source" in sd:
+                sd["source"] = os.path.expanduser(os.path.expandvars(sd["source"]))
+
         # Apply machine defaults
         machine = {**config_defaults, **machine}
 

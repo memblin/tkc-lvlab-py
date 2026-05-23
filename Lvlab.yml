@@ -16,7 +16,7 @@ environment:
             search: [local]
             addresses: [192.168.122.1]
       shared_directories:
-        - source: /home/crow/repos
+        - source: ~/repos
           mount_tag: gitrepos
       cloud_init:
         user: root

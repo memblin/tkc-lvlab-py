@@ -22,6 +22,7 @@ from .utils.libvirt import (
 )
 from .utils.vdisk import VirtualDisk
 from .utils.images import CloudImage
+from .utils.virsh import VirshError, virsh_capabilities
 
 
 logger = get_logger(__name__)
@@ -47,14 +48,14 @@ def run(verbose, quiet):
 
 
 @click.command()
-def capabilities():
-    """Hypervisor Capabilities"""
-    conn = connect_to_libvirt()
-
-    caps = conn.getCapabilities()
+def capabilities() -> None:
+    """Print the raw hypervisor capabilities XML for qemu:///session."""
+    try:
+        caps = virsh_capabilities("qemu:///session")
+    except VirshError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
     click.echo("Capabilities:\n" + caps)
-
-    conn.close()
 
 
 @click.command()

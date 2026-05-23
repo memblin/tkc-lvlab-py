@@ -98,7 +98,19 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 
 ## Git pushes
 
-**Never `git push` from this environment.** There are no push credentials available here, and the user does not want you to try — even if asked. Pushes (and `gh pr create`, tag pushes, etc. that hit the remote) are done by the user from a separate terminal. Commit locally if asked, but stop at the push boundary and let the user take it from there.
+**Pushes via `gh`'s authenticated PAT are allowed when the user has asked for them**, scoped to the PAT's `contents:write` + `pull-requests:write`. That means `git push` of feature/topic branches and `gh pr create` against `main` are fine in those cases.
+
+The remote `origin` is configured for SSH (`git@github.com:...`) but the gh PAT only authenticates HTTPS. Two consequences:
+- For pushes, push to the HTTPS URL explicitly (`git push -u https://github.com/memblin/tkc-lvlab-py.git <branch>`) — `gh auth git-credential` is wired into the global gitconfig and supplies the token. Don't rewrite `origin`; the user uses SSH from their own terminal.
+- Fetches in this environment will also need the HTTPS URL (e.g. `git pull https://github.com/memblin/tkc-lvlab-py.git main`) because no SSH key here has read access.
+
+**Still off-limits without an explicit, scoped request:**
+- Force-push of any kind (`--force`, `--force-with-lease`).
+- Pushing tags — tag pushes on `main` trigger `.github/workflows/build-release.yml` and cut a real GitHub release. See "Releasing".
+- Pushes directly to `main` (the "Branching" rule still applies — work goes through PRs).
+- `gh pr merge`, `gh pr close`, branch deletion on the remote, or any write to issues/discussions/releases the user hasn't asked for.
+
+If a PR is already open on a branch, prefer adding follow-up commits over force-pushing.
 
 ## Releasing
 

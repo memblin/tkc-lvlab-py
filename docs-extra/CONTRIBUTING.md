@@ -51,7 +51,7 @@ These are some common uv commands:
 # Sync runtime deps into .venv
 uv sync
 
-# Sync runtime + dev tools (pytest, mkdocs, mkdocstrings, mdformat, etc.)
+# Sync runtime + dev tools (pytest, zensical, mkdocstrings, mdformat, etc.)
 uv sync --group dev
 
 # Run the CLI from a checkout without installing

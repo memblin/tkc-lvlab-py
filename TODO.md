@@ -992,9 +992,9 @@ covering the post-0.2 themes:
 
 ______________________________________________________________________
 
-## Phase 11 — Migrate docs from MkDocs + Material to Zensical (UNBLOCKED — 2026-05-23)
+## Phase 11 — Migrate docs from MkDocs + Material to Zensical ✅ COMPLETE 2026-05-23
 
-**Status:** UNBLOCKED. The `exclude_docs` upstream gap was resolved via resolution path 2 (relocate excluded files): all 10 entries moved out of `docs/` into a new sibling `docs-extra/` directory that the doc-builder never scans, and `exclude_docs:` is gone from `mkdocs.yml`. The dependency swap (mkdocs → zensical) itself is now optional and can be picked up whenever the user wants to retire MkDocs ahead of the 2.0 cutover. Build remains green on MkDocs + Material in the interim.
+**Status:** COMPLETE. The `exclude_docs` upstream gap was resolved via resolution path 2 (relocate excluded files): all 10 entries moved out of `docs/` into a new sibling `docs-extra/` directory that the doc-builder never scans, and `exclude_docs:` is gone from `mkdocs.yml`. The dependency swap landed in the same session: `mkdocs` + `mkdocs-material` dropped, `zensical` added, `mkdocs.yml` kept (Zensical reads it without a rewrite). Strict build (`uv run zensical build -s`) is clean and the `docs-extra/` files do not render.
 
 **Original motivation:** Surfaced 2026-05-23 during the Phase 8 `uv run mkdocs build --strict` run, which now prints a deprecation banner from the Material for MkDocs team:
 
@@ -1076,29 +1076,40 @@ This is a hard failure of the Phase 11 brief's "Preserve out-of-nav pages" requi
     `uv run pre-commit run --all-files` clean,
     `uv run pytest -q` still 272 passed / 9 skipped.
 
-### Remaining work (optional — Zensical dep swap can wait)
+### Dep swap (done in the same session as the relocate)
 
-The relocate is independently complete. The MkDocs → Zensical
-dependency swap is now an independent piece of work that can be
-picked up at any time. When/if you want to do it:
-
-- [ ] `pyproject.toml` `[dependency-groups] dev` swap — drop
-    `mkdocs`, `mkdocs-material`; add `zensical`. Keep
+- [x] `pyproject.toml` `[dependency-groups] dev` swap — dropped
+    `mkdocs`, `mkdocs-material`; added `zensical>=0.0.43`. Kept
     `mkdocstrings[python]` (Zensical delegates to it).
-- [ ] Keep `mkdocs.yml` (Zensical reads it) or migrate to
-    `zensical.toml`. The mkdocs.yml path is lowest-risk.
-- [ ] Replace `uv run mkdocs build --strict` and `uv run mkdocs serve`
+- [x] Kept `mkdocs.yml` as the config — Zensical reads it directly,
+    no rewrite needed. The TOML migration was rejected for being
+    config-churn-for-aesthetics.
+- [x] Replaced `uv run mkdocs build --strict` / `uv run mkdocs serve`
     in `CLAUDE.md` and `docs-extra/CONTRIBUTING.md` with
     `uv run zensical build -s` / `uv run zensical serve`.
-- [ ] `.pre-commit-config.yaml` mdformat pins need bumping to match
-    Zensical's dep set (`mdformat>=1.0`, `mdformat-mkdocs>=5.1`,
-    `mdformat-gfm>=1.0` vs. the older pins).
-- [ ] Verify `zensical build -s` (strict) passes clean and that
-    the `docs-extra/` files do NOT render.
-- [ ] Confirm GitHub Pages deployment story (currently no
-    docs-deploy workflow exists; site URL
-    `https://memblin.github.io/tkc-lvlab-py/` is referenced but
-    not served — this is a separate item, not Phase 11 scope).
+- [x] **mdformat pre-commit pins stay on 0.7.21.** The earlier spike
+    note claimed a "version conflict" with Zensical's transitive
+    `mdformat>=1.0`. That framing was wrong: pre-commit's hook env
+    is isolated from the project venv, so the two mdformat
+    installs coexist without conflict. Also Zensical doesn't
+    directly depend on mdformat — the 1.0 chain comes from our
+    explicit `mdformat-mkdocs` dev-group dep. Pinning the
+    pre-commit hook to 0.7.21 keeps formatting stable; bumping to
+    1.0 tripped a "renders to different HTML" upstream safety net
+    on TODO.md (fails even with no plugins loaded — confirmed
+    upstream regression). The hook config carries a comment
+    explaining the version gap.
+- [x] Verified `uv run zensical build -s` clean and the
+    `docs-extra/` files do NOT render. `find site/ -name 'Walkthrough*' -o -name 'CONTRIBUTING*' -o -name 'lvscripts-survey*'` returns empty.
+
+### Out of scope (separate items)
+
+- [ ] GitHub Pages deployment workflow. The site URL
+    `https://memblin.github.io/tkc-lvlab-py/` is referenced in
+    `mkdocs.yml` but no docs-deploy workflow exists today. This
+    is a separate piece of work (likely an `actions/deploy-pages`
+    job triggered on tag pushes or main pushes); not Phase 11
+    scope.
 
 ______________________________________________________________________
 

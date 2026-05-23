@@ -23,6 +23,15 @@ repos:
         #   delimited by ``---``; mdformat treats that delimiter as a
         #   horizontal rule and collapses the frontmatter into a header,
         #   which breaks skill discovery.
+        #
+        # Version note: this hook stays on mdformat 0.7.21 even though
+        # the project's dev-group transitively pulls mdformat 1.0 (via
+        # mdformat-mkdocs 5.1). Pre-commit uses an isolated env per
+        # hook, so there's no actual conflict — the two installs live
+        # side-by-side. mdformat 1.0 tripped a "renders to different
+        # HTML" safety net on TODO.md (an upstream regression — fails
+        # even with no plugins loaded), so the older pin stays until
+        # that's resolved upstream.
         exclude: ^(docs/api/|\.claude/skills/)
         additional_dependencies:
           - mdformat-mkdocs==4.1.2

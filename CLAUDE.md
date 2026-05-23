@@ -99,18 +99,23 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 
 ## Documentation conventions
 
-The project uses **MkDocs + Material + mkdocstrings** to generate API docs from
-Google-style docstrings + type hints. Preview locally with:
+The project uses **Zensical + mkdocstrings** to generate API docs from
+Google-style docstrings + type hints. Zensical is the Material-for-MkDocs
+maintainer's MkDocs successor; it reads the existing `mkdocs.yml` directly.
+Preview locally with:
 
 ```bash
 uv sync --group dev
-uv run mkdocs serve   # http://127.0.0.1:8000
+uv run zensical serve   # http://127.0.0.1:8000
+# Strict build for CI-equivalent verification:
+uv run zensical build -s
 ```
 
-The site is configured in `mkdocs.yml`. The `docs/` directory holds both the
-existing user-facing markdown (Walkthrough.md, Design.md, Why.md, etc.) and the
-new mkdocs site files (`index.md`, `api/`). Existing pages remain reachable but
-are out-of-nav until the legacy docs conversion lands (see `TODO.md`).
+The site is configured in `mkdocs.yml` (Zensical reads it without a rewrite).
+The `docs/` directory holds the published site files (`index.md`, `api/`).
+Files that should NOT render in the public site live in the sibling
+`docs-extra/` directory, which the doc-builder never scans — see Phase 11
+in `TODO.md` for the layout decision.
 
 ### For new code — required
 

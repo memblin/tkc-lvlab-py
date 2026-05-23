@@ -218,31 +218,6 @@ class Machine:
                 else:
                     click.echo(f"Failed to create Virtual Disk: {vdisk.fpath}")
 
-    def delete_vdisks(self, environment={}, config_defaults={}, cloud_image=None):
-        """Delete all machine virtual disks"""
-
-        for index, disk in enumerate(self.disks):
-            vdisk = VirtualDisk(
-                self.hostname,
-                disk,
-                index,
-                cloud_image,
-                environment,
-                config_defaults,
-            )
-
-            if vdisk.exists():
-                click.echo(f"Virtual Disk: {vdisk.name} exists at {vdisk.fpath}")
-                if vdisk.delete():
-                    if vdisk.exists():
-                        click.echo(f"Deletion of virtual disk appears to have failed.")
-                    else:
-                        click.echo(f"Deletion of virtual disk successful.")
-            else:
-                click.echo(
-                    f"Virtual Disk: {vdisk.name} does not exist at {vdisk.fpath}"
-                )
-
     def deploy(self, config_path, config_defaults, uri):
         """Use virt-install to create a virtual machine"""
         command = [

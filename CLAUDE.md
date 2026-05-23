@@ -16,23 +16,27 @@ Because state lives in libvirt + on-disk qcow2 files, **bugs here can damage rea
 
 ## Build / dev / lint commands
 
-This project uses Poetry. There is **no test suite yet** — `tests/__init__.py` is empty. Don't claim something is "tested" because CI is green; CI only runs pre-commit.
+This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). There is **no test suite yet** — `tests/__init__.py` is empty. Don't claim something is "tested" because CI is green; CI only runs pre-commit.
 
 ```bash
-# Install deps (needs libvirt-dev / pkg-config on the host for libvirt-python)
-poetry install
+# Sync deps into .venv (needs libvirt-dev / pkg-config on the host until Phase 2
+# of TODO.md lands — libvirt-python is a C extension that compiles against them)
+uv sync
+
+# Sync with dev tools (pytest etc. from the [dependency-groups] dev table)
+uv sync --group dev
 
 # Run the CLI from a checkout without installing
-poetry run lvlab --help
+uv run lvlab --help
 
-# Build a wheel into ./dist
-poetry build
+# Build a wheel and sdist into ./dist
+uv build
 
 # Format + basic hygiene (black, trailing whitespace, EOF, yaml check)
 pre-commit run --all-files
 ```
 
-Python is pinned to `^3.10` in `pyproject.toml`. The release workflow builds with 3.13.
+Python floor is `>=3.11` in `pyproject.toml`. The release workflow builds with 3.13.
 
 ## Architecture
 
@@ -87,6 +91,14 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 - `parse_config()` is called repeatedly (e.g. once in the command, again inside `Machine.cloud_init` to regenerate the hosts list). Cheap because it's just a file read, but keep that in mind if you ever cache state.
 - Several `destroy`/cleanup paths leave files behind on purpose or by oversight — see `docs/Walkthrough.md`. Don't "fix" this without checking whether the user relied on it.
 - A sibling project `lvscripts-py` (allowed via `.claude/settings.local.json`) is referenced for porting advanced features into this repo. Don't import from it; read it and adapt.
+
+## Branching
+
+**Never start work directly on `main`.** This project requires PRs into `main`; release tags on `main` trigger `.github/workflows/build-release.yml`, so anything that lands on `main` outside a reviewed PR risks ending up in a release. Before making code changes, check the current branch — if it is `main`, stop and confirm with the user which topic branch to use (or which to create). Do not invent a branch name and create it yourself without checking first.
+
+## Git pushes
+
+**Never `git push` from this environment.** There are no push credentials available here, and the user does not want you to try — even if asked. Pushes (and `gh pr create`, tag pushes, etc. that hit the remote) are done by the user from a separate terminal. Commit locally if asked, but stop at the push boundary and let the user take it from there.
 
 ## Releasing
 

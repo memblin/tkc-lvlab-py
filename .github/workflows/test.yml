@@ -29,5 +29,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Sync dev deps
         run: uv sync --group dev
+      - name: Integration-test safety lint
+        # Phase 3 L193 / Cross-cutting L462 — static guard ensuring every
+        # @pytest.mark.integration function declares the test-owned
+        # resource names it operates on via assert_owned_by_test().
+        # Complements the runtime guard in tests/conftest.py.
+        run: uv run python tests/lint_test_safety.py
       - name: Run pytest (unit tests only)
         run: uv run pytest -m "not integration"

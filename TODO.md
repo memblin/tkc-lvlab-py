@@ -196,11 +196,12 @@ integration test **bodies** themselves are a follow-up effort.
         existing integration test. `tests/integration_helpers.py`
         derives `network_type` from the URI; `_uri_is_test_ready`
         drops the `default`-network check for session URIs.
-- [ ] Add the lint/grep check that fails CI if any test calls
-    `virsh destroy` / `virsh undefine` / `os.remove` on a name that
-    didn't come from `make_test_name`. (See "Cross-cutting safety
-    rules" below — the runtime guard exists; the static guard does
-    not yet.)
+- [x] Add the static safety lint that fails CI if any
+    `@pytest.mark.integration` test omits the
+    `assert_owned_by_test(...)` guard. Landed 2026-05-23 —
+    `tests/lint_test_safety.py` (AST-based) wired into
+    `.github/workflows/test.yml`. Complements the runtime guard in
+    `tests/conftest.py`. See also "Cross-cutting safety rules" below.
 
 **Suite as of Phase 3 completion: 132 passed, 1 skipped (integration). Coverage 42%.**
 
@@ -465,9 +466,13 @@ the test suite.
         (created by `createvm` / `Machine.deploy`) holds the
         cidata.iso and rendered cloud-init files, and the storage
         reaper sweeps the whole prefix-named tree at session end.
-- [ ] Add a lint/grep check (or pytest plugin) that fails CI if a test calls
-    `virsh destroy` / `virsh undefine` / `os.remove()` on a name that
-    didn't come from `make_test_name`.
+- [x] Add a static safety lint that fails CI if a
+    `@pytest.mark.integration` function omits the
+    `assert_owned_by_test(...)` guard. Landed 2026-05-23 —
+    `tests/lint_test_safety.py` is AST-based (parses each integration
+    test file, walks for `@pytest.mark.integration` decorators, and
+    fails when any decorated function doesn't contain a call to the
+    guard). Wired into `.github/workflows/test.yml` as a CI step.
 - [x] Integration tests **must** use a dedicated `libvirt_uri` or at least a
     dedicated network and storage pool so cleanup can be scoped further.
     Done via the "OR at least dedicated storage" branch —

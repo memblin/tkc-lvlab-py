@@ -1,6 +1,6 @@
 """Libvirt network introspection and static-IP validation.
 
-Phase 6 step 2 of the lvscripts port — see ``docs/lvscripts-survey.md`` §5
+Phase 6 step 2 of the lvscripts port — see ``docs-extra/lvscripts-survey.md`` §5
 "PORT: network validation". Wraps ``virsh net-dumpxml`` to expose a typed
 view of a libvirt network (forward mode, gateway, netmask, DHCP range) and
 the two policy helpers that depend on it:

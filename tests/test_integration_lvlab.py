@@ -3,7 +3,7 @@
 Gated by ``LVLAB_INTEGRATION=1``. The default test run skips every
 function in this module via the ``integration`` marker. See
 ``tests/conftest.py`` and the "Integration test storage layout"
-section of ``docs/CONTRIBUTING.md`` for the storage and naming
+section of ``docs-extra/CONTRIBUTING.md`` for the storage and naming
 conventions every test here must follow.
 
 The manifest workflow has a wider blast radius than the standalone

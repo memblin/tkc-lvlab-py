@@ -43,21 +43,21 @@ one must be updated in all of them together. Never edit only one.
     `{debian12, debian13}` after the 2026-05-23 fedora40 drop.
 - `Lvlab.yml` (repo root) — the maintainer's working manifest, also a
     de-facto example for users who clone the repo. `images:` section.
-- `docs/Lvlab.example.yml` — the canonical example shipped in the
+- `docs-extra/Lvlab.example.yml` — the canonical example shipped in the
     site `exclude_docs` set. Wider catalog than `BUILTIN_IMAGES`
     (currently lists debian10, debian11, debian12, debian13 plus two
     custom intranet images).
 
-When a `PROPOSE-REMOVE` row is confirmed, also sweep the `docs/`
-directory (Walkthrough.md, Why.md, Design.md, README.md,
-CONTRIBUTING.md, and any new pages) for residual references to the
-removed key. A stale distro name in an example block is exactly the
+When a `PROPOSE-REMOVE` row is confirmed, also sweep the
+`docs-extra/` directory (Walkthrough.md, Why.md, Design.md,
+CONTRIBUTING.md, and any new pages) plus repo-root `README.md`
+for residual references to the removed key. A stale distro name in an example block is exactly the
 kind of thing a new user pastes verbatim and then files a bug report
 against. Remove or update each reference in the same edit pass and
 surface them in the final summary so the user sees what shifted
 beyond the catalog files.
 
-**Custom / intranet images.** `docs/Lvlab.example.yml` includes
+**Custom / intranet images.** `docs-extra/Lvlab.example.yml` includes
 `debian12-salt` and `debian12-vault` entries pointing at
 `http://192.168.122.1:8080/cloud_images/...`. These are illustrative
 examples of how a user can register their own pre-baked image — they
@@ -68,7 +68,7 @@ them in the diff table with action "skip (intranet)" and move on.
 
 1. **Read the current catalog.** Parse `tkc_lvlab/scripts/createvm.py`
     `BUILTIN_IMAGES` (Python source) and the `images:` sections of
-    `Lvlab.yml` and `docs/Lvlab.example.yml` (YAML). Build the union
+    `Lvlab.yml` and `docs-extra/Lvlab.example.yml` (YAML). Build the union
     of entry keys — note which keys appear in which files.
 
 2. **For each existing entry, identify what to fetch.** The catalog
@@ -174,13 +174,13 @@ them in the diff table with action "skip (intranet)" and move on.
     sibling entries.
 
     For `PROPOSE-REMOVE`, delete the entry from all three files and
-    also sweep `docs/` for residual references (Walkthrough.md,
-    Why.md, Design.md, README.md, CONTRIBUTING.md, and any newer
-    pages). Remove or update each reference; surface them in the
+    also sweep `docs-extra/` plus repo-root `README.md` for residual
+    references (Walkthrough.md, Why.md, Design.md, CONTRIBUTING.md,
+    and any newer pages). Remove or update each reference; surface them in the
     final summary so nothing stale remains for a user to paste from.
 
     The mirrored YAML entries (in `Lvlab.yml` and
-    `docs/Lvlab.example.yml`) for a shared key must match exactly —
+    `docs-extra/Lvlab.example.yml`) for a shared key must match exactly —
     same `image_url`, same `checksum_url`.
 
 9. **Verify**, in this order:
@@ -284,7 +284,8 @@ The lvscripts skill maintains one Python dict + one YAML example.
 This repo has two YAML files because the `Lvlab.yml` at the repo root
 is the maintainer's working manifest (and what the destructive smoke
 test uses as a real exercise of the manifest path) while
-`docs/Lvlab.example.yml` is the documented example for new users.
+`docs-extra/Lvlab.example.yml` is the documented example for new users
+(relocated out of `docs/` so the published-site doc-builder doesn't scan it).
 Keeping them in lockstep means a user copying the example and
 clobbering it with the repo's `Lvlab.yml` (or vice versa) won't see
 mysterious image-not-found errors.

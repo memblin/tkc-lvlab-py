@@ -3,7 +3,7 @@
 The Libvirt Labs project provides the `lvlab` Python application which can be
 used to manage Libvirt based development environments in a familiar way.
 
-If you are wondering why I would write this, the long [answer is here](docs/Why.md)?
+If you are wondering why I would write this, the long [answer is here](docs-extra/Why.md)?
 
 > [!WARNING]
 > Very much a minimum viable product, it barely works. Do not use this
@@ -16,7 +16,7 @@ With `lvlab` one can create VMs automatically from a YAML syntax manifest
 configuration that defines the environment, the virtual machines, and
 the base image information.
 
-- [Example YAML config file](docs/Lvlab.example.yml)
+- [Example YAML config file](docs-extra/Lvlab.example.yml)
 - [In-depth Example Repo](https://github.com/memblin/lvlab-examples)
 
 ## Installation

@@ -516,12 +516,13 @@ migration" list in `docs/api/index.md` and add the corresponding
 `docs/api/.../*.md` page that does `::: tkc_lvlab.<dotted.path>` for
 mkdocstrings to pick up. Add it to `nav` in `mkdocs.yml`.
 
-The legacy user-facing docs (`docs/Walkthrough.md`, `Design.md`, `Why.md`,
-`Libvirt.md`, `CONTRIBUTING.md`, `releases.md`, `WIP.md`,
-`Lvlab.example.yml`, `cloud-init.examples/`) are in `exclude_docs` in
-`mkdocs.yml` — they don't render in the site yet. Move them into nav (and
-out of `exclude_docs`) as each one gets its turn at modernization. That's a
-separate effort from the docstring conversion.
+The legacy user-facing docs (`docs-extra/Walkthrough.md`, `Design.md`,
+`Why.md`, `Libvirt.md`, `CONTRIBUTING.md`, `releases.md`, `WIP.md`,
+`Lvlab.example.yml`, `cloud-init.examples/`) live in `docs-extra/` — a
+sibling of `docs/` that the doc-builder doesn't scan. As each one gets
+its turn at modernization, `git mv docs-extra/X.md docs/X.md` and add
+the entry to `nav` in `mkdocs.yml`. That's a separate effort from the
+docstring conversion.
 
 ______________________________________________________________________
 
@@ -991,9 +992,9 @@ covering the post-0.2 themes:
 
 ______________________________________________________________________
 
-## Phase 11 — Migrate docs from MkDocs + Material to Zensical (BLOCKED — 2026-05-23)
+## Phase 11 — Migrate docs from MkDocs + Material to Zensical (UNBLOCKED — 2026-05-23)
 
-**Status:** BLOCKED on a hard upstream gap. Spike investigation complete 2026-05-23; no migration committed. Main thread must pick a resolution path before work can resume.
+**Status:** UNBLOCKED. The `exclude_docs` upstream gap was resolved via resolution path 2 (relocate excluded files): all 10 entries moved out of `docs/` into a new sibling `docs-extra/` directory that the doc-builder never scans, and `exclude_docs:` is gone from `mkdocs.yml`. The dependency swap (mkdocs → zensical) itself is now optional and can be picked up whenever the user wants to retire MkDocs ahead of the 2.0 cutover. Build remains green on MkDocs + Material in the interim.
 
 **Original motivation:** Surfaced 2026-05-23 during the Phase 8 `uv run mkdocs build --strict` run, which now prints a deprecation banner from the Material for MkDocs team:
 
@@ -1034,12 +1035,12 @@ Confirmed via clean `zensical build -c` against the real `mkdocs.yml`: all 10 cu
 
 This is a hard failure of the Phase 11 brief's "Preserve out-of-nav pages" requirement.
 
-### Possible resolutions (main thread to decide)
+### Resolutions considered (path 2 picked 2026-05-23)
 
-1. **Wait for Zensical to implement `exclude_docs`.** 0.0.43 is alpha; the gap may close upstream. Low disruption, no work needed now. File an upstream issue or watch the tracker.
-1. **Move excluded files out of `docs/`.** Relocate to e.g. `docs-internal/` or under `.claude/` so Zensical's `docs_dir` scan never sees them. `lvscripts-survey.md` is already a `.claude`-adjacent internal artifact; others would need to move. Risk: breaks any cross-links between `docs/` pages and the moved files.
-1. **Stay on MkDocs + Material.** The build is green today and Phase 7 docstrings render correctly. The motivation for the migration is the upstream EOL signal; staying is fine until MkDocs 2.0 actually breaks the build.
-1. **Hybrid: native `zensical.toml` + move excluded files.** Pairs option 2 with a full config rewrite. Same file-relocation cost; also retires `mkdocs.yml`.
+1. **Wait for Zensical to implement `exclude_docs`.** 0.0.43 is alpha; the gap may close upstream. Rejected: leaves Phase 11 hanging on a no-deadline upstream ask.
+1. **Move excluded files out of `docs/`.** ✅ **Picked.** Relocated to `docs-extra/` (sibling of `docs/`). Cross-link risk was theoretical — pre-move scan found only one prose mention in `docs/index.md` and no hyperlinks. The relocate is independently valuable beyond Phase 11: it sharpens the published-vs-unpublished separation for any future doc-builder choice.
+1. **Stay on MkDocs + Material.** Tempting given the deprecation banner has no concrete date, but it leaves the migration as a forced-march later. The relocate from path 2 doesn't preclude this option — staying on MkDocs + the new `docs-extra/` layout is the current state, and a future Zensical swap is now an independent, smaller piece of work.
+1. **Hybrid: native `zensical.toml` + move excluded files.** Rejected: same blast radius as path 2 plus a config rewrite, with no functional gain.
 
 ### Additional risks found in the spike
 
@@ -1053,16 +1054,51 @@ This is a hard failure of the Phase 11 brief's "Preserve out-of-nav pages" requi
 - **mkdocstrings replacement was the biggest unknown.** Spike confirms it survives — Phase 7's docstring work renders identically under Zensical's shim.
 - **Theme aesthetic drift.** Material has a recognisable look; spike shows Zensical's default is visually equivalent. Capture before/after screenshots if/when the migration lands.
 
-### Work this implies (post-blocker)
+### Work completed (path 2 — relocate)
 
-- [ ] Main thread picks one of the four resolution paths above.
-- [ ] If proceeding: `pyproject.toml` `[dependency-groups] dev` swap — drop `mkdocs`, `mkdocs-material`; add `zensical`. Keep `mkdocstrings[python]` (Zensical delegates to it).
-- [ ] If proceeding: either keep `mkdocs.yml` (Zensical reads it) or migrate to `zensical.toml`. The mkdocs.yml path is lowest-risk.
-- [ ] If proceeding: replace `uv run mkdocs build --strict` and `uv run mkdocs serve` in `CLAUDE.md` and `docs/CONTRIBUTING.md` with `uv run zensical build -s` / `uv run zensical serve`.
-- [ ] If proceeding: `.pre-commit-config.yaml` mdformat pins need bumping to match Zensical's dep set.
-- [ ] If proceeding: confirm GitHub Pages deployment story (currently no docs-deploy workflow exists; site URL `https://memblin.github.io/tkc-lvlab-py/` is referenced but not served — this is a separate item, not Phase 11 scope).
-- [ ] If proceeding: resolve the `exclude_docs` gap via whichever resolution path was picked.
-- [ ] If proceeding: verify `zensical build -s` (strict) passes clean and that the excluded pages do NOT render.
+- [x] Move 10 entries from `docs/` to `docs-extra/`:
+    `Walkthrough.md`, `Design.md`, `Why.md`, `Libvirt.md`,
+    `releases.md`, `CONTRIBUTING.md`, `WIP.md`, `Lvlab.example.yml`,
+    `lvscripts-survey.md`, `cloud-init.examples/`.
+- [x] Drop `exclude_docs:` block from `mkdocs.yml`; replace with a
+    short comment pointing at the `docs-extra/` convention.
+- [x] Update cross-references in `README.md` (2),
+    `CLAUDE.md` (3), `docs/index.md` (1 prose),
+    `tests/test_integration_{lvlab,snapshot}.py` (2 docstrings),
+    `src/tkc_lvlab/utils/{requirements,passwords,network,ssh_keys}.py`
+    (4 module docstrings), and
+    `.claude/skills/refresh-cloud-images/SKILL.md` (5).
+- [x] Update internal label of two `docs-extra/Walkthrough.md`
+    references that used the `docs/Lvlab.example.yml` form
+    (relative link target stays correct — both files moved
+    together — only the visible label needed `docs-extra/`).
+- [x] Verify `uv run mkdocs build --strict` clean,
+    `uv run pre-commit run --all-files` clean,
+    `uv run pytest -q` still 272 passed / 9 skipped.
+
+### Remaining work (optional — Zensical dep swap can wait)
+
+The relocate is independently complete. The MkDocs → Zensical
+dependency swap is now an independent piece of work that can be
+picked up at any time. When/if you want to do it:
+
+- [ ] `pyproject.toml` `[dependency-groups] dev` swap — drop
+    `mkdocs`, `mkdocs-material`; add `zensical`. Keep
+    `mkdocstrings[python]` (Zensical delegates to it).
+- [ ] Keep `mkdocs.yml` (Zensical reads it) or migrate to
+    `zensical.toml`. The mkdocs.yml path is lowest-risk.
+- [ ] Replace `uv run mkdocs build --strict` and `uv run mkdocs serve`
+    in `CLAUDE.md` and `docs-extra/CONTRIBUTING.md` with
+    `uv run zensical build -s` / `uv run zensical serve`.
+- [ ] `.pre-commit-config.yaml` mdformat pins need bumping to match
+    Zensical's dep set (`mdformat>=1.0`, `mdformat-mkdocs>=5.1`,
+    `mdformat-gfm>=1.0` vs. the older pins).
+- [ ] Verify `zensical build -s` (strict) passes clean and that
+    the `docs-extra/` files do NOT render.
+- [ ] Confirm GitHub Pages deployment story (currently no
+    docs-deploy workflow exists; site URL
+    `https://memblin.github.io/tkc-lvlab-py/` is referenced but
+    not served — this is a separate item, not Phase 11 scope).
 
 ______________________________________________________________________
 

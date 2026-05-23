@@ -11,7 +11,7 @@ its own explicit sequence.
 Gated by ``LVLAB_INTEGRATION=1``. The default ``uv run pytest`` run
 skips everything here via the ``integration`` marker. See
 ``tests/conftest.py`` and the "Integration test storage layout" section
-of ``docs/CONTRIBUTING.md`` for the naming and storage safety rules
+of ``docs-extra/CONTRIBUTING.md`` for the naming and storage safety rules
 every test here follows.
 
 Both ``vm_name`` and ``env_name`` carry :data:`tests.conftest.LVLAB_TEST_PREFIX`

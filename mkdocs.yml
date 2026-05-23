@@ -93,19 +93,11 @@ nav:
           - createvm: api/scripts/createvm.md
           - destroyvm: api/scripts/destroyvm.md
 
-# Pages not listed in `nav` above are intentionally excluded from the
-# navigation. The legacy user-facing docs (Walkthrough.md etc.) remain
-# in `docs/` until the legacy-docs conversion lands; the internal
-# planning artifacts (lvscripts-survey.md etc.) are not meant to render
-# in the public site at all.
-exclude_docs: |
-  Walkthrough.md
-  Design.md
-  Why.md
-  Libvirt.md
-  releases.md
-  CONTRIBUTING.md
-  WIP.md
-  Lvlab.example.yml
-  lvscripts-survey.md
-  cloud-init.examples/
+# Docs that don't render in the published site live at `docs-extra/`
+# (sibling to this `docs/` source root) so the doc-builder's docs_dir
+# scan never sees them. As legacy user-facing docs (Walkthrough.md
+# etc.) get modernized for publication, `git mv docs-extra/X.md
+# docs/X.md` and add the entry to `nav` above. Internal planning
+# artifacts (lvscripts-survey.md etc.) stay in `docs-extra/`
+# permanently — they're project-internal references, not site
+# content.

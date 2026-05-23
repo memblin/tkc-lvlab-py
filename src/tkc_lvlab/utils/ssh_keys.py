@@ -1,7 +1,7 @@
 """SSH public key discovery and validation helpers.
 
 Ported from the sibling `lvscripts-py` project (`src/lvscripts/ssh_keys.py`) as
-the first Phase 6 step — see ``docs/lvscripts-survey.md`` §5 "Port + adapt".
+the first Phase 6 step — see ``docs-extra/lvscripts-survey.md`` §5 "Port + adapt".
 This module is a CLI-agnostic public library API: nothing here reads
 ``Lvlab.yml`` or shells out to ``virsh``/``qemu-img``/``virt-install``. Both
 the existing ``lvlab`` manifest workflow and the upcoming standalone

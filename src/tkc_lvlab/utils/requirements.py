@@ -1,7 +1,7 @@
 """Runtime host-binary dependency checks for the standalone ``createvm`` script.
 
 Ported from the sibling `lvscripts-py` project (`src/lvscripts/requirements.py`)
-as part of Phase 6 — see ``docs/lvscripts-survey.md`` §5 "PORT + adapt: dependency
+as part of Phase 6 — see ``docs-extra/lvscripts-survey.md`` §5 "PORT + adapt: dependency
 precheck". Adapted from the original in two ways per the survey's disposition
 decisions:
 

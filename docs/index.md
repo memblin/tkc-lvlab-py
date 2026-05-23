@@ -36,8 +36,9 @@ Auto-generated from Google-style docstrings + type hints via
 ## Status
 
 This site is a work in progress. The legacy user-facing docs
-(`Walkthrough.md`, `Design.md`, `Why.md`, etc.) still live in the repo's
-`docs/` directory and remain authoritative until the legacy-docs conversion
-phase lands. The API reference here covers only modules whose docstrings
-have been migrated to the Google + type-hint convention; everything else is
-out-of-nav for now.
+(`Walkthrough.md`, `Design.md`, `Why.md`, etc.) live in the repo's
+`docs-extra/` directory — a sibling of this `docs/` source root that the
+doc-builder doesn't scan — and remain authoritative there until the
+legacy-docs conversion phase lands. The API reference here covers only
+modules whose docstrings have been migrated to the Google + type-hint
+convention; everything else stays in `docs-extra/` for now.

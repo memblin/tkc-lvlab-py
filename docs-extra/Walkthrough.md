@@ -15,7 +15,7 @@ but `qemu:///session` works as well.
 ## Manifest
 
 Every command starts by reading `Lvlab.yml` from the current working
-directory. See [docs/Lvlab.example.yml](Lvlab.example.yml) for a worked
+directory. See [docs-extra/Lvlab.example.yml](Lvlab.example.yml) for a worked
 example.
 
 The libvirt domain name `lvlab` actually uses on the hypervisor is
@@ -309,7 +309,7 @@ manifest parse time, and `createvm` rejects `--ip4` plus
 `--network-type user`/`--network-type passt` at the CLI boundary.
 DHCP is the only supported configuration under user-mode.
 
-Worked manifest example (`docs/Lvlab.example.yml`):
+Worked manifest example (`docs-extra/Lvlab.example.yml`):
 
 ```yaml
 machines:

@@ -1,7 +1,7 @@
 """Password phrase generation and SHA-512 hashing helpers.
 
 Ported from the sibling `lvscripts-py` project (`src/lvscripts/passwords.py`)
-as part of Phase 6 — see ``docs/lvscripts-survey.md`` §5 "PORT + ADAPT".
+as part of Phase 6 — see ``docs-extra/lvscripts-survey.md`` §5 "PORT + ADAPT".
 Used by the upcoming standalone ``createvm`` script to give one-off VMs a
 human-memorable console password whose ``user-data`` only ever carries the
 SHA-512-crypt hash, never the plaintext.

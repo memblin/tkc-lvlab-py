@@ -8,8 +8,8 @@ on:
   push:
     branches: [main]
 
-# Phase 3 wired this up. Integration tests are NEVER enabled in CI — see
-# tests/conftest.py and the cross-cutting safety rules in TODO.md. The
+# Integration tests are NEVER enabled in CI — see tests/conftest.py and
+# the "Integration tests" safety rules in CLAUDE.md. The
 # `-m "not integration"` filter below is the belt; the LVLAB_INTEGRATION
 # env var being unset is the suspenders.
 
@@ -30,7 +30,7 @@ jobs:
       - name: Sync dev deps
         run: uv sync --group dev
       - name: Integration-test safety lint
-        # Phase 3 L193 / Cross-cutting L462 — static guard ensuring every
+        # Static guard ensuring every
         # @pytest.mark.integration function declares the test-owned
         # resource names it operates on via assert_owned_by_test().
         # Complements the runtime guard in tests/conftest.py.

@@ -128,12 +128,11 @@ ______________________________________________________________________
 ### One-off VM creation
 
 The headline Phase 6 feature: create a VM without an `Lvlab.yml`
-manifest. lvscripts already has a working implementation. Per the
-[Phase 6 architecture decision](https://github.com/memblin/tkc-lvlab-py/blob/main/TODO.md#phase-6),
-lvlab will expose this as a **separate console script** (`createvm`,
-`destroyvm`), NOT as `lvlab vm create`, with the explicit constraint
-that the standalone scripts do not read `Lvlab.yml` and do not see
-manifest-managed VMs.
+manifest. lvscripts already has a working implementation. The Phase 6
+architecture decision (see CLAUDE.md "Architecture") landed this as a
+**separate console script** (`createvm`, `destroyvm`), NOT as
+`lvlab vm create`, with the explicit constraint that the standalone
+scripts do not read `Lvlab.yml` and do not see manifest-managed VMs.
 
 ### SSH key auto-discovery
 
@@ -248,15 +247,14 @@ ______________________________________________________________________
 The /tmp inventory's open-questions list pre-dated the Phase 6
 architecture decision. Current state:
 
-1. **One-off VM namespacing** — _Resolved_. Per
-    [project-phase6-architecture](https://github.com/memblin/tkc-lvlab-py/blob/main/TODO.md#phase-6)
-    memory: `createvm` and `destroyvm` are **separate console scripts**
-    (not `lvlab` subcommands), they do **not** read `Lvlab.yml`, and
-    they do **not** interact with lvlab-managed VMs. The previous
-    `_oneoff` sentinel-environment idea is moot — there's no environment
-    to name when there's no `Lvlab.yml`. Open sub-question still:
-    bare name vs `oneoff-<name>` prefix (recommended) vs distinct URI
-    routing.
+1. **One-off VM namespacing** — _Resolved_. The Phase 6 architecture
+    decision (see CLAUDE.md "Architecture"): `createvm` and `destroyvm`
+    are **separate console scripts** (not `lvlab` subcommands), they do
+    **not** read `Lvlab.yml`, and they do **not** interact with
+    lvlab-managed VMs. The previous `_oneoff` sentinel-environment idea
+    is moot — there's no environment to name when there's no
+    `Lvlab.yml`. Sub-question resolved at implementation time:
+    `oneoff-<name>` prefix.
 1. **SSH discovery scope** — Recommend applying to both surfaces, with
     the manifest workflow's `cloud_init.pubkey: auto` sentinel opting
     into discovery (existing path-literal usage stays the default).
@@ -302,9 +300,9 @@ ______________________________________________________________________
 
 ## 9. Cross-reference
 
-- Phase 6 architecture lock-ins:
-    [project-phase6-architecture](../TODO.md#phase-6) — read first
-    before implementing.
+- Phase 6 architecture lock-ins: see CLAUDE.md "Architecture" and the
+    `src/tkc_lvlab/scripts/__init__.py` module docstring for the
+    separate-console-scripts decision.
 - Phase 9 (Click → Typer): lvscripts is already on Typer. Use
     `src/lvscripts/commands/createvm.py` as a working reference for
     the migration shape.

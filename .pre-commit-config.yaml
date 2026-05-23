@@ -26,14 +26,14 @@ repos:
         #
         # Version note (2026-05-23): this combo (mdformat 0.7.22,
         # mdformat-mkdocs 4.4.2, mdformat-gfm 1.0.0) was the freshest
-        # set verified to format TODO.md without tripping mdformat's
-        # "Formatted Markdown renders to different HTML" safety net.
-        # mdformat 1.0.0 + any plugin chain fails that check on TODO.md
-        # (confirmed upstream regression — fails even with no plugins
-        # loaded). mdformat-mkdocs 5.x also fails the check on TODO.md
-        # regardless of which mdformat-core it's paired with. The
-        # `more_itertools<11` upper bound is required because
-        # mdformat-mkdocs 4.4.2 imports the removed-in-11
+        # set verified against this repo's markdown corpus without
+        # tripping mdformat's "Formatted Markdown renders to different
+        # HTML" safety net. mdformat 1.0.0 + any plugin chain failed
+        # that check on longer markdown content even with no plugins
+        # loaded (confirmed upstream regression). mdformat-mkdocs 5.x
+        # also fails the check regardless of which mdformat-core it's
+        # paired with. The `more_itertools<11` upper bound is required
+        # because mdformat-mkdocs 4.4.2 imports the removed-in-11
         # ``zip_equal`` symbol.
         exclude: ^(docs/api/|\.claude/skills/)
         additional_dependencies:

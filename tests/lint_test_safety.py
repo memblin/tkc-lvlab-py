@@ -1,6 +1,6 @@
 """Static safety lint for the integration test suite.
 
-Phase 3 L193 / Cross-cutting L462 — every integration test that creates
+Every integration test that creates
 libvirt/qemu state must declare which resource names it owns, via at
 least one ``assert_owned_by_test(...)`` call. The runtime guard in
 ``tests/conftest.py`` (the same function) refuses to operate on any

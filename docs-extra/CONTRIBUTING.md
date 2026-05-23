@@ -99,11 +99,11 @@ uv run pytest tests/test_virsh.py
 
 Integration tests that touch real `virsh` / `qemu-img` / libvirt are gated
 by the `LVLAB_INTEGRATION=1` environment variable and are **never** enabled
-in CI. See `tests/conftest.py` and the cross-cutting safety rules in
-`TODO.md` before writing one — every test-owned libvirt domain, qcow2
-file, or ISO must carry the per-session `LVLAB_TEST_PREFIX`, and the
-session-scoped reaper will only ever touch resources whose name starts
-with that prefix.
+in CI. See `tests/conftest.py` and the "Integration tests" safety rules
+in `CLAUDE.md` before writing one — every test-owned libvirt domain,
+qcow2 file, or ISO must carry the per-session `LVLAB_TEST_PREFIX`, and
+the session-scoped reaper will only ever touch resources whose name
+starts with that prefix.
 
 ### Integration test storage layout
 

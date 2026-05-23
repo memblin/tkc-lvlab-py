@@ -15,7 +15,8 @@ that performs a destructive operation (``virsh destroy``, ``undefine``,
 ``os.remove``, etc.).
 
 Integration tests are gated behind ``LVLAB_INTEGRATION=1``. CI never sets
-this — see ``TODO.md`` "Cross-cutting safety rules". The session-scoped
+this — see ``CLAUDE.md`` "Integration tests" / "Test-naming and storage
+scaffolding" for the safety rules. The session-scoped
 reaper at the bottom of the file only runs when integration is enabled,
 and even then it only touches prefixed names — it never iterates over
 the full libvirt domain list.

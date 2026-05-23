@@ -2,8 +2,8 @@
 
 Gated by ``LVLAB_INTEGRATION=1``. The default test run skips every
 function in this module via the ``integration`` marker. See
-``tests/conftest.py`` and the "Cross-cutting safety rules" section of
-``TODO.md`` before adding to this file.
+``tests/conftest.py`` and the "Integration tests" safety rules in
+``CLAUDE.md`` before adding to this file.
 
 Every libvirt domain, qcow2 file, and cloud-init ISO this module
 creates is named via :func:`make_test_name` so the session reaper can

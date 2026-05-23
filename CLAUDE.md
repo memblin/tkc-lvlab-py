@@ -17,7 +17,7 @@ Because state lives in libvirt + on-disk qcow2 files, **bugs here can damage rea
 
 ## Build / dev / lint commands
 
-This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). CI runs pre-commit and the pytest matrix (Python 3.11/3.12/3.13/3.14) on every PR and push to `main`. Integration tests (`@pytest.mark.integration`) are gated by `LVLAB_INTEGRATION=1` and **never** enabled in CI — see `tests/conftest.py` and the cross-cutting safety rules in `TODO.md`. Don't claim a behavior is "tested" because CI is green — that only covers what someone wrote a unit test for. For changes that touch `virsh`, also do a manual smoke test against `qemu:///session` before reporting done.
+This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). CI runs pre-commit and the pytest matrix (Python 3.11/3.12/3.13/3.14) on every PR and push to `main`. Integration tests (`@pytest.mark.integration`) are gated by `LVLAB_INTEGRATION=1` and **never** enabled in CI — see `tests/conftest.py` and the "Integration tests" safety rules in the Testing conventions section below. Don't claim a behavior is "tested" because CI is green — that only covers what someone wrote a unit test for. For changes that touch `virsh`, also do a manual smoke test against `qemu:///session` before reporting done.
 
 The CLI shells out to `virsh` (and `qemu-img`, `virt-install`) for all hypervisor operations — there is no longer a `libvirt-python` C extension dependency, so `uv sync` works without `libvirt-dev` / `pkg-config` on the host. Lab functionality still requires `libvirt-clients` (or equivalent) for the `virsh` binary at runtime.
 
@@ -91,7 +91,7 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 ## Conventions and gotchas
 
 - **Line length is 150** (`.pylintrc`). black is configured by default (88) via pre-commit; both are in effect — black formats, pylint just won't yell about long lines. If you see a line over 88, black either accepted it (string literal, URL, etc.) or it hasn't been run.
-- **Type hints are required on new code; existing code is uneven.** See the "Documentation conventions" section below for the full rule. `docs-extra/Design.md` records that this used to be project-wide; the post-mkdocstrings policy supersedes that note for new work. Don't bulk-convert existing signatures as a side effect of an unrelated PR — there's a dedicated Phase in `TODO.md` for that.
+- **Type hints are required on new code; existing code is uneven.** See the "Documentation conventions" section below for the full rule. `docs-extra/Design.md` records that this used to be project-wide; the post-mkdocstrings policy supersedes that note for new work. Don't bulk-convert existing signatures as a side effect of an unrelated PR — the legacy-conversion sweep happened in 2026-05-23 as a focused effort, and ad-hoc neighbour conversion makes that history hard to read in git blame.
 - The CLI mixes business logic into `cli.py` (e.g. orchestration of vdisk creation, ISO writing, deploy). When extending, prefer adding methods to the relevant `Machine` / `CloudImage` / etc. class rather than growing the command body.
 - `parse_config()` is called repeatedly (e.g. once in the command, again inside `Machine.cloud_init` to regenerate the hosts list). Cheap because it's just a file read, but keep that in mind if you ever cache state.
 - Several `destroy`/cleanup paths leave files behind on purpose or by oversight — see `docs-extra/Walkthrough.md`. Don't "fix" this without checking whether the user relied on it.
@@ -115,7 +115,7 @@ The site is configured in `mkdocs.yml` (Zensical reads it without a rewrite).
 The `docs/` directory holds the published site files (`index.md`, `api/`).
 Files that should NOT render in the public site live in the sibling
 `docs-extra/` directory, which the doc-builder never scans — see Phase 11
-in `TODO.md` for the layout decision.
+in this section above for the layout decision.
 
 ### For new code — required
 
@@ -156,11 +156,12 @@ docstring — mkdocstrings renders them under the class.
 For modules, put a docstring at the top of the file describing what the module
 provides.
 
-### For existing code — out of scope here
+### For existing code — leave alone
 
-Existing docstrings are free-form and largely untyped. **Do not sweep-convert
-them as a side effect of unrelated PRs.** A dedicated phase in `TODO.md`
-("Legacy docstring conversion") tracks that work.
+Existing docstrings are largely on the new convention (the legacy
+conversion sweep completed 2026-05-23). The few free-form holdouts are
+**not** sweep-convert targets in an unrelated PR — that mixes
+unreviewable noise into a focused diff.
 
 If you happen to be rewriting a function for unrelated reasons and the new
 shape benefits from a proper docstring + type hints, that's fine — write it
@@ -203,7 +204,7 @@ uncovered or use `# pragma: no cover` and explain why.
 - Run on every developer's machine with `uv run pytest`. They will run
     unmodified in CI once the matrix workflow lands (Phase 3).
 
-### Integration tests (Phase 3, opt-in only)
+### Integration tests (opt-in only)
 
 Integration tests actually invoke `virsh`, build cloud-init ISOs, and
 exercise `qemu-img`. They **must run only on machines with libvirt
@@ -225,7 +226,34 @@ safety rules are non-negotiable:
     all domains in teardown; never iterate over all qcow2 files in a
     directory unless every one starts with the prefix.
 
-See `TODO.md` "Cross-cutting safety rules" for the full scaffolding plan.
+#### Test-naming and storage scaffolding
+
+`tests/conftest.py` exports the per-session prefix and three helpers
+that are the only sanctioned way to name and check test-owned
+resources:
+
+- `LVLAB_TEST_PREFIX` — generated once per session as
+    `f"lvlab-test-{epoch_ms}-{random4}-"`. Epoch + short random avoids
+    collisions across parallel runs.
+- `make_test_name(base) -> str` — returns `f"{LVLAB_TEST_PREFIX}{base}"`.
+    The only sanctioned way for tests to name a resource.
+- `assert_owned_by_test(name) -> None` — raises if `name` does not
+    start with `LVLAB_TEST_PREFIX`. Must be called before every
+    destructive operation in test helpers. The runtime guard.
+- Session-scoped teardown that runs `virsh list --all --name` *filtered
+    by the prefix* and reaps any domains that survived a crashing test.
+    **Never list all domains; only ones matching the prefix.**
+
+Both the libvirt-domain name AND every on-disk path created by the test
+must carry the prefix. The dedicated test storage root is
+`/var/lib/libvirt/images/lvlab-test/` — exposed via the
+`lvlab_integration_storage_root` session fixture. See `docs-extra/CONTRIBUTING.md`
+"Integration test storage layout" for the storage conventions.
+
+`tests/lint_test_safety.py` is an AST-based static check wired into
+`.github/workflows/test.yml` that fails CI if any
+`@pytest.mark.integration` function omits an `assert_owned_by_test()`
+call. Complements the runtime guard.
 
 ## Branching
 

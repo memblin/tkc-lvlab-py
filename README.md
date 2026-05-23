@@ -41,6 +41,42 @@ virsh -c qemu:///system list
 
 - Option C (for active development): Clone, then `uv sync` to create a dev env and `uv run lvlab --help` to invoke the CLI from a checkout.
 
+The same wheel installs three console scripts on your PATH:
+
+- `lvlab` — manifest workflow (drives `Lvlab.yml`).
+- `createvm` — one-off VM creation. Does not read `Lvlab.yml`.
+- `destroyvm` — one-off VM removal (matches `createvm`). Does not see manifest VMs.
+
+## One-off VMs
+
+When you want a single VM without writing an `Lvlab.yml` manifest, use
+`createvm` / `destroyvm`. They share the same library code as `lvlab`
+but are intentionally separate at the command-line surface — they will
+not read your manifest and will not touch any VM `lvlab` manages.
+
+```bash
+# Create a one-off VM. Domain name on libvirt is "oneoff-testvm.local"
+# (the oneoff- prefix is what keeps it distinguishable from lvlab's
+# <vm_name>_<env> manifest VMs).
+sudo createvm testvm.local --distro debian12
+
+# Same, but with a static IP (validated against the network's
+# subnet + DHCP range before any VM state is written).
+sudo createvm testvm.local --distro fedora40 --ip4 192.168.122.50
+
+# Same, but with a standalone qcow2 disk (cp + qemu-img resize) so
+# you can wipe and re-init the cloud-images dir later without
+# breaking this VM.
+sudo createvm testvm.local --distro debian12 --copy
+
+# Destroy a one-off VM. Errors out if the libvirt domain doesn't
+# carry the oneoff- prefix, so you can't accidentally remove a
+# manifest VM by typing the short name.
+sudo destroyvm testvm.local --force
+```
+
+See `createvm --help` and `destroyvm --help` for the full flag list.
+
 ## Help Output
 
 ```console

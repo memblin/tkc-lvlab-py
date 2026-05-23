@@ -253,6 +253,92 @@ The `--os-variant` virt-install needs is derived from the image
 name's first hyphenated segment (see "Image Naming" above), which
 is why custom images must follow that naming convention.
 
+## One-off VMs: `createvm` and `destroyvm`
+
+The same wheel ships two additional console scripts for single-VM,
+no-manifest use cases:
+
+- `createvm <vm_name> --distro <key>` creates a libvirt domain named
+    `oneoff-<vm_name>` (the prefix is the collision-prevention against
+    manifest VMs), provisioned from a built-in cloud image.
+- `destroyvm <vm_name>` removes it.
+
+Both scripts are intentionally separate from `lvlab`:
+
+- They do not read `Lvlab.yml`.
+- They will not list, start, stop, or destroy manifest VMs. `lvlab   status` reciprocally does not show one-off VMs in its inventory.
+- They default to `qemu:///system` (most lab setups). Pass `--uri` to
+    override.
+
+### createvm flags
+
+| Flag           | Purpose                                                                                                                        |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--distro`     | Required. Key into the built-in image catalog (`debian12`, `fedora40`, `debian13`).                                            |
+| `--memory`     | RAM in MiB. Default 2048.                                                                                                      |
+| `--cpu`        | vCPU count. Default 2.                                                                                                         |
+| `--disk-size`  | qcow2 disk size. Default `20G`.                                                                                                |
+| `--network`    | libvirt network name. Default `default` (the stock NAT).                                                                       |
+| `--ip4`        | Optional static IPv4. Accepts `IP` (uses `--network`) or `NETWORK,IP`. Validated against the network's subnet AND DHCP range.  |
+| `--public-key` | Optional extra SSH public key file (appended after discovered defaults).                                                       |
+| `--copy`       | Use `cp` + `qemu-img resize` instead of the default backing-file mode. Trades storage efficiency for cloud-image independence. |
+| `--uri`        | libvirt connection URI. Default `qemu:///system`.                                                                              |
+
+### SSH keys
+
+`createvm` walks the invoking user's `~/.ssh/id_ed25519.pub` and
+`~/.ssh/id_rsa.pub`. Under `sudo` it also walks `$SUDO_USER`'s home
+(so `sudo createvm ...` picks up your keys, not root's). Validates
+each key (Ed25519, RSA, NIST ECDSA, and hardware-backed `sk-` variants
+are all accepted), de-duplicates, and writes them to the VM's
+`user-data` as `ssh_authorized_keys`. If none are discovered and no
+`--public-key` was provided, `createvm` refuses to create the VM —
+that's the no-way-to-log-in guard.
+
+### Password
+
+`createvm` generates a memorable 4-word phrase from a curated wordlist
+(mixed-case enforced), hashes it via `openssl passwd -6`, and writes
+the hash to `user-data` as the first-boot user's password. The
+plaintext phrase is printed to stdout on success — copy it before
+losing the terminal output.
+
+### Disk strategy
+
+By default, `createvm` uses the lvlab-native backing-file approach
+(`qemu-img create -b <cloud_image>`): fast to create, storage-efficient
+across many VMs, but ties the VM's disk to the cloud image's lifetime.
+Wiping `cloud-images/` would break VMs that depend on it.
+
+`--copy` flips this: `cp` the cloud image to the VM directory, then
+`qemu-img resize` to `--disk-size`. The qcow2 is standalone. You can
+wipe and re-init `cloud-images/` later without affecting any
+`--copy`-created VM. The trade is that each VM takes the full image
+size on disk.
+
+The manifest workflow (`lvlab up`) always uses backing-file mode —
+the trade-off is appropriate when you've explicitly committed to a
+shared manifest setup.
+
+### destroyvm
+
+```bash
+sudo destroyvm testvm.local           # prompts
+sudo destroyvm testvm.local --force   # skips the prompt
+```
+
+`destroyvm` looks up `oneoff-testvm.local` on the libvirt side. If the
+prefix isn't present, it errors out — it does NOT fall through to the
+bare name. A manifest VM named `testvm.local_<env>` is completely
+invisible to `destroyvm`; use `lvlab destroy` for those.
+
+Snapshot fallback: if `virsh undefine` refuses because snapshots
+exist, `destroyvm` deletes them (preferring `--children`, falling back
+to `--metadata` for backing-chain qcow2 cases) and retries.
+
+Storage cleanup runs only on a successful undefine; a failed undefine
+leaves the VM directory in place so you can inspect what went wrong.
+
 ## Where things live on disk
 
 Two paths are configurable in the manifest's `config_defaults`:

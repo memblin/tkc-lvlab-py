@@ -274,7 +274,18 @@ Recap of Phase 6 design questions that the survey resolved or sharpened:
 
 ______________________________________________________________________
 
-## Phase 6 — Standalone `createvm` / `destroyvm` scripts in the lvlab package
+## Phase 6 — Standalone `createvm` / `destroyvm` scripts ✅ COMPLETE — 2026-05-23
+
+All six steps landed across six local commits on `main`:
+
+- `6151d2e` step 1 — `tkc_lvlab/utils/{ssh_keys,passwords,requirements}.py` ports.
+- `73943d2` step 2 — `tkc_lvlab/utils/network.py` (virsh net-dumpxml parser + validation + forward-mode policy).
+- `fbc6033` step 3 — `tkc_lvlab/utils/standalone_cloud_init.py` + `user-data.oneoff.j2` / `meta-data.oneoff.j2`.
+- `ec44d96` step 4 — `tkc_lvlab/scripts/createvm.py` (headline deliverable; `--copy` flag; cleanup-on-failure).
+- `a7b11a4` step 5 — `tkc_lvlab/scripts/destroyvm.py` + `tkc_lvlab/utils/snapshot_cleanup.py` (`--children` → `--metadata` fallback; gated storage cleanup).
+- step 6 (this commit) — README + `docs/Walkthrough.md` additions documenting the one-off workflow; TODO closeout.
+
+**Suite: 248 passed, 1 skipped (integration).** Per-module 100% coverage on `ssh_keys`, `passwords`, `network`, `standalone_cloud_init`, `snapshot_cleanup`. 80% on the orchestrator `createvm.py` (uncovered paths are real-network image download — integration test deferred).
 
 **Decision (locked):** `createvm` and `destroyvm` ship as **separate console
 scripts with their own `[project.scripts]` entry points**. They are NOT

@@ -183,6 +183,56 @@ def lvlab_test_basedir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("lvlab-test-basedir")
 
 
+@pytest.fixture(scope="session")
+def test_ssh_pubkey_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Provide a throwaway SSH ed25519 public-key path for integration tests.
+
+    The integration suite previously fell back on ``~/.ssh/id_ed25519.pub``
+    (or, for the createvm-direct test, on createvm's own auto-discovery).
+    That made the suite fail on any host where the test user had no SSH
+    keypair on disk — surfaced on the host-validation matrix when the
+    ``claude-code`` user on freshly-provisioned VMs had only an
+    ``authorized_keys`` file but no keypair of its own.
+
+    This fixture generates a fresh ed25519 keypair in a session-scoped
+    tmpdir (via the system ``ssh-keygen`` binary, no passphrase) and
+    returns the public-key path. Tests should pass it to ``createvm``
+    via ``--public-key`` and to ``render_manifest`` via the
+    ``pubkey_path=`` arg so the suite is self-contained regardless of
+    the runner user's environment.
+
+    The keypair lives for the pytest session only; pytest cleans up
+    the tmpdir at session end.
+
+    Args:
+        tmp_path_factory: pytest's built-in temp directory factory.
+
+    Returns:
+        Absolute path to the generated ``id_ed25519.pub`` file.
+    """
+    keydir = tmp_path_factory.mktemp("lvlab-test-ssh-keys")
+    privkey = keydir / "id_ed25519"
+    pubkey = keydir / "id_ed25519.pub"
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-f",
+            str(privkey),
+            "-C",
+            "lvlab-integration-test",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert pubkey.is_file(), f"ssh-keygen did not write {pubkey}"
+    return pubkey
+
+
 def _integration_enabled() -> bool:
     """Return True iff ``LVLAB_INTEGRATION=1`` is set in the environment."""
     return os.environ.get(_INTEGRATION_ENV_VAR) == "1"

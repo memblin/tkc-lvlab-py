@@ -46,6 +46,7 @@ _DESTROYVM_TIMEOUT_SECONDS = 60
 def test_createvm_destroyvm_roundtrip(
     integration_uri: str,
     lvlab_integration_storage_root: Path,
+    test_ssh_pubkey_path: Path,
 ) -> None:
     """``createvm`` defines a domain; ``destroyvm --force`` undefines it.
 
@@ -93,6 +94,8 @@ def test_createvm_destroyvm_roundtrip(
             *createvm_network_args(integration_uri),
             "--storage-root",
             str(storage_root),
+            "--public-key",
+            str(test_ssh_pubkey_path),
             "--copy",
             "--memory",
             "1024",

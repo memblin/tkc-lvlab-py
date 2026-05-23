@@ -54,6 +54,7 @@ snapshots) transitively when it runs ``virsh undefine --remove-all-storage``.
 def test_snapshot_lifecycle(
     integration_uri: str,
     lvlab_integration_storage_root: Path,
+    test_ssh_pubkey_path: Path,
     tmp_path: Path,
 ) -> None:
     """``lvlab snapshot create/list/delete`` round-trip on a real domain.
@@ -85,13 +86,7 @@ def test_snapshot_lifecycle(
             all lvlab subprocess invocations use ``cwd=tmp_path``.
     """
     lvlab = find_entry_point("lvlab")
-
-    pubkey_path = Path.home() / ".ssh" / "id_ed25519.pub"
-    if not pubkey_path.is_file():
-        pytest.skip(
-            f"no SSH public key at {pubkey_path} — manifest's "
-            f"cloud_init.pubkey requires a real key on disk"
-        )
+    pubkey_path = test_ssh_pubkey_path
 
     # Distinguish parametrized URI runs so each gets its own per-VM name
     # and per-environment name. Both halves carry LVLAB_TEST_PREFIX so the

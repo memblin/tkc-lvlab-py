@@ -63,6 +63,7 @@ _LVLAB_DESTROY_TIMEOUT_SECONDS = 60
 def test_createvm_lvlab_cross_surface_isolation(
     integration_uri: str,
     lvlab_integration_storage_root: Path,
+    test_ssh_pubkey_path: Path,
     tmp_path: Path,
 ) -> None:
     """Two surfaces, two prefixes, no cross-contamination.
@@ -94,13 +95,7 @@ def test_createvm_lvlab_cross_surface_isolation(
     createvm = find_entry_point("createvm")
     destroyvm = find_entry_point("destroyvm")
     lvlab = find_entry_point("lvlab")
-
-    pubkey_path = Path.home() / ".ssh" / "id_ed25519.pub"
-    if not pubkey_path.is_file():
-        pytest.skip(
-            f"no SSH public key at {pubkey_path} — manifest's "
-            f"cloud_init.pubkey requires a real key on disk"
-        )
+    pubkey_path = test_ssh_pubkey_path
 
     uri_tag = "session" if "session" in integration_uri else "system"
     oneoff_vm_name = make_test_name(f"regression-oneoff-{uri_tag}")
@@ -140,6 +135,8 @@ def test_createvm_lvlab_cross_surface_isolation(
             *createvm_network_args(integration_uri),
             "--storage-root",
             str(lvlab_integration_storage_root),
+            "--public-key",
+            str(test_ssh_pubkey_path),
             "--copy",
             "--memory",
             "1024",

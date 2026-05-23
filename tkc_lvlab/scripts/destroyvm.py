@@ -13,6 +13,13 @@ Per the Phase 6 architecture lock, ``destroyvm`` MUST NOT read
 through to looking up the bare ``testvm.local``, which could be a
 manifest VM).
 
+Phase 9 follow-up ported this file from Click to Typer. The UX
+contract is preserved: same option names, same defaults, same exit
+codes, same error-message phrasing. ``run = app`` is kept as a
+backwards-compat alias so the pyproject ``[project.scripts]`` entry
+point (``tkc_lvlab.scripts.destroyvm:run``) and test imports continue
+to work unchanged.
+
 Wired up as a console script via
 ``[project.scripts] destroyvm = "tkc_lvlab.scripts.destroyvm:run"``.
 """
@@ -22,7 +29,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import click
+import typer
 
 from ..utils.snapshot_cleanup import undefine_with_snapshot_cleanup
 from ..utils.virsh import (
@@ -39,28 +46,38 @@ _DEFAULT_URI = "qemu:///system"
 _ONEOFF_STORAGE_ROOT = Path("/var/lib/libvirt/images/oneoff")
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.argument("vm_name")
-@click.option(
-    "--force",
-    is_flag=True,
-    default=False,
-    help="Skip the confirmation prompt.",
+app = typer.Typer(
+    help="Destroy and undefine a one-off libvirt VM created by createvm.",
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
-@click.option(
-    "--uri",
-    default=_DEFAULT_URI,
-    show_default=True,
-    help="libvirt connection URI.",
-)
-@click.option(
-    "--storage-root",
-    type=click.Path(file_okay=False, path_type=Path),
-    default=_ONEOFF_STORAGE_ROOT,
-    show_default=True,
-    help="Override the per-VM storage root (test seam).",
-)
-def run(vm_name: str, force: bool, uri: str, storage_root: Path) -> None:
+
+
+def _fail(message: str) -> typer.Exit:
+    """Print ``Error: <message>`` to stderr and return an ``Exit(1)``.
+
+    Returning the ``Exit`` instance (rather than raising here) lets
+    callers write ``raise _fail("...") from exc`` so the original
+    ``VirshError`` cause is preserved in tracebacks.
+    """
+    typer.echo(f"Error: {message}", err=True)
+    return typer.Exit(code=1)
+
+
+@app.command()
+def destroyvm(
+    vm_name: str = typer.Argument(..., help="Short name of the one-off VM."),
+    force: bool = typer.Option(False, "--force", help="Skip the confirmation prompt."),
+    uri: str = typer.Option(
+        _DEFAULT_URI, "--uri", show_default=True, help="libvirt connection URI."
+    ),
+    storage_root: Path = typer.Option(
+        _ONEOFF_STORAGE_ROOT,
+        "--storage-root",
+        show_default=True,
+        file_okay=False,
+        help="Override the per-VM storage root (test seam).",
+    ),
+) -> None:
     """Destroy and undefine the one-off VM named ``VM_NAME``.
 
     Looks up the libvirt domain ``oneoff-<VM_NAME>``. If the prefix
@@ -74,33 +91,33 @@ def run(vm_name: str, force: bool, uri: str, storage_root: Path) -> None:
     try:
         present_domains = virsh_list_all_names(uri)
     except VirshError as exc:
-        raise click.ClickException(
+        raise _fail(
             f"Could not list libvirt domains at {uri}: {exc.stderr or exc}"
         ) from exc
 
     if domain_name not in present_domains:
         # Important: the bare vm_name is NEVER looked up. A manifest VM
         # that happened to share the short name stays invisible.
-        raise click.ClickException(
+        raise _fail(
             f"One-off VM '{domain_name}' is not defined at {uri}. "
             "(If you expected to manage a manifest VM, use 'lvlab destroy' instead.)"
         )
 
     if not force:
-        click.echo(
+        typer.echo(
             f"This will destroy, undefine, and remove all data for VM "
             f"'{domain_name}' at {uri}.",
             err=True,
         )
-        if not click.confirm("Are you sure?", err=True):
-            click.echo("Aborted.", err=True)
+        if not typer.confirm("Are you sure?", err=True):
+            typer.echo("Aborted.", err=True)
             return
 
     # Step 1: force-off if not already shut off.
     try:
         state = virsh_domstate(uri, domain_name)
     except VirshError as exc:
-        raise click.ClickException(
+        raise _fail(
             f"Could not query state of '{domain_name}': {exc.stderr or exc}"
         ) from exc
 
@@ -108,7 +125,7 @@ def run(vm_name: str, force: bool, uri: str, storage_root: Path) -> None:
         try:
             run_virsh(uri, ["destroy", domain_name])
         except VirshError as exc:
-            raise click.ClickException(
+            raise _fail(
                 f"Could not force-off '{domain_name}': {exc.stderr or exc}"
             ) from exc
 
@@ -116,17 +133,22 @@ def run(vm_name: str, force: bool, uri: str, storage_root: Path) -> None:
     try:
         undefine_with_snapshot_cleanup(uri, domain_name)
     except VirshError as exc:
-        raise click.ClickException(
-            f"Could not undefine '{domain_name}': {exc.stderr or exc}"
-        ) from exc
+        raise _fail(f"Could not undefine '{domain_name}': {exc.stderr or exc}") from exc
 
     # Step 3: storage cleanup. Only after undefine succeeds; if undefine
     # failed the files are useful evidence and should NOT be wiped.
     if vm_dir.exists():
         shutil.rmtree(vm_dir, ignore_errors=False)
 
-    click.echo(f"VM '{domain_name}' destroyed and removed.", err=False)
+    typer.echo(f"VM '{domain_name}' destroyed and removed.", err=False)
+
+
+# Backwards-compat alias for the entry point and external imports.
+# pyproject.toml references "tkc_lvlab.scripts.destroyvm:run"; tests
+# import ``run`` from this module. Typer ``app`` is callable, so the
+# script entry point works identically.
+run = app
 
 
 if __name__ == "__main__":  # pragma: no cover
-    run()
+    app()

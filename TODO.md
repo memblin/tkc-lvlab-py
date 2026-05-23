@@ -232,20 +232,22 @@ ______________________________________________________________________
     conversion). `tkc_lvlab.utils.virsh` was written to the new
     convention from day one; it's a natural first entry when Phase 7
     starts.
-- `docs/Why.md` / `docs/Design.md` / `docs/Libvirt.md` / `docs/WIP.md`
-    were skimmed; they are author-narrative or notes-style and don't
-    carry stale toolchain claims. They stay in `exclude_docs` until
-    individually modernized as part of Phase 7's user-facing-docs
-    sweep.
+- `docs/Why.md` / `docs/Design.md` / `docs/Libvirt.md` were skimmed;
+    they are author-narrative or notes-style and don't carry stale
+    toolchain claims. They stayed out-of-nav until individually
+    modernized as part of Phase 7's user-facing-docs sweep. (Phase 11
+    later relocated them to `docs-extra/` so the doc-builder no
+    longer scans them at all; `WIP.md` was dropped in the same
+    cleanup pass as redundant brainstorming.)
 
 ______________________________________________________________________
 
 ## Phase 5 — Survey `lvscripts-py` ✅ COMPLETE — 2026-05-23
 
-Output landed as [`docs/lvscripts-survey.md`](lvscripts-survey.md) (in
-`exclude_docs`; internal planning artifact). It supersedes the older
-scratch inventory at `/tmp/lvscripts-inventory.md`, which pre-dated
-Phase 2 completion.
+Output landed as `docs-extra/lvscripts-survey.md` (internal planning
+artifact; lives in `docs-extra/` so the doc-builder doesn't scan it).
+It superseded the older scratch inventory at
+`/tmp/lvscripts-inventory.md`, which pre-dated Phase 2 completion.
 
 - [x] Read `lvscripts-py/CLAUDE.md` and `README.md` to understand intent.
     lvscripts is a Typer-based CLI that wraps host binaries to create
@@ -885,231 +887,21 @@ option/default preserved.
 
 ______________________________________________________________________
 
-## Phase 10 — Cut the next release (version target paused — 2026-05-23)
-
-**Status:** the 2026-05-23 destructive smoke test surfaced two real
-bugs (now fixed in commits `bbf6141` and `626f272`) plus several
-follow-up items captured in the "Smoke-test follow-ups (other
-findings, deferred for review)" section above. Per the user's call,
-the previously-queued 1.0.0 target is **paused** — we'll work out
-the version number later, once the follow-ups have been reviewed
-and either addressed or explicitly waived. The pre-tag gate and
-bump procedure documented below still applies whenever the version
-target lands, whether that's 1.0.0 or another number (0.3.0 is also
-a viable signal for "substantial migration work, some loose ends
-acknowledged").
-
-The post-0.2 work landed a lot of substantive change:
-
-- Phase 2 removed `libvirt-python` (the C-extension dependency).
-- Phase 3 wired up the pytest matrix + the test-prefix safety
-    scaffolding.
-- Phase 4 rewrote the user-facing docs.
-- Phase 5 surveyed `lvscripts-py` into a docs/lvscripts-survey.md
-    artifact.
-- Phase 6 added the standalone `createvm` / `destroyvm` console
-    scripts.
-- Phase 7 converted every legacy module to Google-style docstrings +
-    type hints.
-- Phase 9 (and its follow-up) ported the entire CLI surface — both
-    `lvlab` and the standalone scripts — from Click to Typer with
-    UX preservation.
-
-Interfaces are stable, the suite is green (260 passed, 1 skipped as
-of the 2026-05-23 catalog refresh), mkdocs `--strict` builds clean.
-
-### Pre-tag gate (do all of these before bumping the version)
-
-- [x] **Destructive smoke test** — completed 2026-05-23 on
-    `podman01.tkclabs.io`. Both manifest (`lvlab up vault.local` →
-    `status` → `snapshot create/list/delete` → `destroy --force`)
-    and standalone (`createvm smoke.test --distro debian13` →
-    `destroyvm --force`) round-trips landed cleanly. Findings are
-    captured in the "Smoke-test follow-ups (other findings,
-    deferred for review)" section above; the two real-bug findings
-    are already fixed (commits `bbf6141` and `626f272`).
-- [ ] **Tag-name dry run**: open `.github/workflows/build-release.yml`
-    and confirm the wheel filename glob (`tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl`) still matches what `uv build` produces. Should
-    be a no-op since we're staying on the prefix layout and the
-    distribution name (`tkc-lvlab`) isn't changing — but verify with
-    a `workflow_dispatch` against an arbitrary test tag (e.g.
-    `0.99.0-rc1`) if you want belt-and-suspenders confidence.
-- [ ] **Suite + docs final pass** on the candidate commit:
-    `uv run pytest -q`, `uv run mkdocs build --strict`,
-    `uv run pre-commit run --all-files`.
-
-### Bump procedure
-
-Per `docs/releases.md` — the process is already documented; the
-1.0.0 bump just follows it:
-
-- [ ] Edit `pyproject.toml`: `version = "0.2.4"` → `version = "1.0.0"`.
-- [ ] `uv lock` to refresh the lockfile against the new version.
-- [ ] PR the version bump in a small, focused commit (no other
-    changes — keeps the release commit auditable).
-- [ ] Merge to `main`.
-- [ ] Pull `main` locally, create tag `1.0.0`, push it. The tag
-    push (matching the `[0-9]+.[0-9]+.[0-9]+` glob in
-    `.github/workflows/build-release.yml`) triggers the build +
-    GitHub Release with `gh release create ... --generate-notes`.
-
-### Release notes — what to surface
-
-`--generate-notes` will summarize merged PRs since the previous tag.
-Worth adding a hand-written summary at the top of the release body
-covering the post-0.2 themes:
-
-- **Goodbye libvirt-python**: no more `libvirt-dev` / `pkg-config`
-    build prereq. `uv sync` works on any host with `virsh` available
-    at runtime.
-- **New standalone scripts**: `createvm` and `destroyvm` (one-off
-    libvirt VMs, no `Lvlab.yml` required).
-- **CLI is Typer-based** (UX preserved char-for-char, but the
-    rendered help is Rich-panel styled now).
-- **Full Google-style docstring + type-hint coverage** — first
-    release where mkdocstrings can render the entire API surface.
-- **Python matrix**: 3.11 / 3.12 / 3.13 / 3.14 on CI.
-
-### Risk flags
-
-- **Tag push is live the moment it lands**. There is no
-    "draft release" gate in the current workflow — push tag, build
-    runs, release is published with the wheel asset. If anything's
-    wrong (e.g. version mismatch between tag and `pyproject.toml`),
-    catch it BEFORE pushing the tag. The mismatch failure mode is
-    silent — the wheel builds with the pyproject version, the
-    release is created with the tag name, and the wheel filename
-    won't match the release body. Recoverable but ugly.
-- **No PyPI publish in the workflow today** — releases are
-    GitHub-only artifacts. `uv tool install` from a Git URL or a
-    direct wheel URL still works; `uv tool install tkc-lvlab`
-    against PyPI does **not** (there's no PyPI publish step). If
-    that's a 1.0 expectation, it needs to be added to the workflow
-    as a separate prerequisite item.
-- **`--no-verify` is off-limits for the version-bump commit** per
-    project rules. Pre-commit's mdformat / black hooks have caught
-    real issues before; let them run.
-
-______________________________________________________________________
-
 ## Phase 11 — Migrate docs from MkDocs + Material to Zensical ✅ COMPLETE 2026-05-23
 
-**Status:** COMPLETE. The `exclude_docs` upstream gap was resolved via resolution path 2 (relocate excluded files): all 10 entries moved out of `docs/` into a new sibling `docs-extra/` directory that the doc-builder never scans, and `exclude_docs:` is gone from `mkdocs.yml`. The dependency swap landed in the same session: `mkdocs` + `mkdocs-material` dropped, `zensical` added, `mkdocs.yml` kept (Zensical reads it without a rewrite). Strict build (`uv run zensical build -s`) is clean and the `docs-extra/` files do not render.
+**Motivation:** MkDocs 2.0 was announced as a breaking, no-migration-path change by the Material for MkDocs team (see <https://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/>). Phase 11 migrates to [Zensical](https://zensical.org/) — the same maintainer's successor — on our own schedule rather than under forced timing when 2.0 lands.
 
-**Original motivation:** Surfaced 2026-05-23 during the Phase 8 `uv run mkdocs build --strict` run, which now prints a deprecation banner from the Material for MkDocs team:
+### What landed
 
-```
-MkDocs 2.0, the underlying framework of Material for MkDocs,
-will introduce backward-incompatible changes, including:
-× All plugins will stop working — the plugin system has been removed
-× All theme overrides will break — the theming system has been rewritten
-× No migration path exists — existing projects cannot be upgraded
-× Closed contribution model — community members can't report bugs
-× Currently unlicensed — unsuitable for production use
-```
+- **Doc-builder swap.** `mkdocs` + `mkdocs-material` dropped from `[dependency-groups].dev`; `zensical>=0.0.43` added. `mkdocstrings[python]` kept (Zensical delegates to it). `mkdocs.yml` stays as the config — Zensical reads it directly via `parse_mkdocs_config()`, no rewrite needed.
+- **Out-of-nav docs relocated to `docs-extra/`.** Zensical 0.0.43 silently ignores MkDocs' `exclude_docs:` key (all 10 entries would render publicly). Resolution: move the 10 entries out of `docs/` into a new sibling `docs-extra/` directory that the doc-builder never scans. The published-vs-unpublished separation is now structural (which dir the file lives in) rather than configuration (which key it appears under), so whichever doc-builder we run gets the right answer by default. As legacy user-facing docs get modernized for publication, `git mv docs-extra/X.md docs/X.md` + add a `nav` entry.
+- **Command swap.** `uv run mkdocs build --strict` / `uv run mkdocs serve` references in `CLAUDE.md` and `docs-extra/CONTRIBUTING.md` replaced with `uv run zensical build -s` / `uv run zensical serve`.
+- **Verified.** Strict build clean (1.7s after deps cache), no `docs-extra/` leakage in `site/`, 272 tests still passing, pre-commit clean.
 
-See <https://squidfunk.github.io/mkdocs-material/blog/2026/02/18/mkdocs-2.0/>. Original direction: move to [Zensical](https://zensical.org/) (the Material maintainer's MkDocs successor) on our own schedule rather than under a forced migration when MkDocs 2.0 lands.
+### Operational notes (load-bearing)
 
-### Spike findings (2026-05-23)
-
-What works:
-
-- Zensical 0.0.43 installs cleanly via `uv add --group dev zensical` — pre-built wheels on PyPI, no Rust toolchain needed.
-- Zensical reads `mkdocs.yml` directly via `parse_mkdocs_config()`. No config rewrite required to spike — the existing YAML config drives a Zensical build.
-- The `mkdocstrings[python]` shim works end-to-end: `:::tkc_lvlab.cli` directives render Google-style docstrings, type hints from signatures, `Args:`/`Returns:`/`Raises:` blocks, class/method headings — all correct in generated HTML. **Phase 7's docstring conversion survives the migration**, which was the primary risk in the original brief.
-- Nav shape (`Home → API Reference → utils.* → scripts.*`) preserved exactly.
-- All `pymdownx.*` extensions, admonitions, superfences, tabbed code blocks, code-copy button work identically.
-- Theme is visually Material-equivalent (Zensical is built by the same maintainers using the same template lineage).
-
-### The hard blocker: `exclude_docs` is not implemented in Zensical
-
-MkDocs 1.5+'s `exclude_docs:` keeps the listed files from rendering into the public site even though they live in `docs/`. Zensical 0.0.43 has **no equivalent mechanism** — `exclude_docs` does not appear anywhere in Zensical's config parser (`python/zensical/config.py`). When `mkdocs.yml` is fed to Zensical, the `exclude_docs:` key is silently ignored and every file under `docs/` becomes a public page.
-
-Confirmed via clean `zensical build -c` against the real `mkdocs.yml`: all 10 currently-excluded entries appeared in the generated site:
-
-- `Walkthrough.md`, `Design.md`, `Why.md`, `Libvirt.md` — legacy user docs not yet modernised.
-- `releases.md`, `CONTRIBUTING.md`, `WIP.md` — internal or semi-public process docs.
-- `Lvlab.example.yml` — would be served as a raw text page.
-- `lvscripts-survey.md` — internal planning artifact, explicitly not for the public site.
-- `cloud-init.examples/` — examples directory.
-
-This is a hard failure of the Phase 11 brief's "Preserve out-of-nav pages" requirement.
-
-### Resolutions considered (path 2 picked 2026-05-23)
-
-1. **Wait for Zensical to implement `exclude_docs`.** 0.0.43 is alpha; the gap may close upstream. Rejected: leaves Phase 11 hanging on a no-deadline upstream ask.
-1. **Move excluded files out of `docs/`.** ✅ **Picked.** Relocated to `docs-extra/` (sibling of `docs/`). Cross-link risk was theoretical — pre-move scan found only one prose mention in `docs/index.md` and no hyperlinks. The relocate is independently valuable beyond Phase 11: it sharpens the published-vs-unpublished separation for any future doc-builder choice.
-1. **Stay on MkDocs + Material.** Tempting given the deprecation banner has no concrete date, but it leaves the migration as a forced-march later. The relocate from path 2 doesn't preclude this option — staying on MkDocs + the new `docs-extra/` layout is the current state, and a future Zensical swap is now an independent, smaller piece of work.
-1. **Hybrid: native `zensical.toml` + move excluded files.** Rejected: same blast radius as path 2 plus a config rewrite, with no functional gain.
-
-### Additional risks found in the spike
-
-- **Alpha-quality software.** Zensical 0.0.43 is "Development Status :: 3 - Alpha" on PyPI. The Rust-side file walker silently misses Python-config keys like `exclude_docs`. Behaviour may shift across minor versions.
-- **Silent gap, no warning.** When Zensical encounters `exclude_docs:` it emits no warning — a developer could miss that internal pages went public. Any decision to proceed needs an explicit verification step that the excluded pages don't render.
-- **mdformat version conflict.** `uv add --group dev zensical` pulls in `mdformat>=1.0`, `mdformat-mkdocs>=5.1`, `mdformat-gfm>=1.0`. These exceed the older pinned versions in `.pre-commit-config.yaml` (mdformat 0.7.21, mdformat-mkdocs 4.1.2, mdformat-gfm 0.4.1). A migration would need a simultaneous pre-commit config update.
-
-### Original risk flags (retained for context)
-
-- **Timing-sensitive.** Doing this before MkDocs 2.0 lands keeps the build green; doing it after means a forced migration under time pressure. The deprecation banner is the early-warning shot.
-- **mkdocstrings replacement was the biggest unknown.** Spike confirms it survives — Phase 7's docstring work renders identically under Zensical's shim.
-- **Theme aesthetic drift.** Material has a recognisable look; spike shows Zensical's default is visually equivalent. Capture before/after screenshots if/when the migration lands.
-
-### Work completed (path 2 — relocate)
-
-- [x] Move 10 entries from `docs/` to `docs-extra/`:
-    `Walkthrough.md`, `Design.md`, `Why.md`, `Libvirt.md`,
-    `releases.md`, `CONTRIBUTING.md`, `WIP.md`, `Lvlab.example.yml`,
-    `lvscripts-survey.md`, `cloud-init.examples/`.
-- [x] Drop `exclude_docs:` block from `mkdocs.yml`; replace with a
-    short comment pointing at the `docs-extra/` convention.
-- [x] Update cross-references in `README.md` (2),
-    `CLAUDE.md` (3), `docs/index.md` (1 prose),
-    `tests/test_integration_{lvlab,snapshot}.py` (2 docstrings),
-    `src/tkc_lvlab/utils/{requirements,passwords,network,ssh_keys}.py`
-    (4 module docstrings), and
-    `.claude/skills/refresh-cloud-images/SKILL.md` (5).
-- [x] Update internal label of two `docs-extra/Walkthrough.md`
-    references that used the `docs/Lvlab.example.yml` form
-    (relative link target stays correct — both files moved
-    together — only the visible label needed `docs-extra/`).
-- [x] Verify `uv run mkdocs build --strict` clean,
-    `uv run pre-commit run --all-files` clean,
-    `uv run pytest -q` still 272 passed / 9 skipped.
-
-### Dep swap (done in the same session as the relocate)
-
-- [x] `pyproject.toml` `[dependency-groups] dev` swap — dropped
-    `mkdocs`, `mkdocs-material`; added `zensical>=0.0.43`. Kept
-    `mkdocstrings[python]` (Zensical delegates to it).
-- [x] Kept `mkdocs.yml` as the config — Zensical reads it directly,
-    no rewrite needed. The TOML migration was rejected for being
-    config-churn-for-aesthetics.
-- [x] Replaced `uv run mkdocs build --strict` / `uv run mkdocs serve`
-    in `CLAUDE.md` and `docs-extra/CONTRIBUTING.md` with
-    `uv run zensical build -s` / `uv run zensical serve`.
-- [x] **mdformat pre-commit pins stay on 0.7.21.** The earlier spike
-    note claimed a "version conflict" with Zensical's transitive
-    `mdformat>=1.0`. That framing was wrong: pre-commit's hook env
-    is isolated from the project venv, so the two mdformat
-    installs coexist without conflict. Also Zensical doesn't
-    directly depend on mdformat — the 1.0 chain comes from our
-    explicit `mdformat-mkdocs` dev-group dep. Pinning the
-    pre-commit hook to 0.7.21 keeps formatting stable; bumping to
-    1.0 tripped a "renders to different HTML" upstream safety net
-    on TODO.md (fails even with no plugins loaded — confirmed
-    upstream regression). The hook config carries a comment
-    explaining the version gap.
-- [x] Verified `uv run zensical build -s` clean and the
-    `docs-extra/` files do NOT render. `find site/ -name 'Walkthrough*' -o -name 'CONTRIBUTING*' -o -name 'lvscripts-survey*'` returns empty.
-
-### Out of scope (separate items)
-
-- [ ] GitHub Pages deployment workflow. The site URL
-    `https://memblin.github.io/tkc-lvlab-py/` is referenced in
-    `mkdocs.yml` but no docs-deploy workflow exists today. This
-    is a separate piece of work (likely an `actions/deploy-pages`
-    job triggered on tag pushes or main pushes); not Phase 11
-    scope.
+- **mdformat pre-commit pin lags the project venv's mdformat by design.** Pre-commit hooks use isolated envs, so the project's transitive `mdformat>=1.0` (via `mdformat-mkdocs`) coexists with the hook's older pin. Bumping the hook to `mdformat 1.0` tripped a "renders to different HTML" upstream regression on `TODO.md` that fails even with no plugins loaded; `mdformat-mkdocs 5.x` trips the same safety net regardless of mdformat-core version. The hook is pinned to the freshest verified-working combo: `mdformat 0.7.22 + mdformat-mkdocs 4.4.2 + mdformat-gfm 1.0.0 + more_itertools<11`. A comment in `.pre-commit-config.yaml` records the testing matrix.
+- **`docs-extra/` is the home for both legacy user-facing docs awaiting modernization (Walkthrough.md, Design.md, etc.) and permanent internal planning artifacts (lvscripts-survey.md). The dir name is intentionally neutral so it covers both.**
 
 ______________________________________________________________________
 

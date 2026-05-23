@@ -10,7 +10,7 @@ repos:
     hooks:
       - id: black
   - repo: https://github.com/hukkin/mdformat
-    rev: 0.7.21
+    rev: 0.7.22
     hooks:
       - id: mdformat
         # Exclusions:
@@ -24,16 +24,19 @@ repos:
         #   horizontal rule and collapses the frontmatter into a header,
         #   which breaks skill discovery.
         #
-        # Version note: this hook stays on mdformat 0.7.21 even though
-        # the project's dev-group transitively pulls mdformat 1.0 (via
-        # mdformat-mkdocs 5.1). Pre-commit uses an isolated env per
-        # hook, so there's no actual conflict — the two installs live
-        # side-by-side. mdformat 1.0 tripped a "renders to different
-        # HTML" safety net on TODO.md (an upstream regression — fails
-        # even with no plugins loaded), so the older pin stays until
-        # that's resolved upstream.
+        # Version note (2026-05-23): this combo (mdformat 0.7.22,
+        # mdformat-mkdocs 4.4.2, mdformat-gfm 1.0.0) was the freshest
+        # set verified to format TODO.md without tripping mdformat's
+        # "Formatted Markdown renders to different HTML" safety net.
+        # mdformat 1.0.0 + any plugin chain fails that check on TODO.md
+        # (confirmed upstream regression — fails even with no plugins
+        # loaded). mdformat-mkdocs 5.x also fails the check on TODO.md
+        # regardless of which mdformat-core it's paired with. The
+        # `more_itertools<11` upper bound is required because
+        # mdformat-mkdocs 4.4.2 imports the removed-in-11
+        # ``zip_equal`` symbol.
         exclude: ^(docs/api/|\.claude/skills/)
         additional_dependencies:
-          - mdformat-mkdocs==4.1.2
-          - mdformat-gfm==0.4.1
+          - mdformat-mkdocs==4.4.2
+          - mdformat-gfm==1.0.0
           - more_itertools<11

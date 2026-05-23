@@ -43,10 +43,11 @@ one must be updated in all of them together. Never edit only one.
     `{debian12, debian13}` after the 2026-05-23 fedora40 drop.
 - `Lvlab.yml` (repo root) — the maintainer's working manifest, also a
     de-facto example for users who clone the repo. `images:` section.
-- `docs-extra/Lvlab.example.yml` — the canonical example shipped in the
-    site `exclude_docs` set. Wider catalog than `BUILTIN_IMAGES`
-    (currently lists debian10, debian11, debian12, debian13 plus two
-    custom intranet images).
+- `docs-extra/Lvlab.example.yml` — the canonical example for new users.
+    Lives in `docs-extra/` (a sibling of `docs/`) so the doc-builder
+    doesn't scan it. Wider catalog than `BUILTIN_IMAGES` (currently
+    lists debian11, debian12, debian13 plus two custom intranet
+    images).
 
 When a `PROPOSE-REMOVE` row is confirmed, also sweep the
 `docs-extra/` directory (Walkthrough.md, Why.md, Design.md,
@@ -190,7 +191,7 @@ them in the diff table with action "skip (intranet)" and move on.
     uv run pre-commit run --all-files
     ```
 
-    Both must pass. (Optional: `uv run mkdocs build --strict` — cheap,
+    Both must pass. (Optional: `uv run zensical build -s` — cheap,
     ~2s, catches any doc rebuild surprises but not strictly needed
     for a URL-only refresh; recommended when a `PROPOSE-REMOVE`
     swept docs/.)

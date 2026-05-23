@@ -62,51 +62,51 @@ plus one stray `conn.getCapabilities()` in `tkc_lvlab/cli.py`.
 
 ### Implementation
 
-- [ ] Build a small subprocess wrapper at `tkc_lvlab/utils/virsh.py`:
-    - [ ] `run_virsh(uri, args, check=True, capture=True) -> CompletedProcess`
+- [x] Build a small subprocess wrapper at `tkc_lvlab/utils/virsh.py`:
+    - [x] `run_virsh(uri, args, check=True, capture=True) -> CompletedProcess`
         — wraps `subprocess.run(["virsh", "-c", uri, *args], env={..., "LC_ALL": "C"})`
         so output is locale-stable.
-    - [ ] Custom `VirshError(returncode, stderr)` so callers can `except VirshError`
+    - [x] Custom `VirshError(returncode, stderr)` so callers can `except VirshError`
         without leaking `subprocess.CalledProcessError` everywhere.
-- [ ] Port the `Machine` methods in `tkc_lvlab/utils/libvirt.py`:
-    - [ ] `Machine.exists_in_libvirt` → `virsh list --all --name`, exact match.
-    - [ ] `Machine.destroy` / `Machine.shutdown` / `Machine.poweron` →
+- [x] Port the `Machine` methods in `tkc_lvlab/utils/libvirt.py`:
+    - [x] `Machine.exists_in_libvirt` → `virsh list --all --name`, exact match.
+    - [x] `Machine.destroy` / `Machine.shutdown` / `Machine.poweron` →
         `virsh destroy|shutdown|start <name>`.
-    - [ ] `Machine.list_snapshots` → `virsh snapshot-list <name> --name`.
-    - [ ] `Machine.create_snapshot` → `virsh snapshot-create <name> --xmlfile <path>`.
+    - [x] `Machine.list_snapshots` → `virsh snapshot-list <name> --name`.
+    - [x] `Machine.create_snapshot` → `virsh snapshot-create <name> --xmlfile <path>`.
         **Sharp edge:** `--xmlfile` needs a real path. Use `tempfile.NamedTemporaryFile`
         (delete after) rather than relying on stdin redirection — virsh's stdin
         handling for `--xmlfile -` varies by version.
-    - [ ] `Machine.delete_snapshot` → `virsh snapshot-delete <name> <snapshot_name>`.
-    - [ ] `Machine.hasCurrentSnapshot` equivalent — `virsh snapshot-list <name> --name`
+    - [x] `Machine.delete_snapshot` → `virsh snapshot-delete <name> <snapshot_name>`.
+    - [x] `Machine.hasCurrentSnapshot` equivalent — `virsh snapshot-list <name> --name`
         and check non-empty (used in `destroy()` cleanup path).
-    - [ ] `capabilities` command (`cli.py:30-35`) → `virsh capabilities` stdout.
-    - [ ] `status` command (`cli.py:385-422`) → single `virsh list --all` parse,
+    - [x] `capabilities` command (`cli.py:30-35`) → `virsh capabilities` stdout.
+    - [x] `status` command (`cli.py:385-422`) → single `virsh list --all` parse,
         not one `domstate` call per declared VM (cuts startup overhead).
-- [ ] Replace dynamic state-constant reflection. Drop `get_machine_state`
+- [x] Replace dynamic state-constant reflection. Drop `get_machine_state`
     (libvirt.py:546) and `_humanize_machine_status` (libvirt.py:493) in
     their current form:
-    - [ ] `virsh domstate <name>` returns a human string: `running`, `idle`,
+    - [x] `virsh domstate <name>` returns a human string: `running`, `idle`,
         `paused`, `in shutdown`, `shut off`, `crashed`, `pmsuspended`.
         Replace the integer-keyed dynamic dict with a hardcoded `str → human`
         map keyed on those exact strings.
-    - [ ] Use `virsh domstate <name> --reason` for the reason string. Build the
+    - [x] Use `virsh domstate <name> --reason` for the reason string. Build the
         analogous reason map.
-    - [ ] Audit every caller that compares against `"VIR_DOMAIN_*"` strings
+    - [x] Audit every caller that compares against `"VIR_DOMAIN_*"` strings
         (`cli.py:126`, `cli.py:137`, `cli.py:443`, `cli.py:447`,
         `libvirt.py:301`, `libvirt.py:307`, `libvirt.py:440`, `libvirt.py:463`)
         and switch them to the new lowercase virsh state strings.
-- [ ] Drop `libvirt-python` from `[project.dependencies]` in `pyproject.toml`.
+- [x] Drop `libvirt-python` from `[project.dependencies]` in `pyproject.toml`.
     Regenerate `uv.lock`. Update `CLAUDE.md`'s "Install deps" note — at
     build time we no longer need `libvirt-dev` / `pkg-config`, only
     `libvirt-clients` (or distro equivalent) at runtime.
-- [ ] After regenerating `uv.lock`, diff it against the previous lock and
+- [x] After regenerating `uv.lock`, diff it against the previous lock and
     confirm the only changes are `libvirt-python` removal plus any
     transitives uniquely brought in by it. Surprise shifts in
     `requests` / `urllib3` / `idna` / `jinja2` / `cryptography` resolved
     versions should be investigated before merging — those are the
     packages Dependabot has historically flagged.
-- [ ] Update `CLAUDE.md` Architecture section: remove `libvirt-python` API
+- [x] Update `CLAUDE.md` Architecture section: remove `libvirt-python` API
     references, document the `virsh` subprocess pattern and the
     `tkc_lvlab/utils/virsh.py` helper.
 - [x] ~~Remove `continue-on-error: true` for Python 3.14 in the test workflow~~ —
@@ -119,12 +119,12 @@ plus one stray `conn.getCapabilities()` in `tkc_lvlab/cli.py`.
 We're rewriting all destructive code paths in this phase anyway. Land the
 hardening at the same time so we don't churn these files twice.
 
-- [ ] `snapshot delete` gets a `--force` flag + confirmation prompt, mirroring
+- [x] `snapshot delete` gets a `--force` flag + confirmation prompt, mirroring
     `destroy` (already done in the Phase 0 incidentals commit, but verify
     consistency once the underlying call is virsh-based).
-- [ ] Every destructive command surfaces the actual `virsh` stderr on failure
+- [x] Every destructive command surfaces the actual `virsh` stderr on failure
     paths — no more silent "deletion failed" with no detail.
-- [ ] Audit `down` for whether it should consume the same `--force` semantics
+- [x] Audit `down` for whether it should consume the same `--force` semantics
     as `destroy` (decision pending).
 
 ### Phase 2 risks / sharp edges
@@ -702,22 +702,19 @@ is a deliberate decision — neither blocking nor a bug, just a
 delta from Click. Recording so we make the call rather than
 drifting:
 
-- [ ] **`--install-completion` / `--show-completion` are new options
-    on every Typer command.** Click had no equivalent. They're
-    harmless opt-in shell-completion helpers but they ARE a UX
-    delta — any user scripting `lvlab --help | grep` will see
-    options that didn't exist before. To suppress: pass
-    `add_completion=False` to the top-level `typer.Typer(...)`.
-    Default position: leave them on (low cost, modern UX feature).
-- [ ] **Help output uses Rich Unicode panel boxes** (`╭ │ ╰`). The
-    content is preserved but the bytes differ from Click. To
-    suppress and get plain text: `rich_markup_mode=None` on the
-    `typer.Typer(...)`. Default position: leave Rich enabled
-    (matches lvscripts-py + every other modern Typer CLI). Revisit
-    only if a user reports terminal issues (piping to `less`
-    without `-R`, etc.).
-- [ ] **`[default: 0]` shown for the `-v` count flag.** Slightly
-    noisy but informative. No-op fix — accept as-is.
+- [x] **`--install-completion` / `--show-completion` are new options
+    on every Typer command.** Decided 2026-05-23: **leave on**. Low
+    cost, modern UX feature; matches lvscripts-py. To suppress later
+    if needed: pass `add_completion=False` to the top-level
+    `typer.Typer(...)`.
+- [x] **Help output uses Rich Unicode panel boxes** (`╭ │ ╰`).
+    Decided 2026-05-23: **leave Rich enabled**. Matches lvscripts-py
+    - every other modern Typer CLI; content is preserved. Revisit
+        only if a user reports terminal issues (piping to `less` without
+        `-R`, etc.); suppress with `rich_markup_mode=None`.
+- [x] **`[default: 0]` shown for the `-v` count flag.** Decided
+    2026-05-23: **accept as-is**. Slightly noisy but informative;
+    no-op fix.
 
 ### Smoke-test follow-ups (other findings, deferred for review)
 
@@ -874,8 +871,8 @@ The post-0.2 work landed a lot of substantive change:
     `lvlab` and the standalone scripts — from Click to Typer with
     UX preservation.
 
-Interfaces are stable, the suite is green (254 passed, 1 skipped
-after the Phase 9 follow-up fixes), mkdocs `--strict` builds clean.
+Interfaces are stable, the suite is green (260 passed, 1 skipped as
+of the 2026-05-23 catalog refresh), mkdocs `--strict` builds clean.
 
 ### Pre-tag gate (do all of these before bumping the version)
 
@@ -951,7 +948,7 @@ covering the post-0.2 themes:
 
 ______________________________________________________________________
 
-## Decisions still open (call these out before Phase 6 lands)
+## Decisions log
 
 1. ~~Build backend~~ — decided: `uv_build`. No hatchling, no setuptools.
 1. ~~Python floor~~ — decided: drop 3.10, `requires-python = ">=3.11"`.

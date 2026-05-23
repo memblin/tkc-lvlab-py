@@ -485,7 +485,7 @@ separate effort from the docstring conversion.
 
 ______________________________________________________________________
 
-## Phase 8 — Repo restructure: src-layout (READY — namespace dropped 2026-05-23)
+## Phase 8 — Repo restructure: src-layout (COMPLETE — 2026-05-23)
 
 **Scope (2026-05-23 revision):** move the package into a `src/`
 directory to align with modern PEP 621 / uv convention. **No
@@ -538,38 +538,41 @@ change. The wheel filename is also unchanged
 (`tkc_lvlab-X.Y.Z-py3-none-any.whl`) because `[project] name` and
 the module name both stay `tkc-lvlab` / `tkc_lvlab`.
 
-- [ ] `git mv tkc_lvlab src/tkc_lvlab`. Single move; the package's
-    internal layout (`utils/`, `scripts/`, `templates/`) comes along
-    unchanged. `src/tkc_lvlab/__init__.py` stays where it is.
-- [ ] `pyproject.toml`:
-    - [ ] `[tool.uv_build]` add `module-root = "src"` (the default is
-        the repo root). Confirm with `uv build` that the wheel still
-        ships `tkc_lvlab/...` and not `src/tkc_lvlab/...`.
-    - [ ] `include` glob: `tkc_lvlab/templates/*.j2` →
-        `src/tkc_lvlab/templates/*.j2`. Verify with
-        `unzip -l dist/*.whl | grep templates` after a rebuild.
-    - [ ] `[project.scripts]` entries (`lvlab`, `createvm`,
-        `destroyvm`) — **no change**, still `tkc_lvlab.cli:run` etc.,
-        because the import name didn't move.
-- [ ] `sonar-project.properties`: `sonar.sources=src/tkc_lvlab`.
-- [ ] `[tool.coverage.run]` / `[tool.pytest.ini_options]`:
-    `--cov=tkc_lvlab` **stays the same** (still imports as
-    `tkc_lvlab`). Only `source = ["src/tkc_lvlab"]` in
-    `[tool.coverage.run]` needs the path bump if it's set.
-- [ ] `mkdocs.yml` mkdocstrings handler: update `paths:` to include
-    `src/` so mkdocstrings can find `tkc_lvlab` after the move.
-- [ ] `CLAUDE.md`: update file-path references throughout
-    (`tkc_lvlab/utils/libvirt.py` → `src/tkc_lvlab/utils/libvirt.py`,
-    etc.). Architecture/Conventions text stays.
-- [ ] `.github/workflows/test.yml` / `build-release.yml`: scan for
-    any explicit `tkc_lvlab/` paths in glob filters or workflow
-    inputs and rebase them on `src/tkc_lvlab/`. Wheel asset name
-    rule (`tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl`)
-    **does not change**.
-- [ ] After all the above, `uv build && uv run lvlab --help`
-    confirms the wheel still works end-to-end, and
-    `uv run pytest -q` confirms the test suite still imports
-    `tkc_lvlab` cleanly.
+- [x] `git mv tkc_lvlab src/tkc_lvlab`. 26 files relocated, git
+    tracked them all as 100%-similarity renames.
+- [x] `pyproject.toml`:
+    - [x] `[tool.uv.build-backend] module-root`: `""` → `"src"`.
+        Wheel still ships `tkc_lvlab/...` flat (confirmed with
+        `unzip -l dist/*.whl`).
+    - [x] No `include` glob needed — `uv_build` auto-includes
+        every file under the module root. Pre-existing CLAUDE.md
+        claim about an include glob was a stale doc bug; fixed in
+        the same commit.
+    - [x] `[project.scripts]` unchanged — still `tkc_lvlab.cli:run`
+        etc.
+- [x] `sonar-project.properties`: `sonar.sources=tkc_lvlab` →
+    `sonar.sources=src/tkc_lvlab`.
+- [x] `[tool.coverage.run]` / `[tool.pytest.ini_options]`:
+    unchanged — `source = ["tkc_lvlab"]` and `--cov=tkc_lvlab` use
+    the import name and resolve to the new path via Python's
+    import machinery.
+- [x] `mkdocs.yml` mkdocstrings handler: added `paths: [src]` so
+    the handler finds the package source.
+- [x] `CLAUDE.md`: 8 file-path references bumped throughout. While
+    here, fixed a pre-existing doc bug claiming pyproject.toml has
+    an `include = ["tkc_lvlab/templates/*.j2"]` glob (no such
+    entry exists; uv_build auto-includes).
+- [x] `.github/workflows/build-release.yml`: scanned, no path
+    changes needed. The only `tkc_lvlab` references are the wheel
+    filename (`tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl`,
+    unchanged) and the cosmetic step name.
+- [x] Verified: `uv build` + `unzip -l` shows templates ship;
+    `uv run lvlab --help` renders identically; `uv run pytest -q`
+    → 260 passed, 1 skipped (coverage paths now show
+    `src/tkc_lvlab/...`); `uv run mkdocs build --strict` clean;
+    `uv run pre-commit run --all-files` clean.
+
+Landed in commit `74b472e` on branch `main.phase8_src_layout`.
 
 ### Risk flags (much smaller now)
 

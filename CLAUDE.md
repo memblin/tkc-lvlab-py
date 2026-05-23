@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`tkc-lvlab` (binary: `lvlab`) is a Typer-based CLI (Typer wraps Click underneath) that manages local libvirt+QEMU lab VMs from a single declarative YAML manifest (`Lvlab.yml`). It is meant for end-to-end integration testing of configuration-management code (Salt, Ansible, etc.) on a developer workstation — not for production VM management. The standalone one-off scripts (`createvm`, `destroyvm` in `tkc_lvlab/scripts/`) are also Typer-based after the Phase 9 follow-up; `createvm` keeps a minimal `import click` only for `click.Choice(case_sensitive=False)` on `--distro`.
+`tkc-lvlab` (binary: `lvlab`) is a Typer-based CLI (Typer wraps Click underneath) that manages local libvirt+QEMU lab VMs from a single declarative YAML manifest (`Lvlab.yml`). It is meant for end-to-end integration testing of configuration-management code (Salt, Ansible, etc.) on a developer workstation — not for production VM management. The standalone one-off scripts (`createvm`, `destroyvm` in `src/tkc_lvlab/scripts/`) are also Typer-based after the Phase 9 follow-up; `createvm` keeps a minimal `import click` only for `click.Choice(case_sensitive=False)` on `--distro`.
 
 A run of `lvlab init` followed by `lvlab up <vm_name>` will:
 
@@ -51,35 +51,35 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 
 ### Core flow (cli.py → utils/)
 
-`tkc_lvlab/cli.py` defines the Typer app + subcommands (Phase 9 ported it from Click; tests use `typer.testing.CliRunner`). Every command follows the same shape:
+`src/tkc_lvlab/cli.py` defines the Typer app + subcommands (Phase 9 ported it from Click; tests use `typer.testing.CliRunner`). Every command follows the same shape:
 
 1. `parse_config()` returns `(environment, images, config_defaults, machines)`.
 1. `get_machine_by_vm_name(machines, vm_name)` finds the manifest entry.
 1. `Machine(machine_config, environment, config_defaults)` merges defaults into the machine and exposes operations against libvirt.
 1. For `up`, a `CloudImage` + `VirtualDisk` + `CloudInitIso` are constructed alongside the `Machine`.
 
-`tkc_lvlab/utils/libvirt.py` — `Machine` is the central object. Key things to know:
+`src/tkc_lvlab/utils/libvirt.py` — `Machine` is the central object. Key things to know:
 
 - The libvirt domain name is **not** `vm_name`; it's `f"{vm_name}_{environment_name}"` (see `self.libvirt_vm_name`). This namespacing is what lets multiple lvlab environments coexist on one hypervisor. Anything that looks up a domain by name must use `libvirt_vm_name`.
 - `Machine.__init__` merges `config_defaults` into the machine dict (interfaces, disks, and top-level keys). When adding a new configurable field, follow that same pattern instead of reading from `config_defaults` at call sites.
 - `Machine.deploy()` shells out to `virt-install`. The `--os-variant` value is derived by splitting `self.os` on `-` and taking the first segment — this is why custom images must be named `{os_variant}-{anything}` (see `docs/Walkthrough.md` "Image Naming").
 - `Machine.cloud_init()` is also where per-machine `runcmd` gets composed with the defaults (`runcmd_ignore_defaults: true` skips defaults), and where the manifest-wide `/etc/hosts` snippet is injected at the **top** of `runcmd` so it lands before anything that does DNS-ish work.
 
-`tkc_lvlab/utils/cloud_init.py` — three dataclasses (`NetworkConfig`, `MetaData`, `UserData`) each render one Jinja template from `tkc_lvlab/templates/`. `CloudInitIso` uses `pycdlib` to build an ISO9660 + Joliet + Rock Ridge image with the three files at the names cloud-init's NoCloud datasource expects (`meta-data`, `user-data`, `network-config`). `UserData.__post_init__` will read an SSH public key from disk if `cloud_init.pubkey` looks like a path; otherwise it treats the value as a literal key.
+`src/tkc_lvlab/utils/cloud_init.py` — three dataclasses (`NetworkConfig`, `MetaData`, `UserData`) each render one Jinja template from `src/tkc_lvlab/templates/`. `CloudInitIso` uses `pycdlib` to build an ISO9660 + Joliet + Rock Ridge image with the three files at the names cloud-init's NoCloud datasource expects (`meta-data`, `user-data`, `network-config`). `UserData.__post_init__` will read an SSH public key from disk if `cloud_init.pubkey` looks like a path; otherwise it treats the value as a literal key.
 
-`tkc_lvlab/utils/images.py` — `CloudImage` knows how to download, GPG-verify the checksum file, and checksum-verify the image. Two non-obvious bits:
+`src/tkc_lvlab/utils/images.py` — `CloudImage` knows how to download, GPG-verify the checksum file, and checksum-verify the image. Two non-obvious bits:
 
 - Debian's `SHA512SUMS` file is the **same filename** across releases, so Debian images get a per-image-prefix checksum filename to avoid clobber when multiple Debian versions are configured. The detector is a regex on `debian-(\d+)` in the image filename.
 - The checksum file parser handles both Fedora's `SHA256 (file) = hash` format and Debian's `hash  file` format.
 - When GPG verification succeeds, the verified plaintext is written to `<checksum>.verified` and subsequent operations prefer that file.
 
-`tkc_lvlab/utils/vdisk.py` — `VirtualDisk` is a thin wrapper around `qemu-img create -b <cloud_image>` for qcow2 backing-file disks. One disk per entry in `machine.disks`, named `disk{index}.qcow2`.
+`src/tkc_lvlab/utils/vdisk.py` — `VirtualDisk` is a thin wrapper around `qemu-img create -b <cloud_image>` for qcow2 backing-file disks. One disk per entry in `machine.disks`, named `disk{index}.qcow2`.
 
-`tkc_lvlab/config.py` — `parse_config()` (manifest loader) and `generate_hosts()` (renders `templates/hosts.j2`, used both for stdout output by the `hosts` command and for the in-VM `/etc/hosts` cloud-init snippet — see `heredoc` parameter for the dual-mode rendering).
+`src/tkc_lvlab/config.py` — `parse_config()` (manifest loader) and `generate_hosts()` (renders `templates/hosts.j2`, used both for stdout output by the `hosts` command and for the in-VM `/etc/hosts` cloud-init snippet — see `heredoc` parameter for the dual-mode rendering).
 
 ### Templates
 
-`tkc_lvlab/templates/` contains the Jinja2 templates loaded via `PackageLoader("tkc_lvlab")`. They are packaged into the wheel through the `include = ["tkc_lvlab/templates/*.j2"]` entry in `pyproject.toml` — if you add a new template, make sure it matches that glob or it won't ship.
+`src/tkc_lvlab/templates/` contains the Jinja2 templates loaded via `PackageLoader("tkc_lvlab")`. `uv_build` auto-includes every file under the module root (`src/tkc_lvlab/`, set via `[tool.uv.build-backend] module-root = "src"` in `pyproject.toml`), so new templates ship automatically — but verify with `unzip -l dist/*.whl | grep templates` after a `uv build` if you add one.
 
 - `network-config.v1.j2` and `network-config.v2.j2` — selected by `image.network_version` (1 = ENI-style, 2 = netplan-style). Each image entry in the manifest pins which version cloud-init should emit.
 - `hosts.j2` renders both stdout-friendly output and a `cat <<EOF` heredoc form for runcmd injection.

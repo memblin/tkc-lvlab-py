@@ -145,31 +145,48 @@ hardening at the same time so we don't churn these files twice.
 
 ______________________________________________________________________
 
-## Phase 3 — Test infrastructure (depends on Phase 1 matrix + Phase 2 port)
+## Phase 3 — Test infrastructure ✅ COMPLETE (scaffolding) — 2026-05-23
 
-Land after Phase 2 — the conftest is dramatically simpler with no
-`libvirt-python` C extension to mock around.
+Scaffolding landed across three local commits on `main` (`defeea0`,
+`3ec17bf`, `493a9cf`). The unit-test surface and CI matrix are live;
+integration test **bodies** themselves are a follow-up effort.
 
-- [ ] Add `.github/workflows/test.yml`:
-    - [ ] Matrix: `python-version: ['3.11', '3.12', '3.13', '3.14']`.
-    - [ ] Job step: `uv sync --all-extras && uv run pytest -m "not integration"`.
-    - [ ] 3.14 is a first-class entry, **not** `continue-on-error` (libvirt-python
-        is gone by now).
-- [ ] Create `tests/conftest.py` with the safety scaffolding (see
+- [x] Add `.github/workflows/test.yml`:
+    - [x] Matrix: `python-version: ['3.11', '3.12', '3.13', '3.14']`.
+    - [x] Job step: `uv sync --group dev && uv run pytest -m "not integration"`.
+        (Used `--group dev` rather than `--all-extras` — `pyproject.toml`
+        has no `[project.optional-dependencies]` table, only
+        `[dependency-groups].dev`. Same effect.)
+    - [x] 3.14 is a first-class entry, **not** `continue-on-error`.
+- [x] Create `tests/conftest.py` with the safety scaffolding (see
     "Cross-cutting safety rules" below).
-- [ ] Seed a small set of pure-unit tests (no libvirt, no qemu-img) to prove
-    the matrix runs end-to-end before we start writing real coverage:
-    - [ ] `parse_config()` happy / missing-file / bad-yaml cases.
-    - [ ] `parse_file_from_url()`.
-    - [ ] `CloudImage._parse_checksum_file()` — both Fedora and Debian formats,
-        including the `.verified` swap.
-    - [ ] `UserData._is_valid_ssh_public_key()`.
-    - [ ] `Machine.libvirt_vm_name` construction (`vm_name_environment`).
-    - [ ] `run_virsh()` wrapper — stub `subprocess.run`, verify args / env /
-        error translation.
-- [ ] Mark anything that touches `virsh` for real, `qemu-img`, or libvirt
-    with `@pytest.mark.integration`; require `LVLAB_INTEGRATION=1` to opt
-    in and never enable it in CI.
+- [x] Seed a small set of pure-unit tests (no libvirt, no qemu-img):
+    - [x] `parse_config()` happy / missing-file / bad-yaml cases.
+    - [x] `parse_file_from_url()`.
+    - [x] `CloudImage._parse_checksum_file()` — Fedora + Debian formats
+        - `.verified` swap.
+    - [x] `UserData._is_valid_ssh_public_key()`.
+    - [x] `Machine.libvirt_vm_name` construction (`vm_name_environment`).
+    - [x] `run_virsh()` — already covered in Phase 2 (47 tests, 100%
+        coverage on `virsh.py`).
+- [x] Marker registration: `@pytest.mark.integration` registered in
+    both `tests/conftest.py` and `pyproject.toml`. Skipped by default;
+    opt in with `LVLAB_INTEGRATION=1`. CI never sets it.
+
+### Phase 3 follow-ups (not blocking)
+
+- [ ] Write actual integration test bodies that exercise real `virsh` /
+    `qemu-img`. The scaffolding is in place; the bodies are not.
+    Cover at least: `Machine.deploy` happy path on `qemu:///session`,
+    full `up`-`status`-`destroy` lifecycle, snapshot create/list/delete
+    against a real domain.
+- [ ] Add the lint/grep check that fails CI if any test calls
+    `virsh destroy` / `virsh undefine` / `os.remove` on a name that
+    didn't come from `make_test_name`. (See "Cross-cutting safety
+    rules" below — the runtime guard exists; the static guard does
+    not yet.)
+
+**Suite as of Phase 3 completion: 132 passed, 1 skipped (integration). Coverage 42%.**
 
 ______________________________________________________________________
 

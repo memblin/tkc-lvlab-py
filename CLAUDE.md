@@ -17,7 +17,7 @@ Because state lives in libvirt + on-disk qcow2 files, **bugs here can damage rea
 
 ## Build / dev / lint commands
 
-This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). CI currently runs pre-commit only; pytest is not yet wired into CI (Phase 3 in `TODO.md`). Don't claim something is "tested" because CI is green — verify locally with `uv run pytest`.
+This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). CI runs pre-commit and the pytest matrix (Python 3.11/3.12/3.13/3.14) on every PR and push to `main`. Integration tests (`@pytest.mark.integration`) are gated by `LVLAB_INTEGRATION=1` and **never** enabled in CI — see `tests/conftest.py` and the cross-cutting safety rules in `TODO.md`. Don't claim a behavior is "tested" because CI is green — that only covers what someone wrote a unit test for. For changes that touch `virsh`, also do a manual smoke test against `qemu:///session` before reporting done.
 
 The CLI shells out to `virsh` (and `qemu-img`, `virt-install`) for all hypervisor operations — there is no longer a `libvirt-python` C extension dependency, so `uv sync` works without `libvirt-dev` / `pkg-config` on the host. Lab functionality still requires `libvirt-clients` (or equivalent) for the `virsh` binary at runtime.
 

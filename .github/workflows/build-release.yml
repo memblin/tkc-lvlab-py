@@ -27,7 +27,7 @@ jobs:
       with:
         ref: ${{ github.ref_name }}
     - name: Install uv
-      uses: astral-sh/setup-uv@v3
+      uses: astral-sh/setup-uv@v7
       with:
         python-version: '3.13'
     - name: Build tkc_lvlab
@@ -49,7 +49,7 @@ jobs:
       with:
         ref: ${{ inputs.build_tag }}
     - name: Install uv
-      uses: astral-sh/setup-uv@v3
+      uses: astral-sh/setup-uv@v7
       with:
         python-version: '3.13'
     - name: Build tkc_lvlab

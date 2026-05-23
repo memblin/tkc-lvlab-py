@@ -100,17 +100,18 @@ class CatalogEntry:
 # releases; when a distro release goes EOL, its URL eventually returns
 # a 404 HTML page (the checksum-verification path defensively catches
 # that — discovered in the Phase 9 destructive smoke test on
-# 2026-05-23, when Fedora 40's URL had aged out). Adding a current
-# Fedora release is tracked as a follow-up in TODO.md; for now this
-# catalog is Debian-only.
+# 2026-05-23, when Fedora 40's URL had aged out). The
+# ``refresh-cloud-images`` skill under ``.claude/skills/`` keeps these
+# in sync with upstream and surfaces new-major / EOL drift for user
+# confirmation.
 BUILTIN_IMAGES: dict[str, CatalogEntry] = {
     "debian12": CatalogEntry(
         image_url=(
-            "https://cloud.debian.org/images/cloud/bookworm/20240717-1811/"
-            "debian-12-generic-amd64-20240717-1811.qcow2"
+            "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/"
+            "debian-12-generic-amd64-20260518-2482.qcow2"
         ),
         checksum_url=(
-            "https://cloud.debian.org/images/cloud/bookworm/20240717-1811/" "SHA512SUMS"
+            "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/" "SHA512SUMS"
         ),
         checksum_type="sha512",
         checksum_url_gpg=None,
@@ -129,6 +130,21 @@ BUILTIN_IMAGES: dict[str, CatalogEntry] = {
         network_version=2,
         os_variant="debian13",
         default_username="debian",
+    ),
+    "fedora44": CatalogEntry(
+        image_url=(
+            "https://download.fedoraproject.org/pub/fedora/linux/releases/44/"
+            "Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
+        ),
+        checksum_url=(
+            "https://download.fedoraproject.org/pub/fedora/linux/releases/44/"
+            "Cloud/x86_64/images/Fedora-Cloud-44-1.7-x86_64-CHECKSUM"
+        ),
+        checksum_type="sha256",
+        checksum_url_gpg="https://fedoraproject.org/fedora.gpg",
+        network_version=2,
+        os_variant="fedora44",
+        default_username="fedora",
     ),
 }
 

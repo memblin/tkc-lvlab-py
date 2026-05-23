@@ -485,143 +485,112 @@ separate effort from the docstring conversion.
 
 ______________________________________________________________________
 
-## Phase 8 — Repo restructure: src-layout + `tkc.lvlab` namespace (DEFERRED INDEFINITELY — 2026-05-23)
+## Phase 8 — Repo restructure: src-layout (READY — namespace dropped 2026-05-23)
 
-**Decision (2026-05-23):** stay with the underscore-prefix layout
-(`tkc_lvlab`, future `tkc_lvscripts`, future `tkc_shared`) instead of
-migrating to a PEP 420 namespace package (`tkc.lvlab`).
+**Scope (2026-05-23 revision):** move the package into a `src/`
+directory to align with modern PEP 621 / uv convention. **No
+namespace migration** — the import name stays `tkc_lvlab`. This is
+purely a directory move plus a handful of config edits; no Python
+code or tests change.
 
-### Why we changed our minds
+### Why src-layout (and not just leaving it at the repo root)
 
-While reviewing the
+- The PEP 621 / uv-recommended layout is `src/<pkg>/...`, which
+    prevents accidental imports of the repo-root copy when running
+    tests against an installed wheel — a real "this worked locally
+    but failed on PyPI" hazard.
+- Aligns with the convention used by every modern Python project the
+    user will compare against; lowers cognitive friction for anyone
+    landing in the repo for the first time.
+
+### Why not the `tkc.lvlab` namespace (decision 2026-05-23)
+
+The earlier plan paired the src-layout move with a PEP 420 namespace
+migration (`tkc.lvlab`). That half is **dropped**. Two findings from
+the
 [PyPI namespace-packages guide](https://packaging.python.org/en/latest/guides/packaging-namespace-packages/)
 and the
 [uv_build namespace-packages docs](https://docs.astral.sh/uv/concepts/build-backend/#namespace-packages)
-ahead of starting Phase 8, two findings shifted the cost/benefit:
+made the cost/benefit unfavorable:
 
-1. **The "shared `__init__.py` in a `tkc-core` distribution" idea
-    doesn't deliver what it looks like it would.** A regular
-    `tkc/__init__.py` (the kind that can hold code) makes `tkc` a
-    regular package, not a namespace — its `__path__` won't include
-    sibling distributions installed elsewhere. To make it work
-    cross-distribution, the file has to be **pkgutil-style** —
-    `__path__ = __import__('pkgutil').extend_path(__path__, __name__)`
-    — and the PyPI guide explicitly notes: *"Any additional code in
-    `__init__.py` will be inaccessible."* So a shared version constant,
-    light helper, etc., **cannot** live in `tkc/__init__.py` under any
-    namespace-compatible setup. It has to live in a regular subpackage
-    like `tkc.core.<something>`.
-1. **The PyPI guide explicitly endorses the prefix-instead-of-namespace
-    pattern as a deliberate alternative:** *"A simple alternative is to
-    use a prefix on all your distributions such as
-    `import mynamespace_subpackage_a` — this avoids namespace package
-    complexity entirely."* That's literally what we have today
-    (`tkc_lvlab`). It's not a workaround; it's a supported choice.
+1. A `tkc-core` distribution shipping a shared `tkc/__init__.py` to
+    hold helpers **cannot also be namespace-compatible** — the PyPI
+    guide is explicit that any code in a `pkgutil.extend_path`
+    `__init__.py` is "inaccessible." Cross-distribution sharing has
+    to go through a regular sub-package like `tkc.core.helpers`
+    anyway, which works just as well as a sibling `tkc_shared`
+    distribution.
+1. The PyPI guide explicitly endorses the prefix-instead-of-namespace
+    pattern: *"A simple alternative is to use a prefix on all your
+    distributions such as `import mynamespace_subpackage_a` — this
+    avoids namespace package complexity entirely."* `tkc_lvlab` /
+    `tkc_lvscripts` / future `tkc_shared` is that pattern; it's not
+    a workaround.
 
-The PEP 420 namespace's value is an aesthetic / discoverability win
-(`from tkc import lvlab, lvscripts` looks more "family-shaped" than
-`import tkc_lvlab; import tkc_lvscripts`). It does NOT deliver any
-functional cross-distribution capability that the prefix style can't
-match via a `tkc_shared` companion distribution.
-
-### What the prefix approach commits us to
-
-- Each `tkc-*` distribution is independent. Imports read
-    `from tkc_lvlab.X import Y`, `from tkc_lvscripts.Y import Z`, etc.
-- Cross-project sharing happens via a future `tkc-shared` (or
-    `tkc-common`) regular distribution that other `tkc-*` projects
-    depend on. `from tkc_shared import version_helper` — boring,
-    works, zero coordination cost.
-- A single distribution shipping `tkc/__init__.py` by mistake later
-    cannot break sibling distributions, because we never claimed the
-    `tkc` namespace.
-
-### Pre-decision Phase 8 plan (kept for context)
-
-The original Phase 8 plan and risk flags are preserved below. If a
-future call reverses this decision (e.g. we end up shipping enough
-sibling `tkc-*` projects that the import-path aesthetics genuinely
-matter), this is the work that would need to happen — with the
-correction that the right uv_build config is
-`module-name = "tkc.lvlab"` (Approach 1 in the uv docs;
-`namespace = true` is the multi-sibling flag and disables safety
-checks per the docs).
-
-______________________________________________________________________
-
-### Original plan — reshape the package so:
-
-- All source lives under `src/` (PEP 621 "src-layout"). Currently the package
-    is at the repo root (`tkc_lvlab/`); after this phase it would be at
-    `src/tkc/lvlab/`.
-- The top-level Python name becomes a **PEP 420 implicit namespace package**
-    named `tkc`, with `lvlab` underneath it. Imports change from
-    `from tkc_lvlab... import ...` to `from tkc.lvlab... import ...`. The
-    console script entry point becomes `tkc.lvlab.cli:run`.
-- The reason for the namespace: sibling tools in the `tkc` family
-    (`lvscripts-py`, future ones) can ship as separate distributions but live
-    in a shared `tkc.*` import hierarchy. PEP 420 makes that work without an
-    `__init__.py` at the `tkc` level.
+The namespace's only delta would be import aesthetics
+(`from tkc import lvlab` vs `import tkc_lvlab`); not worth claiming
+a top-level name we can't easily back out of.
 
 ### Work this implies
 
-- [ ] Move `tkc_lvlab/` → `src/tkc/lvlab/`. Delete the root-level `__init__.py`
-    and **do not** add one at `src/tkc/` (that's what makes it a namespace
-    package). `src/tkc/lvlab/__init__.py` stays.
-- [ ] Rewrite every import: `tkc_lvlab.X` → `tkc.lvlab.X`. Affected files
-    include all of `src/tkc/lvlab/**/*.py`, every `tests/test_*.py`, and
-    `docs/api/.../*.md` (the `:::` directives).
+This is much smaller than the old plan now that imports don't
+change. The wheel filename is also unchanged
+(`tkc_lvlab-X.Y.Z-py3-none-any.whl`) because `[project] name` and
+the module name both stay `tkc-lvlab` / `tkc_lvlab`.
+
+- [ ] `git mv tkc_lvlab src/tkc_lvlab`. Single move; the package's
+    internal layout (`utils/`, `scripts/`, `templates/`) comes along
+    unchanged. `src/tkc_lvlab/__init__.py` stays where it is.
 - [ ] `pyproject.toml`:
-    - [ ] `[project.scripts]`: `lvlab = "tkc.lvlab.cli:run"`.
-    - [ ] `[tool.uv.build-backend]`: verify `uv_build` supports the new
-        layout. Recent uv has improved namespace-package handling; confirm
-        against the current `uv_build` release notes. The two relevant
-        knobs are `module-root` (set to `"src"`) and `module-name` (set to
-        `"tkc.lvlab"` or `"tkc"` with a `namespace-packages` flag,
-        depending on what uv expects).
-    - [ ] Templates `include` glob: update `tkc_lvlab/templates/*.j2` to
-        `src/tkc/lvlab/templates/*.j2` (or whatever path the new layout
-        uses); confirm with `unzip -l dist/*.whl | grep templates` after a
-        rebuild.
-- [ ] `sonar-project.properties`: `sonar.sources=src/tkc/lvlab` (or
-    whatever the new root is).
-- [ ] `[tool.coverage.run] source` and `[tool.pytest.ini_options] addopts`
-    (`--cov=tkc_lvlab`) → `--cov=tkc.lvlab`.
-- [ ] `mkdocs.yml` mkdocstrings handler: paths to the new tree if needed.
-- [ ] `mkdocs.yml` `repo_url` / `edit_uri` unchanged but verify links from
-    `docs/api/.../*.md` still resolve.
-- [ ] `CLAUDE.md`: update every file-path reference (e.g.
-    `tkc_lvlab/utils/libvirt.py` → `src/tkc/lvlab/utils/libvirt.py`) and
-    mention the namespace decision in "Architecture."
-- [ ] Bump the wheel filename guard in `.github/workflows/build-release.yml`
-    — `tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl` will become
-    something like `tkc_lvlab-...whl` or `tkc.lvlab-...whl` depending on
-    how `uv_build` produces it. Verify on a `workflow_dispatch` dry-run
-    before tagging a real release.
-- [ ] After all the above, `uv build` and confirm the wheel still contains
-    the templates and the entry point still works (`uv run lvlab --help`).
+    - [ ] `[tool.uv_build]` add `module-root = "src"` (the default is
+        the repo root). Confirm with `uv build` that the wheel still
+        ships `tkc_lvlab/...` and not `src/tkc_lvlab/...`.
+    - [ ] `include` glob: `tkc_lvlab/templates/*.j2` →
+        `src/tkc_lvlab/templates/*.j2`. Verify with
+        `unzip -l dist/*.whl | grep templates` after a rebuild.
+    - [ ] `[project.scripts]` entries (`lvlab`, `createvm`,
+        `destroyvm`) — **no change**, still `tkc_lvlab.cli:run` etc.,
+        because the import name didn't move.
+- [ ] `sonar-project.properties`: `sonar.sources=src/tkc_lvlab`.
+- [ ] `[tool.coverage.run]` / `[tool.pytest.ini_options]`:
+    `--cov=tkc_lvlab` **stays the same** (still imports as
+    `tkc_lvlab`). Only `source = ["src/tkc_lvlab"]` in
+    `[tool.coverage.run]` needs the path bump if it's set.
+- [ ] `mkdocs.yml` mkdocstrings handler: update `paths:` to include
+    `src/` so mkdocstrings can find `tkc_lvlab` after the move.
+- [ ] `CLAUDE.md`: update file-path references throughout
+    (`tkc_lvlab/utils/libvirt.py` → `src/tkc_lvlab/utils/libvirt.py`,
+    etc.). Architecture/Conventions text stays.
+- [ ] `.github/workflows/test.yml` / `build-release.yml`: scan for
+    any explicit `tkc_lvlab/` paths in glob filters or workflow
+    inputs and rebase them on `src/tkc_lvlab/`. Wheel asset name
+    rule (`tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl`)
+    **does not change**.
+- [ ] After all the above, `uv build && uv run lvlab --help`
+    confirms the wheel still works end-to-end, and
+    `uv run pytest -q` confirms the test suite still imports
+    `tkc_lvlab` cleanly.
+
+### Risk flags (much smaller now)
+
+- The wheel filename is unchanged — no release-notes asterisk needed.
+- No import rewrites means no `from tkc_lvlab...` → `from tkc.lvlab...`
+    churn across the test suite or `docs/api/.../*.md` mkdocstrings
+    directives. Tests should pass without modification.
+- The only user-visible side effect would be downstream tooling that
+    has hard-coded the `tkc_lvlab/` path at the repo root rather
+    than the import. Unlikely for this project — verify with a
+    `grep -rn 'tkc_lvlab/' .github/ docs/ scripts/` sweep during
+    the move.
 
 ### When to schedule
 
-- **Not during Phase 2.** The virsh port already touches half the source
-    tree; mixing in a rename would make the diff unreviewable.
-- **Not during Phase 3** — the new tests are still being added; rename
-    later when there are fewer test files to update.
-- **Right before Phase 6** is a candidate — Phase 6 introduces new code
-    (`lvlab vm create`) that should land in the new layout from day one.
-    Or wait until after Phase 6 if a release goes out in between (avoids
-    changing the wheel's package name twice in close succession).
-
-### Risk flags
-
-- Wheel-filename change is **user-visible**: existing `uv tool install tkc-lvlab` continues to work but the underlying wheel asset name in
-    GitHub Releases changes. Document in the release notes.
-- The `tkc` namespace becomes a soft commitment — once we publish a wheel
-    with `tkc.lvlab`, removing the namespace later is a breaking change for
-    importers.
-- Verify `pip install tkc-lvlab` (or `uv tool install tkc-lvlab`) doesn't
-    conflict with any other PyPI package claiming the `tkc` namespace before
-    publishing.
+After the open Phase 9 smoke-test follow-ups are addressed and any
+in-flight catalog refresh has landed. Combine it with the
+`pyproject.toml` version bump for the next release if convenient,
+so the layout move and the version bump ride the same wheel
+rebuild. Don't combine with anything else that touches imports or
+test files.
 
 ______________________________________________________________________
 
@@ -774,22 +743,25 @@ real UX or documentation gap worth tracking so we don't drift.
     single-command use without re-login. Smoke-test failure mode
     (`PermissionError` on `/var/lib/libvirt/images/`) is called
     out so it doesn't look like a code bug.
-- [ ] **Refresh the catalog with a current Fedora release.**
-    The fedora40 entry was dropped (commit `626f272`) without a
-    replacement because picking the right URL + verifying it
-    actually serves required real-time research that didn't fit
-    in the smoke-test commit. To add e.g. `fedora43`: pick the
-    Fedora `Cloud-Base-Generic.x86_64-<N>-<build>.qcow2` URL from
-    `download.fedoraproject.org`, confirm the matching `--os-variant`
-    string with `virt-install --osinfo list | grep fedora43` (or
-    `osinfo-query os`), and verify the GPG-signed checksum file is
-    in the same directory. Add the entry to
-    `tkc_lvlab/scripts/createvm.py` `BUILTIN_IMAGES` AND to the
-    example manifests (`docs/Lvlab.example.yml` + the working
-    `Lvlab.yml`). Bonus: same time, audit `debian12` — its URL
-    pins `bookworm/20240717-1811`, which may itself age out and
-    eventually 404 the same way fedora40 did. Consider
-    `bookworm/latest/` if Debian guarantees a stable path there.
+- [x] **Refresh the catalog with a current Fedora release + audit
+    pinned Debian dated paths.** Closed by the
+    `refresh-cloud-images` skill run on 2026-05-23:
+    - Added `fedora44` (`Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2`)
+        to `BUILTIN_IMAGES` + both YAML manifests.
+        `os_variant=fedora44`, `default_username=fedora`,
+        `network_version=2`, GPG
+        `https://fedoraproject.org/fedora.gpg`.
+    - Bumped `debian12` and `debian11` dated paths
+        (`20240717-1811` → `20260518-2482`) across the three-file
+        catalog. `debian13` continues to use `trixie/latest/`
+        (stable redirect path, no URL change needed).
+    - Removed `debian10` from `docs/Lvlab.example.yml`. No new
+        cloud-image builds since 2024-07; Debian 10 is LTS-only
+        and the entry was at risk of becoming the next fedora40-
+        style stale paste source.
+    - `forky` (debian14) noted as not-yet-PROPOSE-ADD — upstream
+        directory exists but holds only `daily/`, no `latest/` or
+        stable dated builds yet. Next refresh run will re-check.
 
 ### Follow-up: migrate the standalone scripts to Typer too (COMPLETE — 2026-05-23)
 

@@ -85,7 +85,15 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
                 so callers in cli.py can pass it without a special case.
             config_defaults: The manifest's ``config_defaults`` dict.
                 Honors ``cloud_image_basedir`` (defaults to
-                ``/var/lib/libvirt/images/lvlab``).
+                ``/var/lib/libvirt/images/lvlab``). The actual cache
+                directory is conventionally
+                ``<cloud_image_basedir>/cloud-images/`` — but if the
+                user already pointed ``cloud_image_basedir`` at a
+                directory whose tail is ``cloud-images`` (for example
+                to share a cache with the standalone ``createvm``
+                script, which writes to ``/var/lib/libvirt/images/cloud-images/``),
+                the suffix is NOT doubled. The 2026-05-23 destructive
+                smoke test surfaced the double-append.
         """
         self.name = name
         self.image_url = config.get("image_url", None)
@@ -94,10 +102,21 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         self.checksum_url_gpg = config.get("checksum_url_gpg", None)
         self.network_version = config.get("network_version", 1)
         self.filename = os.path.basename(urlparse(self.image_url).path)
-        self.image_dir = os.path.join(
-            config_defaults.get("cloud_image_basedir", "/var/lib/libvirt/images/lvlab"),
-            "cloud-images",
+
+        configured_basedir = config_defaults.get(
+            "cloud_image_basedir", "/var/lib/libvirt/images/lvlab"
         )
+        # Idempotent ``/cloud-images`` suffix. The 2026-05-23 smoke test
+        # set ``cloud_image_basedir: /var/lib/libvirt/images/cloud-images``
+        # (to point at the standalone createvm script's cache) and got
+        # ``/var/lib/libvirt/images/cloud-images/cloud-images/...`` because
+        # the suffix was appended unconditionally. Tail-aware append
+        # handles both the legacy parent-dir style and the
+        # already-the-cache-dir style without ambiguity.
+        if os.path.basename(configured_basedir.rstrip(os.sep)) == "cloud-images":
+            self.image_dir = configured_basedir
+        else:
+            self.image_dir = os.path.join(configured_basedir, "cloud-images")
         self.image_fpath = os.path.join(
             os.path.expanduser(self.image_dir), self.filename
         )

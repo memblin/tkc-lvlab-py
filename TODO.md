@@ -756,20 +756,16 @@ The 2026-05-23 destructive smoke test also surfaced these items.
 None are blockers for the next release — but each represents a
 real UX or documentation gap worth tracking so we don't drift.
 
-- [ ] **`cloud_image_basedir` doubles `/cloud-images/` internally.**
-    Setting `cloud_image_basedir: /var/lib/libvirt/images/cloud-images`
-    in a manifest produces a lookup at
-    `/var/lib/libvirt/images/cloud-images/cloud-images/...` because
-    `CloudImage` appends `/cloud-images/` to the configured
-    basedir. The correct manifest value is the parent directory
-    (e.g. `/var/lib/libvirt/images`) — but nothing in the manifest
-    schema or the CloudImage docstring signals this. Two reasonable
-    fixes: (a) docstring + schema-doc note on
-    `cloud_image_basedir` explaining the append convention; (b)
-    normalize the internal append so it strips a trailing
-    `/cloud-images` if already present. (a) is the smaller change
-    and preserves the historical layout for users who already have
-    things laid out that way.
+- [x] **`cloud_image_basedir` doubles `/cloud-images/` internally** —
+    fixed 2026-05-23. `CloudImage.__init__` now does a tail-aware
+    append: if the configured basedir already ends in `cloud-images`,
+    it's used as-is; otherwise the `/cloud-images` suffix is appended.
+    Both behaviors are now intentional (legacy parent-dir style still
+    works; pointing at an existing cache dir also works without
+    doubling). Docstring updated to call out both shapes. Regression
+    tests under `tests/test_images_basedir.py` pin all 4 cases
+    (default basedir, parent-dir style, already-cache style, trailing
+    slash, ~ expansion).
 - [ ] **Stale-group-session footgun after `usermod -aG libvirt`.**
     On a fresh libvirt install where the developer's user was just
     added to the `libvirt` group, the current shell session

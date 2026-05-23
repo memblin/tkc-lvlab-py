@@ -11,6 +11,7 @@ from .._logging import get_logger
 from ..config import parse_config, generate_hosts
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
+from .virsh import VirshError, virsh_domstate_reason, virsh_list_all_names
 
 
 logger = get_logger(__name__)
@@ -350,20 +351,35 @@ class Machine:
 
         return True
 
-    def exists_in_libvirt(self, uri):
-        """Virtual machine existance and status"""
-        exists, state, state_reason = (False, 0, 0)
+    def exists_in_libvirt(self, uri: str) -> tuple[bool, str, str]:
+        """Check whether this machine is defined in libvirt and report its state.
 
-        conn = connect_to_libvirt(uri)
-        current_vms = [dom.name() for dom in conn.listAllDomains()]
+        Looks the domain up by ``self.libvirt_vm_name`` against the list of
+        domains known to ``uri`` and, if found, queries its state and reason.
 
-        if self.libvirt_vm_name in current_vms:
-            vm = conn.lookupByName(self.libvirt_vm_name)
-            state, state_reason, _, _ = get_machine_state(vm.state())
-            exists = True
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
 
-        conn.close()
-        return exists, state, state_reason
+        Returns:
+            A 3-tuple ``(exists, state, state_reason)``. ``state`` and
+            ``state_reason`` are the lowercase virsh strings (``running``,
+            ``shut off``, ``shutdown user``, etc.). Both are ``""`` when the
+            domain is not defined.
+
+        Raises:
+            VirshError: If ``virsh`` itself fails (e.g. cannot reach the URI).
+        """
+        if self.libvirt_vm_name not in virsh_list_all_names(uri):
+            return False, "", ""
+
+        try:
+            state, reason = virsh_domstate_reason(uri, self.libvirt_vm_name)
+        except VirshError:
+            # The domain disappeared between the list and the lookup. Treat as
+            # absent rather than propagating a transient race.
+            return False, "", ""
+
+        return True, state, reason
 
     def list_snapshots(self, uri):
         """List snapshots for a virtual machine"""

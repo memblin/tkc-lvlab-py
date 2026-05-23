@@ -148,7 +148,7 @@ def down(vm_name):
         )
 
         if exists:
-            if state in ["VIR_DOMAIN_RUNNING", "VIR_DOMAIN_PAUSED"]:
+            if state in {"running", "paused"}:
                 click.echo(f"Shutting down virtual machine {vm_name}.")
                 if (
                     machine.shutdown(environment.get("libvirt_uri", "qemu:///session"))
@@ -591,11 +591,11 @@ def up(vm_name):
         )
 
         if exists:
-            if status in ["VIR_DOMAIN_SHUTOFF", "VIR_DOMAIN_CRASHED"]:
+            if status in {"shut off", "crashed"}:
                 click.echo(f"Starting virtual machine {machine.vm_name}")
                 if machine.poweron(environment.get("libvirt_uri", None)) > 0:
                     logger.error("Problem powering on VM %s", machine.vm_name)
-            elif status in ["VIR_DOMAIN_RUNNING"]:
+            elif status == "running":
                 click.echo(f"The virtual machine {machine.vm_name} is running already")
 
         else:

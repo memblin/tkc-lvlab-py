@@ -353,17 +353,17 @@ CLI-agnostic library foundation:
 
 **Step 2** (next branch `phase6/02-network-validation`):
 
-- [ ] Port lvscripts `libvirt.get_network_info()` →
+- [x] Port lvscripts `libvirt.get_network_info()` →
     `tkc_lvlab/utils/network.py` (new module). Parse `virsh net-dumpxml`
     via stdlib ElementTree; expose `LibvirtNetworkInfo` dataclass with
     forward_mode, gateway_ip, netmask, dhcp_start, dhcp_end, and a
     `.subnet` property.
-- [ ] Add `validate_static_ip(ip, info)` that rejects IPs outside the
+- [x] Add `validate_static_ip(ip, info)` that rejects IPs outside the
     subnet AND inside the DHCP range.
-- [ ] Forward-mode policy helper: NAT → derive gateway/DNS from the
+- [x] Forward-mode policy helper: NAT → derive gateway/DNS from the
     network XML; bridge → require explicit gateway/DNS at the call
     site or raise `LibvirtNetworkError`.
-- [ ] Tests with `virsh net-dumpxml` XML fixtures for NAT and bridge
+- [x] Tests with `virsh net-dumpxml` XML fixtures for NAT and bridge
     networks, IPv4 boundary cases for `validate_static_ip`.
 
 **Step 3** — cloud-init template adapter for standalone use (no manifest
@@ -374,31 +374,31 @@ dict from raw `createvm` arguments.
 
 **Step 4** — `tkc_lvlab/scripts/createvm.py`:
 
-- [ ] Click-based command. Typer migration is Phase 9 for the whole suite.
-- [ ] Args: `vm_name`, `--distro`, `--memory`, `--cpu`, `--disk-size`,
+- [x] Click-based command. Typer migration is Phase 9 for the whole suite.
+- [x] Args: `vm_name`, `--distro`, `--memory`, `--cpu`, `--disk-size`,
     `--network`, `--ip4`, `--public-key`, `--copy` (disk strategy
     opt-in, see locked decision above), `--uri` (default
     `qemu:///system`).
-- [ ] Calls `check_createvm_tooling()` first; then network validation;
+- [x] Calls `check_createvm_tooling()` first; then network validation;
     then SSH key discovery + optional `--public-key` merge; then
     password generation + hash; then cloud-init render; then disk
     create (backing-file by default, `cp`+resize when `--copy`);
     then `virt-install`; then optional DHCP-lease polling (NAT only).
-- [ ] Domain name = `oneoff-<vm_name>` per locked naming. Storage path
+- [x] Domain name = `oneoff-<vm_name>` per locked naming. Storage path
     = `/var/lib/libvirt/images/oneoff/<vm_name>/`.
-- [ ] `[project.scripts] createvm = "tkc_lvlab.scripts.createvm:run"`.
+- [x] `[project.scripts] createvm = "tkc_lvlab.scripts.createvm:run"`.
 
 **Step 5** — `tkc_lvlab/scripts/destroyvm.py`:
 
-- [ ] Click-based command, takes `vm_name` and `--force`.
-- [ ] Translates the user-supplied name to `oneoff-<vm_name>` before
+- [x] Click-based command, takes `vm_name` and `--force`.
+- [x] Translates the user-supplied name to `oneoff-<vm_name>` before
     touching libvirt — operator types `destroyvm testvm`, the script
     operates on domain `oneoff-testvm`.
-- [ ] Snapshot fallback: lvscripts pattern (try undefine, on "has
+- [x] Snapshot fallback: lvscripts pattern (try undefine, on "has
     snapshots" failure delete them with `--children` or `--metadata`,
     retry undefine). Lift into `tkc_lvlab/utils/libvirt.py` as a
     helper so `Machine.destroy` can use it too.
-- [ ] `[project.scripts] destroyvm = "tkc_lvlab.scripts.destroyvm:run"`.
+- [x] `[project.scripts] destroyvm = "tkc_lvlab.scripts.destroyvm:run"`.
 
 **Step 6** — tests + docs:
 
@@ -407,7 +407,7 @@ dict from raw `createvm` arguments.
     invisible to `destroyvm` lookups.
 - [ ] Tests for both surfaces share the `LVLAB_TEST_PREFIX` safety
     fixture so the session-scoped reaper covers oneoff resources.
-- [ ] Docs: extend `README.md` and `docs/Walkthrough.md` with the one-off
+- [x] Docs: extend `README.md` and `docs/Walkthrough.md` with the one-off
     workflow. Explain when to use `lvlab` vs `createvm`/`destroyvm` —
     including the explicit "they don't see each other's VMs" property.
 
@@ -420,16 +420,16 @@ domain, qcow2 file, or ISO whose name does not start with the per-run test
 prefix.** Existing developer VMs on the same hypervisor must be invisible to
 the test suite.
 
-- [ ] `tests/conftest.py` exports:
-    - [ ] `LVLAB_TEST_PREFIX` — generated once per session:
+- [x] `tests/conftest.py` exports:
+    - [x] `LVLAB_TEST_PREFIX` — generated once per session:
         `f"lvlab-test-{epoch_ms}-{random4}-"` (epoch + short random to avoid
         collisions across parallel runs).
-    - [ ] `make_test_name(base) -> str` — the only sanctioned way for tests to
+    - [x] `make_test_name(base) -> str` — the only sanctioned way for tests to
         name a resource. Returns `f"{LVLAB_TEST_PREFIX}{base}"`.
-    - [ ] `assert_owned_by_test(name) -> None` — raises if `name` does not
+    - [x] `assert_owned_by_test(name) -> None` — raises if `name` does not
         start with `LVLAB_TEST_PREFIX`. Called before every destructive op
         in test helpers.
-    - [ ] A session-scoped teardown that runs `virsh list --all --name`
+    - [x] A session-scoped teardown that runs `virsh list --all --name`
         *filtered by the prefix* and reaps any that survived a crashing test.
         **Never list all domains; only ones matching the prefix.**
 - [ ] Same prefix applies to:

@@ -31,6 +31,7 @@ import pytest
 
 from tests.conftest import assert_owned_by_test, make_test_name
 from tests.integration_helpers import (
+    createvm_network_args,
     find_entry_point,
     list_domains,
     wait_for_no_domain,
@@ -89,6 +90,7 @@ def test_createvm_destroyvm_roundtrip(
             "debian13",
             "--uri",
             integration_uri,
+            *createvm_network_args(integration_uri),
             "--storage-root",
             str(storage_root),
             "--copy",

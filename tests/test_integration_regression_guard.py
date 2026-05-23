@@ -44,6 +44,7 @@ import pytest
 
 from tests.conftest import assert_owned_by_test, make_test_name
 from tests.integration_helpers import (
+    createvm_network_args,
     find_entry_point,
     list_domains,
     render_manifest,
@@ -136,6 +137,7 @@ def test_createvm_lvlab_cross_surface_isolation(
             "debian13",
             "--uri",
             integration_uri,
+            *createvm_network_args(integration_uri),
             "--storage-root",
             str(lvlab_integration_storage_root),
             "--copy",

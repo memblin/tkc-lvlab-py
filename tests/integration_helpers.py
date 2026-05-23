@@ -50,6 +50,7 @@ MANIFEST_TEMPLATE = dedent(
               size: 5G
           interfaces:
             network: default
+            network_type: {network_type}
           cloud_image_basedir: /var/lib/libvirt/images
           disk_image_basedir: {storage_root}
           cloud_init:
@@ -75,11 +76,46 @@ MANIFEST_TEMPLATE = dedent(
 """Minimal single-machine ``Lvlab.yml`` template for integration tests.
 
 Placeholders: ``env_name``, ``uri``, ``storage_root``, ``vm_name``,
-``pubkey_path``. Tests render this with :func:`render_manifest`. The
-template declares exactly one machine; tests that need a different
-shape (e.g. multiple machines) should not extend this helper —
-copy and modify in the test file instead.
+``pubkey_path``, ``network_type``. Tests render this with
+:func:`render_manifest`. The template declares exactly one machine;
+tests that need a different shape (e.g. multiple machines) should not
+extend this helper — copy and modify in the test file instead.
 """
+
+
+def network_type_for_uri(uri: str) -> str:
+    """Return the manifest ``interfaces.network_type`` appropriate for ``uri``.
+
+    Phase 12 invariant: ``qemu:///session`` uses user-mode networking
+    (no libvirt network needed); ``qemu:///system`` uses the managed
+    libvirt ``default`` network. Tests pick the value via the URI tag
+    so the same test body runs on both URIs.
+
+    Args:
+        uri: libvirt URI string (typically from the ``integration_uri``
+            fixture).
+
+    Returns:
+        ``"user"`` when the URI contains ``"session"``; ``"network"``
+        otherwise.
+    """
+    return "user" if "session" in uri else "network"
+
+
+def createvm_network_args(uri: str) -> list[str]:
+    """Return the ``--network-type`` argv fragment createvm needs for ``uri``.
+
+    Mirror of :func:`network_type_for_uri` for the standalone
+    ``createvm`` surface. Tests spread the return value into the
+    subprocess argv so the same call works for both URIs.
+
+    Args:
+        uri: libvirt URI string.
+
+    Returns:
+        Two-element argv list ``["--network-type", <value>]``.
+    """
+    return ["--network-type", network_type_for_uri(uri)]
 
 
 def render_manifest(
@@ -89,6 +125,7 @@ def render_manifest(
     storage_root: Path,
     vm_name: str,
     pubkey_path: Path,
+    network_type: str | None = None,
 ) -> str:
     """Render the integration-test manifest YAML with per-run values filled in.
 
@@ -102,6 +139,11 @@ def render_manifest(
             the per-VM storage subdir).
         pubkey_path: Absolute path to an existing SSH public key on
             the test host.
+        network_type: ``interfaces.network_type`` value. When ``None``
+            (default) the value is derived from ``uri`` via
+            :func:`network_type_for_uri` — session URIs get user-mode,
+            system URIs get the managed libvirt network. Pass an
+            explicit value to override.
 
     Returns:
         A complete ``Lvlab.yml`` YAML document declaring one machine.
@@ -112,6 +154,7 @@ def render_manifest(
         storage_root=storage_root,
         vm_name=vm_name,
         pubkey_path=pubkey_path,
+        network_type=network_type or network_type_for_uri(uri),
     )
 
 

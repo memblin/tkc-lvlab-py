@@ -12,6 +12,13 @@ environment:
           size: 25G
       interfaces:
           network: default
+          # network_type defaults to 'network' (a managed libvirt network
+          # named by the `network` field above). Set to 'user' or 'passt'
+          # for user-mode networking — useful on qemu:///session where
+          # rootless libvirt cannot manage a NAT network. Static IPs
+          # (interfaces.ip4) are rejected under user-mode; DHCP is the
+          # only supported configuration.
+          network_type: network
       cloud_image_basedir: /tmp
       disk_image_basedir: /tmp
       shared_directories:
@@ -69,6 +76,18 @@ environment:
         os: debian13
         interfaces:
           - name: eth0
+
+      # Example of a VM that uses user-mode networking. Suitable for
+      # qemu:///session deployments. Static IP fields are intentionally
+      # omitted because SLIRP/passt ignore them; lvlab will refuse the
+      # manifest at parse time if both 'network_type: user' and an
+      # 'ip4' are set on the same interface.
+      - vm_name: rootless.local
+        hostname: rootless
+        os: debian13
+        interfaces:
+          - name: eth0
+            network_type: user
 
 images:
   debian13:

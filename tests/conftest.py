@@ -356,10 +356,10 @@ def _uri_is_test_ready(uri: str) -> tuple[bool, str]:
         to the daemon at all. For ``qemu:///system`` this is the
         libvirt-group membership check; sudo elevation is never
         attempted.
-    2. The ``default`` libvirt network exists on the URI. createvm
-        defaults to ``--network default``; tests would error out at
-        ``virt-install`` time without it. ``qemu:///session`` on a
-        fresh user account has no networks by default.
+    2. The ``default`` libvirt network exists — **only required for
+        URIs that use a managed network**. ``qemu:///session`` runs
+        with user-mode networking (Phase 12) and so has no need for
+        a libvirt network; the check is skipped for session URIs.
     3. The dedicated test storage root
         (``/var/lib/libvirt/images/lvlab-test/``) can be created or is
         writable by the test user. Without this, ``virt-install``
@@ -381,14 +381,20 @@ def _uri_is_test_ready(uri: str) -> tuple[bool, str]:
             f"unavailable) — sudo elevation not attempted"
         )
 
-    net_probe = _virsh_probe(uri, "net-list", "--name")
-    if net_probe is None or net_probe.returncode != 0:
-        return False, f"cannot list networks on {uri}"
-    if "default" not in {line.strip() for line in net_probe.stdout.splitlines()}:
-        return False, (
-            f"no 'default' libvirt network on {uri} — tests use the "
-            f"createvm default --network setting which requires it"
-        )
+    # qemu:///session uses user-mode networking under Phase 12, so the
+    # 'default' libvirt network is irrelevant on that URI. For
+    # qemu:///system (and any other managed-network URI) the test
+    # manifest still attaches to 'default' and the check stays in
+    # force.
+    if "session" not in uri:
+        net_probe = _virsh_probe(uri, "net-list", "--name")
+        if net_probe is None or net_probe.returncode != 0:
+            return False, f"cannot list networks on {uri}"
+        if "default" not in {line.strip() for line in net_probe.stdout.splitlines()}:
+            return False, (
+                f"no 'default' libvirt network on {uri} — tests use the "
+                f"createvm default --network setting which requires it"
+            )
 
     # mkdir is idempotent; the existence check after is what matters.
     # mode=0o755 so qemu (under qemu:///system) can traverse + read.

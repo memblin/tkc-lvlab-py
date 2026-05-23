@@ -180,8 +180,21 @@ own machine.
 ### Host setup
 
 The smoke tests assume your user can talk to `qemu:///system` (or
-`qemu:///session` if you prefer rootless). Typical one-time setup on
-a fresh box:
+`qemu:///session` if you prefer rootless). The two URIs need different
+host setup:
+
+- **`qemu:///system`** — managed libvirt network (`default`).
+    Requires the libvirt-group setup below so your user can write to
+    `/var/lib/libvirt/images/` and reach the system daemon.
+- **`qemu:///session`** — user-mode networking
+    (`--network-type user` / `interfaces.network_type: user`).
+    Rootless libvirt cannot manage a NAT network, so lvlab routes
+    through virt-install's SLIRP/passt user-mode networking. **No
+    libvirt network needs to exist** on the session URI; `virsh -c qemu:///session net-list` may legitimately be empty.
+    Storage still has to be writable by the user running lvlab, but
+    no `libvirt-group` membership is needed.
+
+Typical one-time setup for `qemu:///system` on a fresh box:
 
 ```bash
 # Install host binaries the createvm/lvlab paths need at runtime

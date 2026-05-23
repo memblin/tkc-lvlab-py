@@ -272,17 +272,61 @@ Both scripts are intentionally separate from `lvlab`:
 
 ### createvm flags
 
-| Flag           | Purpose                                                                                                                        |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `--distro`     | Required. Key into the built-in image catalog (`debian12`, `debian13`).                                                        |
-| `--memory`     | RAM in MiB. Default 2048.                                                                                                      |
-| `--cpu`        | vCPU count. Default 2.                                                                                                         |
-| `--disk-size`  | qcow2 disk size. Default `20G`.                                                                                                |
-| `--network`    | libvirt network name. Default `default` (the stock NAT).                                                                       |
-| `--ip4`        | Optional static IPv4. Accepts `IP` (uses `--network`) or `NETWORK,IP`. Validated against the network's subnet AND DHCP range.  |
-| `--public-key` | Optional extra SSH public key file (appended after discovered defaults).                                                       |
-| `--copy`       | Use `cp` + `qemu-img resize` instead of the default backing-file mode. Trades storage efficiency for cloud-image independence. |
-| `--uri`        | libvirt connection URI. Default `qemu:///system`.                                                                              |
+| Flag             | Purpose                                                                                                                                                                                                                     |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--distro`       | Required. Key into the built-in image catalog (`debian12`, `debian13`).                                                                                                                                                     |
+| `--memory`       | RAM in MiB. Default 2048.                                                                                                                                                                                                   |
+| `--cpu`          | vCPU count. Default 2.                                                                                                                                                                                                      |
+| `--disk-size`    | qcow2 disk size. Default `20G`.                                                                                                                                                                                             |
+| `--network`      | libvirt network name. Default `default` (the stock NAT). Only consulted with `--network-type network` (the default).                                                                                                        |
+| `--network-type` | Attachment mode: `network` (default; managed libvirt network), `user` (SLIRP), or `passt`. Use `user`/`passt` for `qemu:///session` where rootless libvirt cannot manage a NAT network. `--ip4` is rejected with user-mode. |
+| `--ip4`          | Optional static IPv4. Accepts `IP` (uses `--network`) or `NETWORK,IP`. Validated against the network's subnet AND DHCP range. Incompatible with `--network-type user` / `--network-type passt`.                             |
+| `--public-key`   | Optional extra SSH public key file (appended after discovered defaults).                                                                                                                                                    |
+| `--copy`         | Use `cp` + `qemu-img resize` instead of the default backing-file mode. Trades storage efficiency for cloud-image independence.                                                                                              |
+| `--uri`          | libvirt connection URI. Default `qemu:///system`.                                                                                                                                                                           |
+
+### Network types (`--network-type` / `interfaces.network_type`)
+
+Both `createvm` and the manifest workflow let you pick how the guest
+attaches to the network:
+
+- `network` (default) — virt-install's managed-network form
+    (`--network network=<name>,model=virtio,...`). Requires a libvirt
+    network (typically `default`). This is the production-style path
+    and remains the default for back-compat.
+- `user` — virt-install's user-mode networking
+    (`--network user,model=virtio`). SLIRP / passt under the hood
+    depending on the distro. No libvirt network needed; the guest
+    gets DHCP from virt-install itself. Required for
+    `qemu:///session` where rootless libvirt cannot manage a NAT
+    network.
+- `passt` — same shape as `user` but pins the user-mode backend
+    to passt (newer, faster on supported distros).
+
+Static IPs are not honoured by SLIRP/passt — lvlab rejects the
+combination (`interfaces.ip4` plus `network_type: user`/`passt`) at
+manifest parse time, and `createvm` rejects `--ip4` plus
+`--network-type user`/`--network-type passt` at the CLI boundary.
+DHCP is the only supported configuration under user-mode.
+
+Worked manifest example (`docs/Lvlab.example.yml`):
+
+```yaml
+machines:
+  - vm_name: rootless.local
+    hostname: rootless
+    os: debian13
+    interfaces:
+      - name: eth0
+        network_type: user
+```
+
+Worked createvm example for `qemu:///session`:
+
+```bash
+createvm rootless --distro debian13 --uri qemu:///session \
+    --network-type user
+```
 
 ### SSH keys
 

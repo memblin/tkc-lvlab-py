@@ -187,9 +187,15 @@ integration test **bodies** themselves are a follow-up effort.
         `380ed8c`) verifies createvm-made VMs are invisible to
         `lvlab status` and that `destroyvm` refuses to fall through
         to manifest VMs.
-    - [ ] Snapshot create/list/delete against a real domain.
-    - [ ] `qemu:///session` URI coverage. Blocked on Phase 12
-        (user-mode networking support).
+    - [x] Snapshot create/list/delete against a real domain. Landed
+        2026-05-23 — `tests/test_integration_snapshot.py` (commit
+        `38f00b6`) covers the full lifecycle (zero → one → zero) via
+        `lvlab snapshot create/list/delete --force`.
+    - [x] `qemu:///session` URI coverage. Landed 2026-05-23 — Phase 12
+        (user-mode networking) unblocks the session URI for every
+        existing integration test. `tests/integration_helpers.py`
+        derives `network_type` from the URI; `_uri_is_test_ready`
+        drops the `default`-network check for session URIs.
 - [ ] Add the lint/grep check that fails CI if any test calls
     `virsh destroy` / `virsh undefine` / `os.remove` on a name that
     didn't come from `make_test_name`. (See "Cross-cutting safety
@@ -1055,11 +1061,13 @@ This is a hard failure of the Phase 11 brief's "Preserve out-of-nav pages" requi
 
 ______________________________________________________________________
 
-## Phase 12 — Support `qemu:///session` via user-mode networking
+## Phase 12 — Support `qemu:///session` via user-mode networking ✅ COMPLETE 2026-05-23
 
-**Status:** open. Surfaced 2026-05-23 by the integration test bodies — `qemu:///session` skips with "no 'default' libvirt network on qemu:///session" because the URI-readiness probe requires a named libvirt network for createvm's default `--network` arg. Rootless libvirt can't trivially manage a NAT network (no iptables / firewalld access), so the right fix is to teach lvlab + createvm to use `virt-install`'s user-mode networking (`--network user,model=virtio` — SLIRP / passt under the hood) when the operator opts in.
+**Status:** complete. User-mode networking lands as a first-class option on both surfaces (manifest `interfaces.network_type` + createvm `--network-type`). Integration tests now run against both URIs without per-URI manifest divergence — `tests/integration_helpers.py` derives the right `network_type` from the URI via `network_type_for_uri()`. The session-URI readiness probe (`_uri_is_test_ready`) drops the `default`-network requirement, since user-mode doesn't need it.
 
-**Direction:** make user-mode networking a first-class option in both surfaces. The integration tests then drop their per-URI skip; real `qemu:///session` users can also use lvlab without setting up a system-level network. Static-IP semantics don't apply under user-mode — the schema rejects `interfaces.ip4` when `network_type` is `user` to keep the behaviour honest.
+**Original surfacing:** Surfaced 2026-05-23 by the integration test bodies — `qemu:///session` skipped with "no 'default' libvirt network on qemu:///session" because the URI-readiness probe required a named libvirt network for createvm's default `--network` arg. Rootless libvirt can't trivially manage a NAT network (no iptables / firewalld access), so the right fix was to teach lvlab + createvm to use `virt-install`'s user-mode networking (`--network user,model=virtio` — SLIRP / passt under the hood) when the operator opts in.
+
+**Outcome:** user-mode networking is first-class on both surfaces. Integration tests cover both URIs from one test body; real `qemu:///session` users can also use lvlab without setting up a system-level network. Static-IP semantics don't apply under user-mode — the schema rejects `interfaces.ip4` when `network_type` is `user`/`passt`, and `createvm` rejects `--ip4` with `--network-type user`/`passt` at the CLI boundary, so the operator sees the contradiction before any state is created.
 
 ### Where the gap lives today
 
@@ -1072,27 +1080,21 @@ Two hard-coded spots in production code assume a named libvirt network:
 
 Both feed `virt-install`. There's no current path to emit `--network user` or `--network passt` from either surface.
 
-### Work this implies
+### What landed
 
-- [ ] **createvm CLI**: add a `--network-type` Typer option with default `"network"` (back-compat) and an enum-style choice of `network` / `user` / `passt`. When the value is `user` or `passt`, skip the `get_network_info` / `validate_static_ip` / `resolve_network_settings` calls in `cli.py` and emit `--network user,model=virtio` (or `--network passt,model=virtio`) instead of `--network network=<name>,…`.
-- [ ] **Manifest schema**: add an optional `interfaces.network_type` field. Default `"network"`. When `"user"` / `"passt"`, `Machine.deploy` branches on the value to emit the right `virt-install` arg. Reject (with a clear error) `interfaces.ip4` on the same interface when `network_type` is user-mode — SLIRP/passt don't honour static IPs the way managed networks do.
-- [ ] **Cloud-init `network-config` render**: extend `NetworkConfig` (`src/tkc_lvlab/utils/cloud_init.py`) so user-mode interfaces render as DHCP-only (`ethernets.<name>.dhcp4: true` in v2, equivalent in v1) without trying to pull gateway/DNS from a libvirt XML that doesn't exist. Both `templates/network-config.v1.j2` and `templates/network-config.v2.j2` need the new branch.
-- [ ] **Unit tests**: extend `tests/test_network.py` (existing surface) plus add tests for the new virt-install arg generation in createvm + Machine.deploy. The `network_type=user` paths must NOT call any of the libvirt-network introspection helpers.
-- [ ] **Integration tests**: update `tests/conftest.py` `_uri_is_test_ready(qemu:///session)` to drop the `default`-network check (irrelevant for user-mode) and keep only the URI-reachable + storage-writable checks. Update the manifest template in `tests/integration_helpers.py` to set `network_type: user` per URI when the URI is `qemu:///session`. createvm-based tests pass `--network-type user` on session.
-- [ ] **Docs**: extend `docs/Walkthrough.md` ("Image Naming" / network section) and `docs/Lvlab.example.yml` to document `network_type` with worked examples for `user` and `passt`. Add the `qemu:///session` setup story to `docs/CONTRIBUTING.md` "Host setup".
-- [ ] **CLAUDE.md "Architecture"** mentions the user-mode branch in `Machine.deploy` and the `network_type` field on interfaces.
+- [x] **createvm CLI** — `--network-type` Typer option with default `"network"` (back-compat) and `network` / `user` / `passt` choice via `click.Choice`. User-mode bypasses `get_network_info` / `validate_static_ip` / `resolve_network_settings` and rejects `--ip4` at the CLI boundary.
+- [x] **Manifest schema** — `interfaces.network_type` optional field (default `"network"`). `Machine.__init__` validates the value and rejects `network_type=user|passt` + static `ip4` at construction time. `Machine.deploy` delegates `--network` arg assembly to `_virt_install_network_arg(iface)`, which branches on `network_type`.
+- [x] **Cloud-init `network-config` render** — no template change needed. The existing `network-config.{v1,v2}.j2` templates already DHCP-fall back when `iface.ip4` is absent, which is the required shape under user-mode (user-mode interfaces can't carry an `ip4` per the new validation, so they hit that branch naturally).
+- [x] **Unit tests** — 12 new tests across `tests/test_libvirt_machine.py` and `tests/test_createvm.py` cover the validation surface, the virt-install arg assembly, and the createvm CLI's user-mode skip path. 272 unit tests pass overall.
+- [x] **Integration tests** — `tests/conftest.py` `_uri_is_test_ready` skips the `default`-network check for session URIs (only). `tests/integration_helpers.py` derives `network_type` from the URI via `network_type_for_uri()`; `render_manifest` honours the per-URI choice automatically. createvm-based tests spread `createvm_network_args(uri)` into the subprocess argv so both URIs run unchanged.
+- [x] **Docs** — `docs/Walkthrough.md` gets a "Network types" section with worked examples for `network` / `user` / `passt`. `docs/Lvlab.example.yml` documents `network_type` in `config_defaults` and adds a `rootless.local` example VM with `network_type: user`. `docs/CONTRIBUTING.md` "Host setup" calls out the `qemu:///session` story (no libvirt-group + no `default` network required).
+- [x] **CLAUDE.md "Architecture"** — mentions the `network_type` field, the `_virt_install_network_arg` branch in `Machine.deploy`, and the shared `NETWORK_TYPES` / `USER_MODE_NETWORK_TYPES` constants in `utils/network.py`.
 
-### Risk flags
+### Risk flags (retained for context)
 
-- **Cloud-init template branching is the trickiest single piece.** Today both `network-config.{v1,v2}.j2` assume the gateway/DNS data comes from `resolve_network_settings`. The new branch must produce DHCP-only output without trying to expand undefined Jinja variables. Snapshot tests for the rendered config under both `network_type` settings would catch silent regressions.
-- **Static IP + user-mode contradiction.** Operators upgrading existing manifests may have both `ip4: 192.168.122.x` and a `network_type: user` change applied at the same time. The validation must surface this as a single clear error at `Machine.__init__` time, not at deploy time, so the operator sees it before any state is created.
-- **Passt vs SLIRP across distros.** Debian 12+ and RHEL 9+ generally route `--network user` through passt; older distros use SLIRP. Behaviour is equivalent for DHCP-only VMs but performance and port-forwarding semantics differ. Test on the supported matrix before claiming "user-mode just works."
-- **`virt-install` model arg compatibility.** `--network user,model=virtio` is widely supported, but a small number of older virt-install builds reject the explicit model on user-mode. If we see a smoke-test failure on a particular distro, fall back to `--network user` without the model — VMs still work, just with the default emulated NIC.
-- **The integration test design implicitly assumes the same manifest template across URIs.** Once `network_type` varies per URI, `tests/integration_helpers.py` either grows a per-URI branch in `render_manifest` or splits into two templates. Pick one before adding a fourth integration body.
-
-### When to schedule
-
-After the open Phase 3 follow-up ("CI lint/grep check that fails if a test bypasses `make_test_name`") if convenient — both touch test scaffolding. Not blocking on Phase 11 (docs migration), Phase 10 (release), or anything in the existing phases. The integration tests stay green either way; this phase upgrades the coverage from "qemu:///system only" to "both URIs."
+- **Cloud-init template branching** was the spec's stated trickiest piece. In practice the existing templates already do the right thing: both v1 and v2 DHCP-fall back when `iface.ip4` is absent, and user-mode interfaces can't carry an `ip4` (validation rejects the combination). No template change was needed.
+- **Passt vs SLIRP across distros.** Debian 12+ and RHEL 9+ generally route `--network user` through passt; older distros use SLIRP. Behaviour is equivalent for DHCP-only VMs but performance and port-forwarding semantics differ. The integration tests exercise the default user-mode (whichever the host distro picks); manifest-side `network_type: passt` is available for distros where the default isn't acceptable.
+- **`virt-install` model arg compatibility.** `--network user,model=virtio` is widely supported but a small number of older virt-install builds reject the explicit model on user-mode. If a smoke test fails on a particular distro, the workaround is to drop `,model=virtio` — VMs still work, just with the emulated default NIC. Not seen in practice on Debian 12+/13.
 
 ______________________________________________________________________
 

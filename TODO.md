@@ -485,9 +485,71 @@ separate effort from the docstring conversion.
 
 ______________________________________________________________________
 
-## Phase 8 — Repo restructure: src-layout + `tkc.lvlab` namespace
+## Phase 8 — Repo restructure: src-layout + `tkc.lvlab` namespace (DEFERRED INDEFINITELY — 2026-05-23)
 
-Reshape the package so:
+**Decision (2026-05-23):** stay with the underscore-prefix layout
+(`tkc_lvlab`, future `tkc_lvscripts`, future `tkc_shared`) instead of
+migrating to a PEP 420 namespace package (`tkc.lvlab`).
+
+### Why we changed our minds
+
+While reviewing the
+[PyPI namespace-packages guide](https://packaging.python.org/en/latest/guides/packaging-namespace-packages/)
+and the
+[uv_build namespace-packages docs](https://docs.astral.sh/uv/concepts/build-backend/#namespace-packages)
+ahead of starting Phase 8, two findings shifted the cost/benefit:
+
+1. **The "shared `__init__.py` in a `tkc-core` distribution" idea
+    doesn't deliver what it looks like it would.** A regular
+    `tkc/__init__.py` (the kind that can hold code) makes `tkc` a
+    regular package, not a namespace — its `__path__` won't include
+    sibling distributions installed elsewhere. To make it work
+    cross-distribution, the file has to be **pkgutil-style** —
+    `__path__ = __import__('pkgutil').extend_path(__path__, __name__)`
+    — and the PyPI guide explicitly notes: *"Any additional code in
+    `__init__.py` will be inaccessible."* So a shared version constant,
+    light helper, etc., **cannot** live in `tkc/__init__.py` under any
+    namespace-compatible setup. It has to live in a regular subpackage
+    like `tkc.core.<something>`.
+1. **The PyPI guide explicitly endorses the prefix-instead-of-namespace
+    pattern as a deliberate alternative:** *"A simple alternative is to
+    use a prefix on all your distributions such as
+    `import mynamespace_subpackage_a` — this avoids namespace package
+    complexity entirely."* That's literally what we have today
+    (`tkc_lvlab`). It's not a workaround; it's a supported choice.
+
+The PEP 420 namespace's value is an aesthetic / discoverability win
+(`from tkc import lvlab, lvscripts` looks more "family-shaped" than
+`import tkc_lvlab; import tkc_lvscripts`). It does NOT deliver any
+functional cross-distribution capability that the prefix style can't
+match via a `tkc_shared` companion distribution.
+
+### What the prefix approach commits us to
+
+- Each `tkc-*` distribution is independent. Imports read
+    `from tkc_lvlab.X import Y`, `from tkc_lvscripts.Y import Z`, etc.
+- Cross-project sharing happens via a future `tkc-shared` (or
+    `tkc-common`) regular distribution that other `tkc-*` projects
+    depend on. `from tkc_shared import version_helper` — boring,
+    works, zero coordination cost.
+- A single distribution shipping `tkc/__init__.py` by mistake later
+    cannot break sibling distributions, because we never claimed the
+    `tkc` namespace.
+
+### Pre-decision Phase 8 plan (kept for context)
+
+The original Phase 8 plan and risk flags are preserved below. If a
+future call reverses this decision (e.g. we end up shipping enough
+sibling `tkc-*` projects that the import-path aesthetics genuinely
+matter), this is the work that would need to happen — with the
+correction that the right uv_build config is
+`module-name = "tkc.lvlab"` (Approach 1 in the uv docs;
+`namespace = true` is the multi-sibling flag and disables safety
+checks per the docs).
+
+______________________________________________________________________
+
+### Original plan — reshape the package so:
 
 - All source lives under `src/` (PEP 621 "src-layout"). Currently the package
     is at the repo root (`tkc_lvlab/`); after this phase it would be at
@@ -753,6 +815,102 @@ option/default preserved.
 - **Rich rendering may swallow ANSI in some terminals** (e.g. piped to
     `less` without `-R`). Disable with `rich_markup_mode=None` if any
     user-reported regression.
+
+______________________________________________________________________
+
+## Phase 10 — Cut the 1.0.0 release
+
+The post-0.2 work landed a lot of substantive change:
+
+- Phase 2 removed `libvirt-python` (the C-extension dependency).
+- Phase 3 wired up the pytest matrix + the test-prefix safety
+    scaffolding.
+- Phase 4 rewrote the user-facing docs.
+- Phase 5 surveyed `lvscripts-py` into a docs/lvscripts-survey.md
+    artifact.
+- Phase 6 added the standalone `createvm` / `destroyvm` console
+    scripts.
+- Phase 7 converted every legacy module to Google-style docstrings +
+    type hints.
+- Phase 9 (and its follow-up) ported the entire CLI surface — both
+    `lvlab` and the standalone scripts — from Click to Typer with
+    UX preservation.
+
+Interfaces are stable, the suite is green (248 passed, 1 skipped),
+mkdocs `--strict` builds clean. 1.0.0 is the appropriate next tag —
+both as a "we're done with the migration set" signal and to give
+users a stable reference point to pin against.
+
+### Pre-tag gate (do all of these before bumping the version)
+
+- [ ] **Destructive smoke test** on a developer workstation with sudo
+    - image-cache access. Walk the full happy path:
+        `lvlab init`, `lvlab up <vm>`, `lvlab status`, `lvlab snapshot create <vm> <snap>`, `lvlab snapshot list <vm>`,
+        `lvlab snapshot delete <vm> <snap> --force`, `lvlab destroy <vm> --force`. Capture any UX regression (Typer Rich-panel output
+        aside). This is the only unchecked item left from Phase 9.
+- [ ] **Standalone-script smoke test**: `createvm <name>   --distro fedora40` → wait for cloud-init → `destroyvm <name>   --force`. Verify both paths cleanly handle the `oneoff-` prefix
+    on the libvirt side.
+- [ ] **Tag-name dry run**: open `.github/workflows/build-release.yml`
+    and confirm the wheel filename glob (`tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl`) still matches what `uv build` produces. Should
+    be a no-op since we're staying on the prefix layout and the
+    distribution name (`tkc-lvlab`) isn't changing — but verify with
+    a `workflow_dispatch` against an arbitrary test tag (e.g.
+    `0.99.0-rc1`) if you want belt-and-suspenders confidence.
+- [ ] **Suite + docs final pass** on the candidate commit:
+    `uv run pytest -q`, `uv run mkdocs build --strict`,
+    `uv run pre-commit run --all-files`.
+
+### Bump procedure
+
+Per `docs/releases.md` — the process is already documented; the
+1.0.0 bump just follows it:
+
+- [ ] Edit `pyproject.toml`: `version = "0.2.4"` → `version = "1.0.0"`.
+- [ ] `uv lock` to refresh the lockfile against the new version.
+- [ ] PR the version bump in a small, focused commit (no other
+    changes — keeps the release commit auditable).
+- [ ] Merge to `main`.
+- [ ] Pull `main` locally, create tag `1.0.0`, push it. The tag
+    push (matching the `[0-9]+.[0-9]+.[0-9]+` glob in
+    `.github/workflows/build-release.yml`) triggers the build +
+    GitHub Release with `gh release create ... --generate-notes`.
+
+### Release notes — what to surface
+
+`--generate-notes` will summarize merged PRs since the previous tag.
+Worth adding a hand-written summary at the top of the release body
+covering the post-0.2 themes:
+
+- **Goodbye libvirt-python**: no more `libvirt-dev` / `pkg-config`
+    build prereq. `uv sync` works on any host with `virsh` available
+    at runtime.
+- **New standalone scripts**: `createvm` and `destroyvm` (one-off
+    libvirt VMs, no `Lvlab.yml` required).
+- **CLI is Typer-based** (UX preserved char-for-char, but the
+    rendered help is Rich-panel styled now).
+- **Full Google-style docstring + type-hint coverage** — first
+    release where mkdocstrings can render the entire API surface.
+- **Python matrix**: 3.11 / 3.12 / 3.13 / 3.14 on CI.
+
+### Risk flags
+
+- **Tag push is live the moment it lands**. There is no
+    "draft release" gate in the current workflow — push tag, build
+    runs, release is published with the wheel asset. If anything's
+    wrong (e.g. version mismatch between tag and `pyproject.toml`),
+    catch it BEFORE pushing the tag. The mismatch failure mode is
+    silent — the wheel builds with the pyproject version, the
+    release is created with the tag name, and the wheel filename
+    won't match the release body. Recoverable but ugly.
+- **No PyPI publish in the workflow today** — releases are
+    GitHub-only artifacts. `uv tool install` from a Git URL or a
+    direct wheel URL still works; `uv tool install tkc-lvlab`
+    against PyPI does **not** (there's no PyPI publish step). If
+    that's a 1.0 expectation, it needs to be added to the workflow
+    as a separate prerequisite item.
+- **`--no-verify` is off-limits for the version-bump commit** per
+    project rules. Pre-commit's mdformat / black hooks have caught
+    real issues before; let them run.
 
 ______________________________________________________________________
 

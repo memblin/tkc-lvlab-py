@@ -256,6 +256,69 @@ def hosts(append=False, heredoc=False):
     click.echo(f"{hosts_snippet}")
 
 
+@click.command(name="ssh-config")
+@click.argument("vm_name", required=False)
+def ssh_config(vm_name=None):
+    """Print ~/.ssh/config snippet(s) for machines defined in the Lvlab.yml manifest.
+
+    With no VM_NAME, a snippet is emitted for every machine in the manifest.
+    With a VM_NAME, only that machine's snippet is emitted.
+
+    Output goes to stdout; redirect or append it to ~/.ssh/config yourself.
+    """
+    try:
+        environment, _, config_defaults, machines = parse_config()
+    except TypeError as e:
+        click.echo("Could not parse config file.")
+        sys.exit(1)
+
+    if vm_name:
+        machine_config = get_machine_by_vm_name(machines, vm_name)
+        if not machine_config:
+            click.echo(f"Machine {vm_name} not found in manifest.")
+            sys.exit(1)
+        selected_machines = [machine_config]
+    else:
+        selected_machines = machines
+
+    cloud_init_defaults = config_defaults.get("cloud_init", {})
+
+    snippets = []
+    for machine in selected_machines:
+        machine_vm_name = machine.get("vm_name")
+
+        # Merge cloud_init defaults with per-machine overrides for user/pubkey lookup.
+        machine_cloud_init = {**cloud_init_defaults, **machine.get("cloud_init", {})}
+        user = machine_cloud_init.get("user")
+        pubkey = machine_cloud_init.get("pubkey")
+
+        # Pull the primary interface IP (first interface), stripping any CIDR suffix.
+        interfaces = machine.get("interfaces", []) or []
+        host_ip = None
+        if interfaces and interfaces[0].get("ip4"):
+            host_ip = interfaces[0]["ip4"].split("/")[0]
+
+        lines = [f"Host {machine_vm_name}"]
+        if host_ip:
+            lines.append(f"  HostName {host_ip}")
+        else:
+            lines.append(
+                "  # HostName not resolvable from manifest (no static ip4; VM may use DHCP or not be up yet)"
+            )
+        if user:
+            lines.append(f"  User {user}")
+
+        # Reuse UserData.__post_init__'s heuristic: if pubkey contains "~" or "/",
+        # treat it as a path on disk and derive the private key by stripping ".pub".
+        if pubkey and ("~" in pubkey or "/" in pubkey):
+            identity_file = pubkey[:-4] if pubkey.endswith(".pub") else pubkey
+            lines.append(f"  IdentityFile {identity_file}")
+
+        snippets.append("\n".join(lines))
+
+    click.echo("\n\n".join(snippets))
+
+
 @click.command()
 def init():
     """Initialize the environment."""
@@ -588,6 +651,7 @@ run.add_command(status)
 run.add_command(capabilities)
 run.add_command(up)
 run.add_command(hosts)
+run.add_command(ssh_config)
 
 if __name__ == "__main__":
     run()

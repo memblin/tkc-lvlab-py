@@ -2,8 +2,6 @@
 
 import glob
 import os
-import libvirt
-import re
 import subprocess
 import sys
 
@@ -649,104 +647,6 @@ class Machine:
                 return 1
 
         return 0
-
-
-def connect_to_libvirt(uri=None):
-    """Connect to Hypervisor"""
-    if uri == None:
-        uri = "qemu:///session"
-
-    conn = libvirt.open(uri)
-    if not conn:
-        raise SystemExit(f"Failed to open connection to {uri}")
-
-    return conn
-
-
-def _humanize_machine_status(state: str, state_reason: str) -> tuple:
-    """Convert status constant value into something more descriptive"""
-
-    vir_domain_state_descriptions = {
-        # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainState
-        "VIR_DOMAIN_NOSTATE": "no state",
-        "VIR_DOMAIN_RUNNING": "the machine is running",
-        "VIR_DOMAIN_BLOCKED": "the machine is blocked on resource",
-        "VIR_DOMAIN_PAUSED": "the machine is paused by user",
-        "VIR_DOMAIN_SHUTDOWN": "the machine is being shut down",
-        "VIR_DOMAIN_SHUTOFF": "the machine is shut off",
-        "VIR_DOMAIN_CRASHED": "the machine is crashed",
-        "VIR_DOMAIN_PMSUSPENDED": "the machine is suspended by guest power management",
-    }
-
-    vir_domain_state_reason_descriptions = {
-        # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainRunningReason
-        "VIR_DOMAIN_RUNNING_UNKNOWN": "Unknown",
-        "VIR_DOMAIN_RUNNING_BOOTED": "normal startup from boot",
-        "VIR_DOMAIN_RUNNING_MIGRATED": "migrated from another host",
-        "VIR_DOMAIN_RUNNING_RESTORED": "restored from a state file",
-        "VIR_DOMAIN_RUNNING_FROM_SNAPSHOT": "restored from snapshot",
-        "VIR_DOMAIN_RUNNING_UNPAUSED": "returned from paused state",
-        "VIR_DOMAIN_RUNNING_MIGRATION_CANCELED": "returned from migration",
-        "VIR_DOMAIN_RUNNING_SAVE_CANCELED": "returned from failed save process",
-        "VIR_DOMAIN_RUNNING_WAKEUP": "returned from pmsuspended due to wakeup event",
-        "VIR_DOMAIN_RUNNING_CRASHED": "resumed from crashed",
-        "VIR_DOMAIN_RUNNING_POSTCOPY": "running in post-copy migration mode",
-        "VIR_DOMAIN_RUNNING_POSTCOPY_FAILED": "running in failed post-copy migration",
-        # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainShutdownReason
-        "VIR_DOMAIN_SHUTDOWN_UNKNOWN": "the reason is unknown",
-        "VIR_DOMAIN_SHUTDOWN_USER": "shutting down on user request",
-        # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainShutoffReason
-        "VIR_DOMAIN_SHUTOFF_UNKNOWN": "the reason is unknown",
-        "VIR_DOMAIN_SHUTOFF_SHUTDOWN": "normal shutdown",
-        "VIR_DOMAIN_SHUTOFF_DESTROYED": "forced poweroff",
-        "VIR_DOMAIN_SHUTOFF_CRASHED": "machine crashed",
-        "VIR_DOMAIN_SHUTOFF_MIGRATED": "migrated to another host",
-        "VIR_DOMAIN_SHUTOFF_SAVED": "saved to a file",
-        "VIR_DOMAIN_SHUTOFF_FAILED": "machine failed to start",
-        "VIR_DOMAIN_SHUTOFF_FROM_SNAPSHOT": "restored from a snapshot which was taken while machine was shutoff",
-        "VIR_DOMAIN_SHUTOFF_DAEMON": "daemon decided to kill machine during reconnection processing",
-    }
-
-    # Lookup the state in vir_domain_state_descriptions, if not found use the
-    # state as-is, a constant is better than nothing.
-    status = vir_domain_state_descriptions.get(state, state)
-    # Same for state_reason
-    reason = vir_domain_state_reason_descriptions.get(state_reason, state_reason)
-
-    return status, reason
-
-
-def get_machine_state(state: tuple) -> tuple:
-    """Gets the current state of the domain.
-
-    https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainState
-    https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainShutoffReason
-    https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainRunningReason
-
-    """
-    # Get possible domain states from the library
-    vir_domain_states = {}
-    # https://docs.python.org/3/library/functions.html#vars
-    for k, v in vars(libvirt).items():
-        if re.match("VIR_DOMAIN_[A-Z]+$", k):
-            vir_domain_states[v] = k
-
-    # Get possible domain state reasons from the library
-    vir_domain_state_reasons = {}
-    for vir_domain_state in vir_domain_states.items():
-        pattern = vir_domain_state[1] + "_[A-Z]+$"
-        reason = {}
-        # https://docs.python.org/3/library/functions.html#vars
-        for k, v in vars(libvirt).items():
-            if re.match(pattern, k):
-                reason[v] = k
-                vir_domain_state_reasons[vir_domain_state[0]] = reason
-
-    machine_state = vir_domain_states.get(state[0], "Unknown State")
-    machine_state_reason = vir_domain_state_reasons[state[0]][state[1]]
-    status, reason = _humanize_machine_status(machine_state, machine_state_reason)
-
-    return machine_state, machine_state_reason, status, reason
 
 
 def get_machine_by_vm_name(machines, vm_name):

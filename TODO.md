@@ -47,7 +47,7 @@ doesn't have to mock around `libvirt-python`.
 
 ______________________________________________________________________
 
-## Phase 2 — Replace `libvirt-python` with `virsh` subprocess calls
+## Phase 2 — Replace `libvirt-python` with `virsh` subprocess calls ✅ COMPLETE
 
 **Goal:** eliminate the `libvirt-python` C-extension dependency entirely.
 lvlab already shells out to `virt-install`; mirror that pattern for every
@@ -109,9 +109,10 @@ plus one stray `conn.getCapabilities()` in `tkc_lvlab/cli.py`.
 - [ ] Update `CLAUDE.md` Architecture section: remove `libvirt-python` API
     references, document the `virsh` subprocess pattern and the
     `tkc_lvlab/utils/virsh.py` helper.
-- [ ] Remove `continue-on-error: true` for Python 3.14 in the test workflow
-    (Phase 3); 3.14 should be a first-class matrix entry once libvirt-python
-    is gone.
+- [x] ~~Remove `continue-on-error: true` for Python 3.14 in the test workflow~~ —
+    moot: no test workflow with a Python matrix existed at the time
+    libvirt-python was dropped. When Phase 3 wires up the pytest CI matrix,
+    Python 3.14 will be a first-class entry from day one.
 
 ### Standardize destructive-path UX (do it here, not as a separate pass)
 

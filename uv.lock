@@ -311,12 +311,6 @@ wheels = [
 ]
 
 [[package]]
-name = "libvirt-python"
-version = "12.3.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/1b/32/aa296ebea6ea95700af46033607ab168e75369ac3fa947996f9605fa24d2/libvirt_python-12.3.0.tar.gz", hash = "sha256:cc472e54c05a86db26e21358e1e8554bc85fea3cac6fe2b90e60e6a06e496a8d", size = 244723, upload-time = "2026-05-01T22:08:23.908Z" }
-
-[[package]]
 name = "markdown"
 version = "3.10.2"
 source = { registry = "https://pypi.org/simple" }
@@ -850,7 +844,6 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "jinja2" },
-    { name = "libvirt-python" },
     { name = "pycdlib" },
     { name = "python-gnupg" },
     { name = "pyyaml" },
@@ -875,7 +868,6 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
-    { name = "libvirt-python", specifier = ">=10.5" },
     { name = "pycdlib", specifier = ">=1.14" },
     { name = "python-gnupg", specifier = ">=0.5" },
     { name = "pyyaml", specifier = ">=6.0" },

@@ -198,29 +198,3 @@ def test_status_section_headers_unchanged_for_ux_continuity() -> None:
     assert machines_idx != -1
     assert images_idx != -1
     assert env_idx < machines_idx < images_idx
-
-
-def test_status_does_not_reach_libvirt_python() -> None:
-    """Regression guard: the command must not touch the libvirt-python helpers.
-
-    After Phase 2 step 5, ``status`` is virsh-only. ``connect_to_libvirt`` /
-    ``get_machine_state`` are also slated for deletion in step 6 — this test
-    guarantees no late re-entry sneaks into ``status`` between now and then.
-    """
-    runner = CliRunner()
-    # connect_to_libvirt / get_machine_state were removed from cli's imports
-    # in this step. Patch them on the libvirt module (where they still live
-    # until step 6 deletes them) and assert nothing in the status code path
-    # imports or calls them.
-    with (
-        _patched_config(),
-        mock.patch.object(cli, "virsh_list_all_names", return_value=[]),
-        mock.patch.object(cli, "virsh_domstate"),
-        mock.patch("tkc_lvlab.utils.libvirt.connect_to_libvirt") as connect_mock,
-        mock.patch("tkc_lvlab.utils.libvirt.get_machine_state") as state_mock,
-    ):
-        result = runner.invoke(status, [])
-
-    assert result.exit_code == 0, result.output
-    connect_mock.assert_not_called()
-    state_mock.assert_not_called()

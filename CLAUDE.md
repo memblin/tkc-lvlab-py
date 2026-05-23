@@ -17,11 +17,12 @@ Because state lives in libvirt + on-disk qcow2 files, **bugs here can damage rea
 
 ## Build / dev / lint commands
 
-This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). The test suite is just getting started — only `tests/test_virsh.py` exists today. CI currently runs pre-commit only; pytest is not yet wired into CI (Phase 3 in `TODO.md`). Don't claim something is "tested" because CI is green — verify locally with `uv run pytest`.
+This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). CI currently runs pre-commit only; pytest is not yet wired into CI (Phase 3 in `TODO.md`). Don't claim something is "tested" because CI is green — verify locally with `uv run pytest`.
+
+The CLI shells out to `virsh` (and `qemu-img`, `virt-install`) for all hypervisor operations — there is no longer a `libvirt-python` C extension dependency, so `uv sync` works without `libvirt-dev` / `pkg-config` on the host. Lab functionality still requires `libvirt-clients` (or equivalent) for the `virsh` binary at runtime.
 
 ```bash
-# Sync deps into .venv (needs libvirt-dev / pkg-config on the host until Phase 2
-# of TODO.md lands — libvirt-python is a C extension that compiles against them)
+# Sync deps into .venv
 uv sync
 
 # Sync with dev tools (pytest etc. from the [dependency-groups] dev table)

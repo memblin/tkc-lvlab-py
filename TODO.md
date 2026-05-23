@@ -307,6 +307,84 @@ separate effort from the docstring conversion.
 
 ______________________________________________________________________
 
+## Phase 8 — Repo restructure: src-layout + `tkc.lvlab` namespace
+
+Reshape the package so:
+
+- All source lives under `src/` (PEP 621 "src-layout"). Currently the package
+    is at the repo root (`tkc_lvlab/`); after this phase it would be at
+    `src/tkc/lvlab/`.
+- The top-level Python name becomes a **PEP 420 implicit namespace package**
+    named `tkc`, with `lvlab` underneath it. Imports change from
+    `from tkc_lvlab... import ...` to `from tkc.lvlab... import ...`. The
+    console script entry point becomes `tkc.lvlab.cli:run`.
+- The reason for the namespace: sibling tools in the `tkc` family
+    (`lvscripts-py`, future ones) can ship as separate distributions but live
+    in a shared `tkc.*` import hierarchy. PEP 420 makes that work without an
+    `__init__.py` at the `tkc` level.
+
+### Work this implies
+
+- [ ] Move `tkc_lvlab/` → `src/tkc/lvlab/`. Delete the root-level `__init__.py`
+    and **do not** add one at `src/tkc/` (that's what makes it a namespace
+    package). `src/tkc/lvlab/__init__.py` stays.
+- [ ] Rewrite every import: `tkc_lvlab.X` → `tkc.lvlab.X`. Affected files
+    include all of `src/tkc/lvlab/**/*.py`, every `tests/test_*.py`, and
+    `docs/api/.../*.md` (the `:::` directives).
+- [ ] `pyproject.toml`:
+    - [ ] `[project.scripts]`: `lvlab = "tkc.lvlab.cli:run"`.
+    - [ ] `[tool.uv.build-backend]`: verify `uv_build` supports the new
+        layout. Recent uv has improved namespace-package handling; confirm
+        against the current `uv_build` release notes. The two relevant
+        knobs are `module-root` (set to `"src"`) and `module-name` (set to
+        `"tkc.lvlab"` or `"tkc"` with a `namespace-packages` flag,
+        depending on what uv expects).
+    - [ ] Templates `include` glob: update `tkc_lvlab/templates/*.j2` to
+        `src/tkc/lvlab/templates/*.j2` (or whatever path the new layout
+        uses); confirm with `unzip -l dist/*.whl | grep templates` after a
+        rebuild.
+- [ ] `sonar-project.properties`: `sonar.sources=src/tkc/lvlab` (or
+    whatever the new root is).
+- [ ] `[tool.coverage.run] source` and `[tool.pytest.ini_options] addopts`
+    (`--cov=tkc_lvlab`) → `--cov=tkc.lvlab`.
+- [ ] `mkdocs.yml` mkdocstrings handler: paths to the new tree if needed.
+- [ ] `mkdocs.yml` `repo_url` / `edit_uri` unchanged but verify links from
+    `docs/api/.../*.md` still resolve.
+- [ ] `CLAUDE.md`: update every file-path reference (e.g.
+    `tkc_lvlab/utils/libvirt.py` → `src/tkc/lvlab/utils/libvirt.py`) and
+    mention the namespace decision in "Architecture."
+- [ ] Bump the wheel filename guard in `.github/workflows/build-release.yml`
+    — `tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl` will become
+    something like `tkc_lvlab-...whl` or `tkc.lvlab-...whl` depending on
+    how `uv_build` produces it. Verify on a `workflow_dispatch` dry-run
+    before tagging a real release.
+- [ ] After all the above, `uv build` and confirm the wheel still contains
+    the templates and the entry point still works (`uv run lvlab --help`).
+
+### When to schedule
+
+- **Not during Phase 2.** The virsh port already touches half the source
+    tree; mixing in a rename would make the diff unreviewable.
+- **Not during Phase 3** — the new tests are still being added; rename
+    later when there are fewer test files to update.
+- **Right before Phase 6** is a candidate — Phase 6 introduces new code
+    (`lvlab vm create`) that should land in the new layout from day one.
+    Or wait until after Phase 6 if a release goes out in between (avoids
+    changing the wheel's package name twice in close succession).
+
+### Risk flags
+
+- Wheel-filename change is **user-visible**: existing `uv tool install tkc-lvlab` continues to work but the underlying wheel asset name in
+    GitHub Releases changes. Document in the release notes.
+- The `tkc` namespace becomes a soft commitment — once we publish a wheel
+    with `tkc.lvlab`, removing the namespace later is a breaking change for
+    importers.
+- Verify `pip install tkc-lvlab` (or `uv tool install tkc-lvlab`) doesn't
+    conflict with any other PyPI package claiming the `tkc` namespace before
+    publishing.
+
+______________________________________________________________________
+
 ## Decisions still open (call these out before Phase 6 lands)
 
 1. ~~Build backend~~ — decided: `uv_build`. No hatchling, no setuptools.

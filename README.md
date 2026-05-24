@@ -5,10 +5,13 @@ used to manage Libvirt based development environments in a familiar way.
 
 If you are wondering why I would write this, the long [answer is here](docs-extra/Why.md)?
 
-> [!WARNING]
-> Very much a minimum viable product, it barely works. Do not use this
-> if you have important VMs in libvirt on your dev machine. Don't let
-> a bug ruin your day.
+> [!NOTE]
+> `lvlab` is built for a developer workstation — driving short-lived
+> lab VMs for testing configuration-management code. It is not a
+> production VM manager. Destructive commands (`destroy`, `down`,
+> snapshot `delete`) act on whatever libvirt domains match the
+> manifest, so back up anything you can't afford to lose before
+> pointing it at a host that also runs VMs you care about.
 
 ## Usage
 

@@ -3,7 +3,7 @@
 The Libvirt Labs project provides the `lvlab` Python application which can be
 used to manage Libvirt based development environments in a familiar way.
 
-If you are wondering why I would write this, the long [answer is here](docs-extra/Why.md)?
+If you are wondering why I would write this, the long [answer is here](docs/why.md).
 
 > [!NOTE]
 > `lvlab` is built for a developer workstation — driving short-lived
@@ -13,14 +13,22 @@ If you are wondering why I would write this, the long [answer is here](docs-extr
 > manifest, so back up anything you can't afford to lose before
 > pointing it at a host that also runs VMs you care about.
 
-## Usage
+## Requirements
 
-With `lvlab` one can create VMs automatically from a YAML syntax manifest
-configuration that defines the environment, the virtual machines, and
-the base image information.
+- Libvirt w/ QEMU configured and functional.
+- The user should be a member of the `libvirt` group on the system.
+- Utilities: `virsh`, `virt-install`, `qemu-img`. `lvlab` shells out
+    to all three; there is no longer a `libvirt-python` C-extension
+    dependency, so `libvirt-dev` / `pkg-config` are not needed at
+    build time.
+- `cloud_image_basedir` and `disk_image_basedir` configuration paths
+    need to be writable by the user to run w/o sudo. I usually create
+    these directories in advance and chown them for my user.
 
-- [Example YAML config file](docs-extra/Lvlab.example.yml)
-- [In-depth Example Repo](https://github.com/memblin/lvlab-examples)
+Validated end-to-end on **Debian 12** (bookworm), **Debian 13**
+(trixie), **AlmaLinux 10**, and **Fedora 44**. See
+[`scripts/host-bootstrap.sh`](scripts/host-bootstrap.sh) for the
+exact apt/dnf package list per supported host.
 
 ## Installation
 
@@ -49,6 +57,15 @@ The same wheel installs three console scripts on your PATH:
 - `lvlab` — manifest workflow (drives `Lvlab.yml`).
 - `createvm` — one-off VM creation. Does not read `Lvlab.yml`.
 - `destroyvm` — one-off VM removal (matches `createvm`). Does not see manifest VMs.
+
+## Usage
+
+With `lvlab` one can create VMs automatically from a YAML syntax manifest
+configuration that defines the environment, the virtual machines, and
+the base image information.
+
+- [Example YAML config file](docs/Lvlab.example.yml)
+- [In-depth Example Repo](https://github.com/memblin/lvlab-examples)
 
 ## One-off VMs
 
@@ -100,27 +117,4 @@ Commands:
   snapshot      Snapshot management commands.
   status        Show the status of the environment.
   up            Start a machine defined in the Lvlab.yml manifest.
-```
-
-## Requirements
-
-- Libvirt w/ QEMU configured and functional
-- The user should be a member of the `libvirt` group on the system
-- Utilities: `virsh`, `virt-install`, `qemu-img`. `lvlab` shells out to all
-    three; there is no longer a `libvirt-python` C-extension dependency, so
-    `libvirt-dev` / `pkg-config` are not needed at build time.
-- `cloud_image_basedir` and `disk_image_basedir` configuration paths need
-    to be writable by the user to run w/o sudo.
-    - I usually create these directories in advance and chown them for my
-        user.
-
-### Ubuntu 22.04 / 24.04
-
-These packages are required to install and use the lvlab application.
-
-```bash
-# qemu-kvm, libvirt daemon + client tools (provides `virsh`), virt-install,
-# Python 3, and git. No libvirt-dev / pkg-config since the libvirt-python
-# build-time dep was dropped in 0.2.x.
-apt install qemu-system-x86 libvirt-daemon-system libvirt-clients virtinst python3 python3-venv git
 ```

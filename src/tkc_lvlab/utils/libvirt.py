@@ -582,7 +582,7 @@ class Machine:
         -> undefine the domain -> remove on-disk files under
         ``self.config_fpath``. Each ``virsh`` step is independent; if any step
         fails the method logs and returns ``False`` without attempting later
-        steps (this preserves the previous "stop at first error" behavior).
+        steps (preserves the previous "stop at first error" behavior).
 
         Args:
             uri: libvirt connection URI (e.g. ``qemu:///session``).
@@ -599,10 +599,7 @@ class Machine:
             return False
 
         if self.libvirt_vm_name not in current_vms:
-            logger.warning(
-                VM_DOES_NOT_EXIST_MSG,
-                self.vm_name,
-            )
+            logger.warning(VM_DOES_NOT_EXIST_MSG, self.vm_name)
             return False
 
         try:
@@ -611,23 +608,9 @@ class Machine:
             logger.error("Failed to query state of %s: %s", self.vm_name, e)
             return False
 
-        # Force-off if the domain is still running. virsh destroy is the
-        # power-cord-pull equivalent; the previous libvirt-python code called
-        # this on RUNNING or PAUSED — the same set ``RUNNING_STATES`` carries.
-        if vm_state in RUNNING_STATES:
-            logger.warning("Forcefully shutting down %s", self.vm_name)
-            try:
-                run_virsh(uri, ["destroy", self.libvirt_vm_name])
-            except VirshError as e:
-                logger.error("Failed to forcefully shutdown %s: %s", self.vm_name, e)
-                return False
-            try:
-                vm_state = virsh_domstate(uri, self.libvirt_vm_name)
-            except VirshError as e:
-                logger.error(
-                    "Failed to query state of %s after destroy: %s", self.vm_name, e
-                )
-                return False
+        vm_state = self._force_off_if_alive(uri, vm_state)
+        if vm_state is None:
+            return False
 
         # Only proceed with snapshot cleanup + undefine when the domain has
         # actually reached a dead state. If destroy didn't take effect (state
@@ -641,30 +624,77 @@ class Machine:
             )
             return False
 
-        # Delete every snapshot before undefining. ``virsh undefine`` will
-        # refuse if snapshot metadata exists, so this is mandatory cleanup,
-        # not a courtesy.
+        if not self._delete_all_snapshots(uri):
+            return False
+        if not self._undefine(uri):
+            return False
+        return self._cleanup_files()
+
+    def _force_off_if_alive(self, uri: str, vm_state: str) -> str | None:
+        """If the domain is still running/paused, force it off and return new state.
+
+        The previous libvirt-python code called ``virsh destroy`` (a
+        power-cord-pull) on RUNNING or PAUSED — the same set
+        :data:`RUNNING_STATES` carries.
+
+        Returns:
+            The post-destroy domain state, or ``vm_state`` unchanged when
+            the domain was already in a non-running state. ``None`` when
+            either the force-off or the follow-up state query failed
+            (error already logged).
+        """
+        if vm_state not in RUNNING_STATES:
+            return vm_state
+        logger.warning("Forcefully shutting down %s", self.vm_name)
+        try:
+            run_virsh(uri, ["destroy", self.libvirt_vm_name])
+        except VirshError as e:
+            logger.error("Failed to forcefully shutdown %s: %s", self.vm_name, e)
+            return None
+        try:
+            return virsh_domstate(uri, self.libvirt_vm_name)
+        except VirshError as e:
+            logger.error(
+                "Failed to query state of %s after destroy: %s", self.vm_name, e
+            )
+            return None
+
+    def _delete_all_snapshots(self, uri: str) -> bool:
+        """Delete every snapshot of this machine; required before ``undefine``.
+
+        ``virsh undefine`` refuses when snapshot metadata still exists,
+        so this is mandatory cleanup, not a courtesy.
+
+        Returns:
+            ``True`` on success (including the no-snapshots case).
+            ``False`` if any ``virsh snapshot-delete`` call failed.
+        """
         try:
             snapshots = virsh_snapshot_names(uri, self.libvirt_vm_name)
         except VirshError as e:
             logger.error("Failed to list snapshots for %s: %s", self.vm_name, e)
             return False
 
-        if snapshots:
-            logger.warning("Deleting all snapshots for %s", self.vm_name)
-            for snap in snapshots:
-                logger.info("Deleting snapshot %s", snap)
-                try:
-                    run_virsh(uri, ["snapshot-delete", self.libvirt_vm_name, snap])
-                except VirshError as e:
-                    logger.error(
-                        "Failed to delete snapshot %s of %s: %s",
-                        snap,
-                        self.vm_name,
-                        e,
-                    )
-                    return False
+        if not snapshots:
+            return True
 
+        logger.warning("Deleting all snapshots for %s", self.vm_name)
+        for snap in snapshots:
+            logger.info("Deleting snapshot %s", snap)
+            try:
+                run_virsh(uri, ["snapshot-delete", self.libvirt_vm_name, snap])
+            except VirshError as e:
+                logger.error(
+                    "Failed to delete snapshot %s of %s: %s",
+                    snap,
+                    self.vm_name,
+                    e,
+                )
+                return False
+        return True
+
+    def _undefine(self, uri: str) -> bool:
+        """Undefine the libvirt domain. Returns False on virsh failure."""
         logger.info("Undefining %s", self.vm_name)
         try:
             run_virsh(uri, ["undefine", self.libvirt_vm_name])
@@ -673,22 +703,25 @@ class Machine:
                 "Failed to undefine (remove from Libvirt) %s: %s", self.vm_name, e
             )
             return False
+        return True
 
-        # Remove on-disk machine files. Mirrors the previous behavior: a
-        # filesystem error here logs and returns False even though libvirt
-        # state has already been cleaned up.
+    def _cleanup_files(self) -> bool:
+        """Remove on-disk machine files and the (empty) config directory.
+
+        Mirrors the previous behavior: a filesystem error here logs and
+        returns ``False`` even though libvirt state has already been
+        cleaned up by the time we reach this point.
+        """
         try:
-            machine_files = glob.glob(os.path.join(self.config_fpath, "*"))
-            for file in machine_files:
-                if os.path.isfile(file):
-                    logger.info("Removing file %s.", file)
-                    os.remove(file)
+            for path in glob.glob(os.path.join(self.config_fpath, "*")):
+                if os.path.isfile(path):
+                    logger.info("Removing file %s.", path)
+                    os.remove(path)
         except Exception as e:  # pylint: disable=broad-except
             logger.error("Exception when removing machine files %s", e)
             return False
 
         try:
-            # Check if the directory is empty and then remove it
             if not os.listdir(self.config_fpath):
                 logger.info("Removing machine directory %s.", self.config_fpath)
                 os.rmdir(self.config_fpath)
@@ -697,7 +730,6 @@ class Machine:
         except Exception as e:  # pylint: disable=broad-except
             logger.error("Exception when removing machine files %s", e)
             return False
-
         return True
 
     def exists_in_libvirt(self, uri: str) -> tuple[bool, str, str]:

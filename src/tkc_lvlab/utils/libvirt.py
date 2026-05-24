@@ -33,6 +33,7 @@ from .cloud_init import MetaData, NetworkConfig, UserData
 from .network import NETWORK_TYPES, USER_MODE_NETWORK_TYPES
 from .virsh import (
     DEAD_STATES,
+    RUNNING_STATES,
     SHUTDOWNABLE_STATES,
     VirshError,
     _xml_tempfile,
@@ -48,6 +49,12 @@ if TYPE_CHECKING:
 
 
 logger = get_logger(__name__)
+
+# Reused as a logger format string across the four ``virsh`` operations that
+# bail out when the requested domain isn't defined at the configured URI.
+# Extracted to a module constant to satisfy SonarQube python:S1192 — keep the
+# wording in lockstep with the four call sites in this module.
+VM_DOES_NOT_EXIST_MSG = "The virtual machine %s does not exist in this Libvirt URI"
 
 
 def _virt_install_network_arg(iface: dict[str, Any]) -> str:
@@ -585,7 +592,7 @@ class Machine:
 
         if self.libvirt_vm_name not in current_vms:
             logger.warning(
-                "The virtual machine %s does not exist in this Libvirt URI",
+                VM_DOES_NOT_EXIST_MSG,
                 self.vm_name,
             )
             return False
@@ -598,8 +605,8 @@ class Machine:
 
         # Force-off if the domain is still running. virsh destroy is the
         # power-cord-pull equivalent; the previous libvirt-python code called
-        # this on RUNNING or PAUSED.
-        if vm_state in {"running", "paused"}:
+        # this on RUNNING or PAUSED — the same set ``RUNNING_STATES`` carries.
+        if vm_state in RUNNING_STATES:
             logger.warning("Forcefully shutting down %s", self.vm_name)
             try:
                 run_virsh(uri, ["destroy", self.libvirt_vm_name])
@@ -778,7 +785,7 @@ class Machine:
         """
         if self.libvirt_vm_name not in virsh_list_all_names(uri):
             logger.warning(
-                "The virtual machine %s does not exist in this Libvirt URI",
+                VM_DOES_NOT_EXIST_MSG,
                 self.vm_name,
             )
             raise VirshError(
@@ -821,7 +828,7 @@ class Machine:
         """
         if self.libvirt_vm_name not in virsh_list_all_names(uri):
             logger.warning(
-                "The virtual machine %s does not exist in this Libvirt URI",
+                VM_DOES_NOT_EXIST_MSG,
                 self.vm_name,
             )
             raise VirshError(
@@ -858,7 +865,7 @@ class Machine:
 
         if self.libvirt_vm_name not in current_vms:
             logger.warning(
-                "The virtual machine %s does not exist in this Libvirt URI",
+                VM_DOES_NOT_EXIST_MSG,
                 self.vm_name,
             )
             return 0

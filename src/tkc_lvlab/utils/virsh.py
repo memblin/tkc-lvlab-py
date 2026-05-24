@@ -129,22 +129,39 @@ def run_virsh(
 # State strings — what ``virsh domstate`` actually emits.
 # ---------------------------------------------------------------------------
 
+# Per-state name constants. These mirror the lowercase strings ``virsh
+# domstate`` emits (see libvirt's ``virDomainState`` enum). Extracting them
+# avoids duplicating the literals across the maps and set memberships below.
+DOMSTATE_NO_STATE = "no state"
+DOMSTATE_RUNNING = "running"
+DOMSTATE_IDLE = "idle"
+DOMSTATE_PAUSED = "paused"
+DOMSTATE_IN_SHUTDOWN = "in shutdown"
+DOMSTATE_SHUT_OFF = "shut off"
+DOMSTATE_CRASHED = "crashed"
+DOMSTATE_PMSUSPENDED = "pmsuspended"
+
 DOMSTATE_HUMAN: dict[str, str] = {
     # https://libvirt.org/html/libvirt-libvirt-domain.html#virDomainState
-    "no state": "no state",
-    "running": "the machine is running",
-    "idle": "the machine is blocked on resource",
-    "paused": "the machine is paused by user",
-    "in shutdown": "the machine is being shut down",
-    "shut off": "the machine is shut off",
-    "crashed": "the machine is crashed",
-    "pmsuspended": "the machine is suspended by guest power management",
+    DOMSTATE_NO_STATE: "no state",
+    DOMSTATE_RUNNING: "the machine is running",
+    DOMSTATE_IDLE: "the machine is blocked on resource",
+    DOMSTATE_PAUSED: "the machine is paused by user",
+    DOMSTATE_IN_SHUTDOWN: "the machine is being shut down",
+    DOMSTATE_SHUT_OFF: "the machine is shut off",
+    DOMSTATE_CRASHED: "the machine is crashed",
+    DOMSTATE_PMSUSPENDED: "the machine is suspended by guest power management",
 }
 
-RUNNING_STATES: set[str] = {"running", "paused"}
-DEAD_STATES: set[str] = {"shut off", "crashed"}
-SHUTDOWNABLE_STATES: set[str] = {"running", "idle", "paused", "pmsuspended"}
-DESTROYABLE_STATES: set[str] = {"running", "paused"}
+RUNNING_STATES: set[str] = {DOMSTATE_RUNNING, DOMSTATE_PAUSED}
+DEAD_STATES: set[str] = {DOMSTATE_SHUT_OFF, DOMSTATE_CRASHED}
+SHUTDOWNABLE_STATES: set[str] = {
+    DOMSTATE_RUNNING,
+    DOMSTATE_IDLE,
+    DOMSTATE_PAUSED,
+    DOMSTATE_PMSUSPENDED,
+}
+DESTROYABLE_STATES: set[str] = {DOMSTATE_RUNNING, DOMSTATE_PAUSED}
 
 # Reason map keyed on ``(state, reason)`` as ``virsh domstate --reason`` emits
 # them. Missing keys fall back to the raw reason string.
@@ -156,35 +173,35 @@ DESTROYABLE_STATES: set[str] = {"running", "paused"}
 # output is preserved across the port.
 _REASON_HUMAN: dict[tuple[str, str], str] = {
     # virDomainRunningReason
-    ("running", "unknown"): "Unknown",
-    ("running", "booted"): "normal startup from boot",
-    ("running", "migrated"): "migrated from another host",
-    ("running", "restored"): "restored from a state file",
-    ("running", "from snapshot"): "restored from snapshot",
-    ("running", "unpaused"): "returned from paused state",
-    ("running", "migration canceled"): "returned from migration",
-    ("running", "save canceled"): "returned from failed save process",
-    ("running", "wakeup"): "returned from pmsuspended due to wakeup event",
-    ("running", "crashed"): "resumed from crashed",
-    ("running", "post-copy"): "running in post-copy migration mode",
-    ("running", "post-copy failed"): "running in failed post-copy migration",
+    (DOMSTATE_RUNNING, "unknown"): "Unknown",
+    (DOMSTATE_RUNNING, "booted"): "normal startup from boot",
+    (DOMSTATE_RUNNING, "migrated"): "migrated from another host",
+    (DOMSTATE_RUNNING, "restored"): "restored from a state file",
+    (DOMSTATE_RUNNING, "from snapshot"): "restored from snapshot",
+    (DOMSTATE_RUNNING, "unpaused"): "returned from paused state",
+    (DOMSTATE_RUNNING, "migration canceled"): "returned from migration",
+    (DOMSTATE_RUNNING, "save canceled"): "returned from failed save process",
+    (DOMSTATE_RUNNING, "wakeup"): "returned from pmsuspended due to wakeup event",
+    (DOMSTATE_RUNNING, "crashed"): "resumed from crashed",
+    (DOMSTATE_RUNNING, "post-copy"): "running in post-copy migration mode",
+    (DOMSTATE_RUNNING, "post-copy failed"): "running in failed post-copy migration",
     # virDomainShutdownReason
-    ("in shutdown", "unknown"): "the reason is unknown",
-    ("in shutdown", "user"): "shutting down on user request",
+    (DOMSTATE_IN_SHUTDOWN, "unknown"): "the reason is unknown",
+    (DOMSTATE_IN_SHUTDOWN, "user"): "shutting down on user request",
     # virDomainShutoffReason
-    ("shut off", "unknown"): "the reason is unknown",
-    ("shut off", "shutdown"): "normal shutdown",
-    ("shut off", "destroyed"): "forced poweroff",
-    ("shut off", "crashed"): "machine crashed",
-    ("shut off", "migrated"): "migrated to another host",
-    ("shut off", "saved"): "saved to a file",
-    ("shut off", "failed"): "machine failed to start",
+    (DOMSTATE_SHUT_OFF, "unknown"): "the reason is unknown",
+    (DOMSTATE_SHUT_OFF, "shutdown"): "normal shutdown",
+    (DOMSTATE_SHUT_OFF, "destroyed"): "forced poweroff",
+    (DOMSTATE_SHUT_OFF, "crashed"): "machine crashed",
+    (DOMSTATE_SHUT_OFF, "migrated"): "migrated to another host",
+    (DOMSTATE_SHUT_OFF, "saved"): "saved to a file",
+    (DOMSTATE_SHUT_OFF, "failed"): "machine failed to start",
     (
-        "shut off",
+        DOMSTATE_SHUT_OFF,
         "from snapshot",
     ): "restored from a snapshot which was taken while machine was shutoff",
     (
-        "shut off",
+        DOMSTATE_SHUT_OFF,
         "daemon",
     ): "daemon decided to kill machine during reconnection processing",
 }

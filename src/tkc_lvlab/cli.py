@@ -402,6 +402,81 @@ def ssh_config(vm_name: str = typer.Argument(None)) -> None:
     typer.echo("\n\n".join(snippets))
 
 
+def _init_ensure_image(image: CloudImage) -> None:
+    """Ensure the cloud image qcow2 is on disk; emit status."""
+    if image.exists_locally("image"):
+        typer.echo(f"CloudImage {image.name} exists locally: {image.image_fpath}")
+        return
+    logger.info("Attempting to download image: %s", image.image_url)
+    if image.download_image():
+        typer.echo(f"CloudImage downloaded to {image.image_fpath}")
+    else:
+        logger.error("CloudImage download failed")
+
+
+def _init_ensure_checksum_gpg(image: CloudImage) -> None:
+    """Ensure the checksum-file GPG keyring is on disk; emit status."""
+    if image.exists_locally(file_type="checksum_gpg"):
+        typer.echo(
+            f"CloudImage {image.name} checksum GPG file exists locally: "
+            f"{image.checksum_gpg_fpath}"
+        )
+        return
+    if image.download_checksum_gpg():
+        typer.echo(
+            f"CloudImage checksum GPG file downloaded to {image.checksum_gpg_fpath}"
+        )
+    else:
+        logger.error("CloudImage checksum GPG file download failed")
+
+
+def _init_ensure_checksum(image: CloudImage) -> None:
+    """Ensure the checksum manifest is on disk; emit status."""
+    if image.exists_locally(file_type="checksum"):
+        typer.echo(
+            f"CloudImage {image.name} checksum file exists locally: "
+            f"{image.checksum_fpath}"
+        )
+        return
+    logger.info("Attempting to download checksum file URL: %s", image.checksum_url)
+    if image.download_checksum():
+        typer.echo(
+            f"CloudImage {image.name} checksum file downloaded to "
+            f"{image.checksum_fpath}"
+        )
+    else:
+        logger.error("CloudImage %s checksum file download failed", image.name)
+
+
+def _init_verify_gpg(image: CloudImage) -> None:
+    """Run GPG verification on the checksum file; emit OK/BAD status."""
+    if image.gpg_verify_checksum_file():
+        typer.echo(f"CloudImage {image.name} checksum file GPG validation OK")
+    else:
+        logger.error("CloudImage %s checksum file GPG validation BAD", image.name)
+
+
+def _init_verify_checksum(image: CloudImage) -> None:
+    """Hash-verify the image against the manifest; emit OK/BAD status."""
+    if image.checksum_verify_image():
+        typer.echo(f"CloudImage {image.name} checksum verification OK")
+    else:
+        logger.error("CloudImage %s checksum verification BAD", image.name)
+
+
+def _init_process_image(image: CloudImage) -> None:
+    """Download and verify one CloudImage's artefacts in order."""
+    _init_ensure_image(image)
+    if image.checksum_url_gpg:
+        _init_ensure_checksum_gpg(image)
+    if image.checksum_url:
+        _init_ensure_checksum(image)
+    if image.checksum_url_gpg and image.exists_locally(file_type="checksum_gpg"):
+        _init_verify_gpg(image)
+    if image.checksum_url and image.exists_locally(file_type="checksum"):
+        _init_verify_checksum(image)
+
+
 @app.command()
 def init() -> None:
     """Initialize the environment: download and verify cloud images."""
@@ -418,61 +493,7 @@ def init() -> None:
     # a list of CloudImages?
     for image_name, image_config in images.items():
         image = CloudImage(image_name, image_config, environment, config_defaults)
-
-        if image.exists_locally("image"):
-            typer.echo(f"CloudImage {image.name} exists locally: {image.image_fpath}")
-        else:
-            logger.info("Attempting to download image: %s", image.image_url)
-            if image.download_image():
-                typer.echo(f"CloudImage downloaded to {image.image_fpath}")
-            else:
-                logger.error("CloudImage download failed")
-
-        if image.checksum_url_gpg:
-            if image.exists_locally(file_type=("checksum_gpg")):
-                typer.echo(
-                    f"CloudImage {image.name} checksum GPG file exists locally: {image.checksum_gpg_fpath}"
-                )
-            else:
-                if image.download_checksum_gpg():
-                    typer.echo(
-                        f"CloudImage checksum GPG file downloaded to {image.checksum_gpg_fpath}"
-                    )
-                else:
-                    logger.error("CloudImage checksum GPG file download failed")
-
-        if image.checksum_url:
-            if image.exists_locally(file_type="checksum"):
-                typer.echo(
-                    f"CloudImage {image.name} checksum file exists locally: {image.checksum_fpath}"
-                )
-            else:
-                logger.info(
-                    "Attempting to download checksum file URL: %s", image.checksum_url
-                )
-                if image.download_checksum():
-                    typer.echo(
-                        f"CloudImage {image.name} checksum file downloaded to {image.checksum_fpath}"
-                    )
-                else:
-                    logger.error(
-                        "CloudImage %s checksum file download failed", image.name
-                    )
-
-        if image.checksum_url_gpg and image.exists_locally(file_type=("checksum_gpg")):
-            if image.gpg_verify_checksum_file():
-                typer.echo(f"CloudImage {image.name} checksum file GPG validation OK")
-            else:
-                logger.error(
-                    "CloudImage %s checksum file GPG validation BAD", image.name
-                )
-
-        if image.checksum_url and image.exists_locally(file_type=("checksum")):
-            if image.checksum_verify_image():
-                typer.echo(f"CloudImage {image.name} checksum verification OK")
-            else:
-                logger.error("CloudImage %s checksum verification BAD", image.name)
-
+        _init_process_image(image)
         typer.echo()
 
 

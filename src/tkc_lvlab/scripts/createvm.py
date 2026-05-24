@@ -440,6 +440,110 @@ def _fail(message: str) -> typer.Exit:
     return typer.Exit(code=1)
 
 
+def _createvm_resolve_network(
+    network: str, network_type: str, ip4: str | None, uri: str
+) -> tuple[str, str]:
+    """Validate the network selection plus optional static ``--ip4``.
+
+    User-mode networking (SLIRP / passt) bypasses libvirt's managed
+    networks and ignores static IPs — so ``--ip4`` is rejected upfront
+    with a clear message before any state is created. The managed
+    "network" type runs the full introspection: ``--ip4`` is parsed,
+    the libvirt network is looked up, the IP is validated against the
+    network's subnet + DHCP range, and the policy resolver runs to
+    surface bridge-without-defaults errors before write.
+
+    Returns:
+        Tuple of (network_name, network_type_normalized). The
+        network_name is what virt-install will see; the normalized
+        type is the lowercased ``--network-type``.
+
+    Raises:
+        typer.Exit: With code 1 on any user-input or libvirt-network
+            validation failure.
+    """
+    network_type_normalized = network_type.lower()
+    if network_type_normalized in USER_MODE_NETWORK_TYPES:
+        if ip4 is not None:
+            raise _fail(
+                f"--ip4 is not supported with --network-type {network_type_normalized}. "
+                f"User-mode networking (SLIRP/passt) does not honour static IPs."
+            )
+        # network_name is unused at virt-install time for user-mode but the
+        # caller threads it through anyway; keep the value the operator passed.
+        return network, network_type_normalized
+
+    if ip4 is not None:
+        network_name, raw_ip = parse_ip4_option(ip4, network)
+    else:
+        network_name, raw_ip = network, None
+    try:
+        net_info = get_network_info(uri, network_name)
+        if raw_ip is not None:
+            validate_static_ip(raw_ip, net_info)
+        # Resolve policy for completeness — surfaces bridge-without-defaults
+        # errors before any state is written. Returns are unused in this
+        # iteration; cloud-init network-config rendering uses them in a
+        # follow-up commit.
+        resolve_network_settings(net_info)
+    except (LibvirtNetworkError, ValueError) as exc:
+        raise _fail(str(exc)) from exc
+    return network_name, network_type_normalized
+
+
+def _createvm_render_cloud_init(
+    vm_dir: Path,
+    vm_name: str,
+    domain_name: str,
+    entry: CatalogEntry,
+    ssh_keys: list[str],
+    password_hash: str,
+) -> Path:
+    """Render meta-data / user-data / network-config and pack the cidata ISO.
+
+    Writes the three cloud-init source files into ``vm_dir`` and packs
+    them with ``pycdlib`` via :class:`CloudInitIso`. The network-config
+    uses a default-shaped ``eth0`` interface so cloud-init brings the
+    NIC up via DHCP on NAT networks; static-IP rendering is a follow-up
+    once the Step-3 validation feeds into ``NetworkConfig``.
+
+    Returns:
+        The path to the freshly-written ``cidata.iso``.
+
+    Raises:
+        typer.Exit: With code 1 if ``CloudInitIso.write`` reports failure.
+    """
+    oneoff = OneoffCloudInit(
+        libvirt_vm_name=domain_name,
+        hostname=vm_name.split(".")[0],
+        fqdn=vm_name,
+        username=entry.default_username,
+        ssh_public_keys=ssh_keys,
+        password_hash=password_hash,
+    )
+
+    network_config_path = vm_dir / "network-config"
+    user_data_path = vm_dir / "user-data"
+    meta_data_path = vm_dir / "meta-data"
+    cidata_path = vm_dir / "cidata.iso"
+
+    iface = {"name": "eth0"}
+    network_config = NetworkConfig(entry.network_version, [iface], {})
+    network_config_path.write_text(network_config.render_config(), encoding="utf-8")
+    user_data_path.write_text(oneoff.render_user_data(), encoding="utf-8")
+    meta_data_path.write_text(oneoff.render_meta_data(), encoding="utf-8")
+
+    iso = CloudInitIso(
+        meta_data_fpath=str(meta_data_path),
+        user_data_fpath=str(user_data_path),
+        network_config_fpath=str(network_config_path),
+        iso_fpath=str(cidata_path),
+    )
+    if not iso.write():
+        raise _fail("Failed to build cidata.iso.")
+    return cidata_path
+
+
 @app.command()
 def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     vm_name: str = typer.Argument(..., help="Short name for the one-off VM."),
@@ -530,35 +634,9 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     _ensure_image_available(cloud_image)
 
     # Step 3: network + IP validation.
-    network_type_normalized = network_type.lower()
-    if network_type_normalized in USER_MODE_NETWORK_TYPES:
-        # User-mode networking — no libvirt network to introspect, and
-        # static IPs aren't honoured. Reject --ip4 with a clear message
-        # before any state is created.
-        if ip4 is not None:
-            raise _fail(
-                f"--ip4 is not supported with --network-type {network_type_normalized}. "
-                f"User-mode networking (SLIRP/passt) does not honour static IPs."
-            )
-        network_name = (
-            network  # unused at virt-install time; kept for the helper signature
-        )
-    else:
-        if ip4 is not None:
-            network_name, raw_ip = parse_ip4_option(ip4, network)
-        else:
-            network_name, raw_ip = network, None
-        try:
-            net_info = get_network_info(uri, network_name)
-            if raw_ip is not None:
-                validate_static_ip(raw_ip, net_info)
-            # Resolve policy for completeness — surfaces bridge-without-defaults
-            # errors before any state is written. Returns are unused in this
-            # iteration; cloud-init network-config rendering uses them in a
-            # follow-up commit.
-            resolve_network_settings(net_info)
-        except (LibvirtNetworkError, ValueError) as exc:
-            raise _fail(str(exc)) from exc
+    network_name, network_type_normalized = _createvm_resolve_network(
+        network, network_type, ip4, uri
+    )
 
     # Step 4: SSH keys.
     try:
@@ -587,41 +665,17 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
             "delete the directory first."
         ) from exc
 
-    oneoff = OneoffCloudInit(
-        libvirt_vm_name=domain_name,
-        hostname=vm_name.split(".")[0],
-        fqdn=vm_name,
-        username=entry.default_username,
-        ssh_public_keys=ssh_keys,
+    cidata_path = _createvm_render_cloud_init(
+        vm_dir=vm_dir,
+        vm_name=vm_name,
+        domain_name=domain_name,
+        entry=entry,
+        ssh_keys=ssh_keys,
         password_hash=password_hash_value,
     )
 
-    network_config_path = vm_dir / "network-config"
-    user_data_path = vm_dir / "user-data"
-    meta_data_path = vm_dir / "meta-data"
-    cidata_path = vm_dir / "cidata.iso"
-    disk_path = vm_dir / "disk0.qcow2"
-
-    # network-config: use NetworkConfig with a default-shaped interface
-    # so cloud-init brings up eth0 via DHCP on NAT networks; static IPs
-    # via --ip4 are a follow-up (the validation above is already in
-    # place, the rendering wiring lands with createvm hardening).
-    iface = {"name": "eth0"}
-    network_config = NetworkConfig(entry.network_version, [iface], {})
-    network_config_path.write_text(network_config.render_config(), encoding="utf-8")
-    user_data_path.write_text(oneoff.render_user_data(), encoding="utf-8")
-    meta_data_path.write_text(oneoff.render_meta_data(), encoding="utf-8")
-
-    iso = CloudInitIso(
-        meta_data_fpath=str(meta_data_path),
-        user_data_fpath=str(user_data_path),
-        network_config_fpath=str(network_config_path),
-        iso_fpath=str(cidata_path),
-    )
-    if not iso.write():
-        raise _fail("Failed to build cidata.iso.")
-
     # Step 7: create the qcow2 disk.
+    disk_path = vm_dir / "disk0.qcow2"
     _create_disk(
         image_path=Path(cloud_image.image_fpath),
         disk_path=disk_path,

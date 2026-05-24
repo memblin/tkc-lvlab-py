@@ -100,6 +100,51 @@ def _root(
     configure_logging(verbosity=verbose, quiet=quiet)
 
 
+def _resolve_existing_machine(vm_name: str) -> tuple[Machine | None, str | None]:
+    """Resolve a manifest entry into a :class:`Machine` that exists in libvirt.
+
+    Shared boilerplate for the commands that operate on an already-defined
+    domain (``destroy``, ``snapshot list``, ``snapshot delete``, etc.). All
+    failure paths log the same way the inline-bodied commands did:
+
+    - ``parse_config()`` failing → ``logger.error`` then ``typer.Exit(1)``.
+    - ``vm_name`` not in the manifest → ``logger.error`` with the
+      ``MACHINE_NOT_IN_MANIFEST_MSG`` template, returns ``(None, None)``.
+    - Machine resolved but not present at the libvirt URI →
+      ``logger.warning`` with the ``MACHINE_NOT_DEPLOYED_MSG`` template,
+      returns ``(None, None)``.
+
+    Args:
+        vm_name: The ``vm_name`` from the user-supplied CLI argument.
+
+    Returns:
+        ``(machine, libvirt_uri)`` on success. ``(None, None)`` on any
+        non-fatal failure (caller should just return early).
+
+    Raises:
+        typer.Exit: With code 1 if ``parse_config()`` raises ``TypeError``.
+            Matches the long-standing parse-failure behaviour.
+    """
+    try:
+        environment, _, config_defaults, machines = parse_config()
+    except TypeError:
+        logger.error(CONFIG_PARSE_ERROR_MSG)
+        raise typer.Exit(code=1)
+
+    machine_config = get_machine_by_vm_name(machines, vm_name)
+    if not machine_config:
+        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
+        return None, None
+
+    machine = Machine(machine_config, environment, config_defaults)
+    libvirt_uri = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
+    exists, _, _ = machine.exists_in_libvirt(libvirt_uri)
+    if not exists:
+        logger.warning(MACHINE_NOT_DEPLOYED_MSG, machine.vm_name, libvirt_uri)
+        return None, None
+    return machine, libvirt_uri
+
+
 def _resolve_image_config(images: dict, machine_os: str, vm_name: str) -> dict:
     """Look up an image config by ``machine.os``; exit with a clear error if absent.
 
@@ -176,46 +221,20 @@ def destroy(
     ),
 ) -> None:
     """Destroy a manifest VM: force-off, undefine, remove files."""
-    try:
-        environment, _, config_defaults, machines = parse_config()
-    except TypeError:
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    machine, libvirt_uri = _resolve_existing_machine(vm_name)
+    if machine is None:
+        return
 
-    machine_config = get_machine_by_vm_name(machines, vm_name)
-    if machine_config:
+    if not (
+        force or typer.confirm(f"Are you sure you want to destroy {machine.vm_name}?")
+    ):
+        typer.echo(f"Destruction aborted for {machine.vm_name}.")
+        return
 
-        machine = Machine(
-            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-        )
-        libvirt_endpoint = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
-
-        if machine:
-            exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
-            if exists:
-                if force or typer.confirm(
-                    f"Are you sure you want to destroy {machine.vm_name}?"
-                ):
-                    if machine.destroy(libvirt_endpoint):
-                        typer.echo(
-                            f"Destruction appears successful for {machine.vm_name}."
-                        )
-                    else:
-                        logger.error(
-                            "Destruction appears to have failed for %s.",
-                            machine.vm_name,
-                        )
-
-                else:
-                    typer.echo(f"Destruction aborted for {machine.vm_name}.")
-            else:
-                logger.warning(
-                    MACHINE_NOT_DEPLOYED_MSG,
-                    machine.vm_name,
-                    libvirt_endpoint,
-                )
+    if machine.destroy(libvirt_uri):
+        typer.echo(f"Destruction appears successful for {machine.vm_name}.")
     else:
-        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
+        logger.error("Destruction appears to have failed for %s.", machine.vm_name)
 
 
 @app.command()
@@ -552,38 +571,17 @@ def init() -> None:
 @snapshot_app.command("list")
 def snapshot_list(vm_name: str) -> None:
     """List snapshots for a given VM."""
-    try:
-        environment, _, config_defaults, machines = parse_config()
-    except TypeError:
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    machine, libvirt_uri = _resolve_existing_machine(vm_name)
+    if machine is None:
+        return
 
-    machine_config = get_machine_by_vm_name(machines, vm_name)
-    if machine_config:
-
-        machine = Machine(
-            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-        )
-        libvirt_endpoint = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
-
-        if machine:
-            exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
-            if exists:
-                typer.echo(f"Listing snapshots for {machine.vm_name}")
-                snapshots = machine.list_snapshots(libvirt_endpoint)
-                if snapshots:
-                    for snap in snapshots:
-                        typer.echo(f"  - {snap}")
-                else:
-                    typer.echo(f"No snapshots found for {machine.vm_name}")
-            else:
-                logger.warning(
-                    MACHINE_NOT_DEPLOYED_MSG,
-                    machine.vm_name,
-                    libvirt_endpoint,
-                )
+    typer.echo(f"Listing snapshots for {machine.vm_name}")
+    snapshots = machine.list_snapshots(libvirt_uri)
+    if snapshots:
+        for snap in snapshots:
+            typer.echo(f"  - {snap}")
     else:
-        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
+        typer.echo(f"No snapshots found for {machine.vm_name}")
 
 
 @snapshot_app.command("create")
@@ -641,52 +639,27 @@ def snapshot_delete(
     force: bool = typer.Option(False, "--force", help="Skip confirmation prompt."),
 ) -> None:
     """Delete a snapshot for a given VM."""
+    machine, libvirt_uri = _resolve_existing_machine(vm_name)
+    if machine is None:
+        return
+
+    if not (
+        force
+        or typer.confirm(f"Delete snapshot {snapshot_name} from {machine.vm_name}?")
+    ):
+        typer.echo(f"Snapshot deletion aborted for {machine.vm_name}.")
+        return
+
     try:
-        environment, _, config_defaults, machines = parse_config()
-    except TypeError:
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
-
-    machine_config = get_machine_by_vm_name(machines, vm_name)
-    if machine_config:
-
-        machine = Machine(
-            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
+        machine.delete_snapshot(libvirt_uri, snapshot_name)
+        typer.echo(f"Snapshot {snapshot_name} deleted from {machine.vm_name}")
+    except VirshError as e:
+        logger.error(
+            "Failed to delete snapshot %s from %s: %s",
+            snapshot_name,
+            machine.vm_name,
+            e,
         )
-        libvirt_endpoint = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
-
-        if machine:
-            exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
-            if exists:
-                if not (
-                    force
-                    or typer.confirm(
-                        f"Delete snapshot {snapshot_name} from {machine.vm_name}?"
-                    )
-                ):
-                    typer.echo(f"Snapshot deletion aborted for {machine.vm_name}.")
-                    return
-
-                try:
-                    machine.delete_snapshot(libvirt_endpoint, snapshot_name)
-                    typer.echo(
-                        f"Snapshot {snapshot_name} deleted from {machine.vm_name}"
-                    )
-                except VirshError as e:
-                    logger.error(
-                        "Failed to delete snapshot %s from %s: %s",
-                        snapshot_name,
-                        machine.vm_name,
-                        e,
-                    )
-            else:
-                logger.warning(
-                    MACHINE_NOT_DEPLOYED_MSG,
-                    machine.vm_name,
-                    libvirt_endpoint,
-                )
-    else:
-        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
 
 
 @app.command()

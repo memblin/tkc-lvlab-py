@@ -229,3 +229,26 @@ def test_snapshot_delete_virsh_error_is_logged_and_does_not_crash(
         "Failed to delete snapshot ghost from web01" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_snapshot_delete_aborted_when_confirm_returns_false() -> None:
+    """Without --force, a "no" at the typer.confirm prompt aborts cleanly
+    without invoking ``delete_snapshot``."""
+    machine = _make_machine_stub()
+
+    runner = CliRunner()
+    with (
+        mock.patch.object(cli, "parse_config", return_value=_stub_parse_config()),
+        mock.patch.object(
+            cli, "get_machine_by_vm_name", return_value={"vm_name": "web01"}
+        ),
+        mock.patch.object(cli, "Machine", return_value=machine),
+    ):
+        # Pipe "n" as the confirm input; no --force flag.
+        result = runner.invoke(
+            snapshot, ["delete", "web01", "pre-upgrade"], input="n\n"
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "deletion aborted for web01" in result.output
+    machine.delete_snapshot.assert_not_called()

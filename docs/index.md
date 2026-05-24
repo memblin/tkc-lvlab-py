@@ -33,12 +33,19 @@ Auto-generated from Google-style docstrings + type hints via
 
 - [API Reference](api/index.md)
 
-## Status
+## Where the rest of the docs live
 
-This site is a work in progress. The legacy user-facing docs
-(`Walkthrough.md`, `Design.md`, `Why.md`, etc.) live in the repo's
-`docs-extra/` directory — a sibling of this `docs/` source root that the
-doc-builder doesn't scan — and remain authoritative there until the
-legacy-docs conversion phase lands. The API reference here covers only
-modules whose docstrings have been migrated to the Google + type-hint
-convention; everything else stays in `docs-extra/` for now.
+This site hosts the API reference and short user-facing notes.
+
+Contributor and maintainer reference (CONTRIBUTING, release procedure,
+host-validation matrix, design notes) intentionally lives in the
+repo's [`docs-extra/`](https://github.com/memblin/tkc-lvlab-py/tree/main/docs-extra)
+directory — a sibling of this `docs/` source root that the
+doc-builder doesn't scan. Those files are written for reading on
+GitHub, where the surrounding repo context (PR templates, source
+links, issue cross-references) is right next to them.
+
+A future doc-polish effort will fold the user-facing pieces
+(`Walkthrough.md`, `Why.md`, `Libvirt.md`) into the rendered site
+so end users see a single nav; project/contributor docs will stay
+in `docs-extra/` by design.

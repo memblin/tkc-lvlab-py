@@ -26,6 +26,32 @@ jobs:
       uses: actions/checkout@v6
       with:
         ref: ${{ github.ref_name }}
+    # Fail-early gate: the release-notes file for this tag must exist,
+    # must be non-empty, and must not still contain the template
+    # sentinel. Runs before uv build so a missing/unfinished notes
+    # file aborts in seconds, not after a wheel build.
+    # See .github/release-notes/README.md for the recovery path when
+    # this step fails (delete tag, add notes commit, re-tag).
+    - name: Verify release notes file is present and ready
+      env:
+        TAG: ${{ github.ref_name }}
+      run: |
+        notes_file=".github/release-notes/${TAG}.md"
+        if [ ! -f "${notes_file}" ]; then
+          echo "::error::Release notes file missing: ${notes_file}"
+          echo "Create it from .github/release-notes/_template.md, commit on main, then re-tag at the new HEAD."
+          exit 1
+        fi
+        if [ ! -s "${notes_file}" ]; then
+          echo "::error::Release notes file is empty: ${notes_file}"
+          exit 1
+        fi
+        if grep -q "TEMPLATE: replace this file" "${notes_file}"; then
+          echo "::error::Release notes file still contains the template sentinel: ${notes_file}"
+          echo "Replace the template content before re-tagging."
+          exit 1
+        fi
+        echo "Release notes file OK: ${notes_file}"
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -33,10 +59,13 @@ jobs:
     - name: Build tkc_lvlab
       run: uv build
     - name: Create release and upload artifacts
-      run: |
-        gh release create ${{ github.ref_name }} --generate-notes ./dist/tkc_lvlab-${{ github.ref_name }}-py3-none-any.whl
       env:
         GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        gh release create "${TAG}" \
+          --notes-file ".github/release-notes/${TAG}.md" \
+          "./dist/tkc_lvlab-${TAG}-py3-none-any.whl"
 
   manual-build-release:
     runs-on: ubuntu-latest
@@ -48,6 +77,26 @@ jobs:
       uses: actions/checkout@v6
       with:
         ref: ${{ inputs.build_tag }}
+    - name: Verify release notes file is present and ready
+      env:
+        TAG: ${{ inputs.build_tag }}
+      run: |
+        notes_file=".github/release-notes/${TAG}.md"
+        if [ ! -f "${notes_file}" ]; then
+          echo "::error::Release notes file missing: ${notes_file}"
+          echo "Create it from .github/release-notes/_template.md, commit on main, then re-run with a ref that includes it."
+          exit 1
+        fi
+        if [ ! -s "${notes_file}" ]; then
+          echo "::error::Release notes file is empty: ${notes_file}"
+          exit 1
+        fi
+        if grep -q "TEMPLATE: replace this file" "${notes_file}"; then
+          echo "::error::Release notes file still contains the template sentinel: ${notes_file}"
+          echo "Replace the template content before re-triggering."
+          exit 1
+        fi
+        echo "Release notes file OK: ${notes_file}"
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -55,7 +104,10 @@ jobs:
     - name: Build tkc_lvlab
       run: uv build
     - name: Create release and upload artifacts
-      run: |
-        gh release create ${{ inputs.build_tag }} --generate-notes ./dist/tkc_lvlab-${{ inputs.build_tag }}-py3-none-any.whl
       env:
         GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.build_tag }}
+      run: |
+        gh release create "${TAG}" \
+          --notes-file ".github/release-notes/${TAG}.md" \
+          "./dist/tkc_lvlab-${TAG}-py3-none-any.whl"

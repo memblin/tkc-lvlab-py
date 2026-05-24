@@ -72,6 +72,12 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - User Guide:
+      - Why lvlab: why.md
+      - Walkthrough: walkthrough.md
+      - Example manifest: example-manifest.md
+      - Cloud-init examples: cloud-init-examples.md
+      - Libvirt notes: libvirt-notes.md
   - API Reference:
       - Overview: api/index.md
       - Logging: api/logging.md
@@ -93,11 +99,11 @@ nav:
           - createvm: api/scripts/createvm.md
           - destroyvm: api/scripts/destroyvm.md
 
-# Docs that don't render in the published site live at `docs-extra/`
-# (sibling to this `docs/` source root) so the doc-builder's docs_dir
-# scan never sees them. As legacy user-facing docs (Walkthrough.md
-# etc.) get modernized for publication, `git mv docs-extra/X.md
-# docs/X.md` and add the entry to `nav` above. Internal planning
-# artifacts (lvscripts-survey.md etc.) stay in `docs-extra/`
-# permanently — they're project-internal references, not site
-# content.
+# `docs-extra/` (sibling to this `docs/` source root) holds
+# contributor/maintainer reference that doesn't render in the
+# published site: CONTRIBUTING.md, Design.md, releases.md,
+# host-validation.md, lvscripts-survey.md. Those are GitHub-rendered
+# and stay there by design — they assume surrounding repo context
+# (PR templates, source links, issue cross-references). The user-
+# facing pages were folded into the User Guide nav above as of the
+# 0.4.0 doc-polish pass.

@@ -22,9 +22,17 @@ workstation — not for production VM management.
 uv tool install tkc-lvlab
 ```
 
-## Quick start
+## User guide
 
-See the project README on GitHub for setup and a worked example.
+- [Why lvlab](why.md) — the rationale and the workflow it replaces.
+- [Walkthrough](walkthrough.md) — what each `lvlab` subcommand
+    actually does to your hypervisor.
+- [Example manifest](example-manifest.md) — a complete `Lvlab.yml`
+    covering every supported host OS, with annotations.
+- [Cloud-init examples](cloud-init-examples.md) — the three files
+    `lvlab` renders per machine, in minimum-viable form.
+- [Libvirt notes](libvirt-notes.md) — short hypervisor-side
+    reference for `virt-install` flags and `qemu-guest-agent` setup.
 
 ## API reference
 
@@ -35,17 +43,11 @@ Auto-generated from Google-style docstrings + type hints via
 
 ## Where the rest of the docs live
 
-This site hosts the API reference and short user-facing notes.
-
-Contributor and maintainer reference (CONTRIBUTING, release procedure,
-host-validation matrix, design notes) intentionally lives in the
-repo's [`docs-extra/`](https://github.com/memblin/tkc-lvlab-py/tree/main/docs-extra)
-directory — a sibling of this `docs/` source root that the
+Contributor and maintainer reference — CONTRIBUTING, release
+procedure, host-validation matrix, internal design notes — lives in
+the repo's
+[`docs-extra/`](https://github.com/memblin/tkc-lvlab-py/tree/main/docs-extra)
+directory, a sibling of this `docs/` source root that the
 doc-builder doesn't scan. Those files are written for reading on
 GitHub, where the surrounding repo context (PR templates, source
 links, issue cross-references) is right next to them.
-
-A future doc-polish effort will fold the user-facing pieces
-(`Walkthrough.md`, `Why.md`, `Libvirt.md`) into the rendered site
-so end users see a single nav; project/contributor docs will stay
-in `docs-extra/` by design.

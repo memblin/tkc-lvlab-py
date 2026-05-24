@@ -259,6 +259,83 @@ def down(vm_name: str) -> None:
         logger.error("Machine %s not found in manifest.", vm_name)
 
 
+def _hosts_classify_entries(
+    candidates: list[dict],
+    existing_ips: set[str],
+    existing_names: set[str],
+) -> tuple[list[dict], list[str]]:
+    """Split candidate host entries into appendable + skip-message lists."""
+    to_append: list[dict] = []
+    skips: list[str] = []
+    for entry in candidates:
+        reasons: list[str] = []
+        if entry["ip4"] in existing_ips:
+            reasons.append(f"IP {entry['ip4']} already present")
+        if entry["hostname"] and entry["hostname"].lower() in existing_names:
+            reasons.append(f"hostname {entry['hostname']} already present")
+        if entry["fqdn"] and entry["fqdn"].lower() in existing_names:
+            reasons.append(f"fqdn {entry['fqdn']} already present")
+        if reasons:
+            skips.append(
+                f"Skipping {entry['ip4']} {entry['fqdn']} {entry['hostname']}: "
+                + "; ".join(reasons)
+            )
+        else:
+            to_append.append(entry)
+    return to_append, skips
+
+
+def _hosts_etc_writable(etc_hosts: str) -> bool:
+    """True iff the process can write to (or create) ``etc_hosts``."""
+    if os.access(etc_hosts, os.W_OK):
+        return True
+    parent = os.path.dirname(etc_hosts) or "."
+    return not os.path.exists(etc_hosts) and os.access(parent, os.W_OK)
+
+
+def _hosts_write_entries(
+    etc_hosts: str, environment: dict, to_append: list[dict]
+) -> None:
+    """Append a labelled header + entries to ``etc_hosts``; echo each line."""
+    logger.info("Appending hosts file snippet to %s", etc_hosts)
+    header = (
+        "\n# Libvirt Labs /etc/hosts snippet\n"
+        f"# Environment: {environment.get('name', '')}\n"
+    )
+    try:
+        with open(etc_hosts, "a", encoding="utf-8") as hosts_file:
+            hosts_file.write(header)
+            for entry in to_append:
+                line = f"{entry['ip4']} {entry['fqdn']} {entry['hostname']}\n"
+                hosts_file.write(line)
+                typer.echo(f"Appended: {line.rstrip()}")
+    except OSError as e:
+        logger.error("Unable to write %s: %s", etc_hosts, e)
+        raise typer.Exit(code=1)
+
+
+def _hosts_run_append(environment: dict, config_defaults: dict, machines: list) -> None:
+    """Compute, report, and apply the ``--append`` branch of ``lvlab hosts``."""
+    etc_hosts = "/etc/hosts"
+    try:
+        existing_ips, existing_names = parse_hosts_file(etc_hosts)
+    except OSError as e:
+        logger.error("Unable to read %s: %s", etc_hosts, e)
+        raise typer.Exit(code=1)
+
+    candidates = generate_hosts_entries(config_defaults, machines)
+    to_append, skips = _hosts_classify_entries(candidates, existing_ips, existing_names)
+    for skip_msg in skips:
+        typer.echo(skip_msg)
+
+    if not to_append:
+        typer.echo("No new entries to append to /etc/hosts.")
+    elif _hosts_etc_writable(etc_hosts):
+        _hosts_write_entries(etc_hosts, environment, to_append)
+    else:
+        logger.error("No write access available for /etc/hosts")
+
+
 @app.command()
 def hosts(
     append: bool = typer.Option(
@@ -283,61 +360,15 @@ def hosts(
         logger.error(CONFIG_PARSE_ERROR_MSG)
         sys.exit()
 
-    hosts_snippet = generate_hosts(environment, config_defaults, machines)
-
     if append:
-        etc_hosts = "/etc/hosts"
-        try:
-            existing_ips, existing_names = parse_hosts_file(etc_hosts)
-        except OSError as e:
-            logger.error("Unable to read %s: %s", etc_hosts, e)
-            raise typer.Exit(code=1)
+        _hosts_run_append(environment, config_defaults, machines)
 
-        candidates = generate_hosts_entries(config_defaults, machines)
-        to_append = []
-        for entry in candidates:
-            conflict_reasons = []
-            if entry["ip4"] in existing_ips:
-                conflict_reasons.append(f"IP {entry['ip4']} already present")
-            if entry["hostname"] and entry["hostname"].lower() in existing_names:
-                conflict_reasons.append(f"hostname {entry['hostname']} already present")
-            if entry["fqdn"] and entry["fqdn"].lower() in existing_names:
-                conflict_reasons.append(f"fqdn {entry['fqdn']} already present")
-
-            if conflict_reasons:
-                typer.echo(
-                    f"Skipping {entry['ip4']} {entry['fqdn']} {entry['hostname']}: "
-                    + "; ".join(conflict_reasons)
-                )
-            else:
-                to_append.append(entry)
-
-        if not to_append:
-            typer.echo("No new entries to append to /etc/hosts.")
-        elif os.access(etc_hosts, os.W_OK) or (
-            not os.path.exists(etc_hosts)
-            and os.access(os.path.dirname(etc_hosts) or ".", os.W_OK)
-        ):
-            logger.info("Appending hosts file snippet to %s", etc_hosts)
-            header = f"\n# Libvirt Labs /etc/hosts snippet\n# Environment: {environment.get('name', '')}\n"
-            try:
-                with open(etc_hosts, "a", encoding="utf-8") as hosts_file:
-                    hosts_file.write(header)
-                    for entry in to_append:
-                        line = f"{entry['ip4']} {entry['fqdn']} {entry['hostname']}\n"
-                        hosts_file.write(line)
-                        typer.echo(f"Appended: {line.rstrip()}")
-            except OSError as e:
-                logger.error("Unable to write %s: %s", etc_hosts, e)
-                raise typer.Exit(code=1)
-        else:
-            logger.error("No write access available for /etc/hosts")
-
-    if heredoc:
-        hosts_snippet = generate_hosts(
-            environment, config_defaults, machines, heredoc="/etc/hosts"
-        )
-
+    hosts_snippet = generate_hosts(
+        environment,
+        config_defaults,
+        machines,
+        heredoc="/etc/hosts" if heredoc else None,
+    )
     typer.echo(f"{hosts_snippet}")
 
 

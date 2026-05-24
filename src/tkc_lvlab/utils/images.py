@@ -38,6 +38,8 @@ from .._logging import get_logger
 
 logger = get_logger(__name__)
 
+VERIFIED_SUFFIX = ".verified"
+
 
 class CloudImage:  # pylint: disable=too-many-instance-attributes
     """A cloud image definition resolved to on-disk paths and remote URLs.
@@ -283,7 +285,7 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
                 verified = gpg.decrypt(signed_file.read())
 
             if verified.valid:
-                verified_checksum_fpath = self.checksum_fpath + ".verified"
+                verified_checksum_fpath = self.checksum_fpath + VERIFIED_SUFFIX
                 with open(verified_checksum_fpath, "wb") as verified_file:
                     verified_file.write(verified.data)
                     return True
@@ -311,11 +313,12 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         """
         checksums: dict[str, str] = {}
 
-        fedora_pattern = re.compile(r"^SHA\d+\s\((.+)\)\s=\s(.+)$")
+        # Tightened from .+ to [^)]+/\S+ to remove ReDoS backtracking (python:S5852).
+        fedora_pattern = re.compile(r"^SHA\d+ \(([^)]+)\) = (\S+)$")
         debian_pattern = re.compile(r"(\w+)\s+(\S+)")
 
-        if os.path.exists(checksum_fpath + ".verified"):
-            checksum_fpath = checksum_fpath + ".verified"
+        if os.path.exists(checksum_fpath + VERIFIED_SUFFIX):
+            checksum_fpath = checksum_fpath + VERIFIED_SUFFIX
 
         with open(checksum_fpath, "r", encoding="utf-8") as checksum_file:
             lines = checksum_file.readlines()
@@ -365,8 +368,8 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
             raise SystemExit(f"Unsupported checksum algorithm {self.checksum_type}")
 
         checksum_fpath = self.checksum_fpath
-        if os.path.isfile(self.checksum_fpath + ".verified"):
-            checksum_fpath += ".verified"
+        if os.path.isfile(self.checksum_fpath + VERIFIED_SUFFIX):
+            checksum_fpath += VERIFIED_SUFFIX
 
         if os.path.isfile(checksum_fpath) and os.path.isfile(self.image_fpath):
             checksums = self._parse_checksum_file(checksum_fpath)

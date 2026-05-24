@@ -92,6 +92,43 @@ def _root(
     configure_logging(verbosity=verbose, quiet=quiet)
 
 
+def _resolve_image_config(images: dict, machine_os: str, vm_name: str) -> dict:
+    """Look up an image config by ``machine.os``; exit with a clear error if absent.
+
+    Replaces a ``None`` from ``images.get(machine.os)`` — which used to
+    crash later inside ``CloudImage.__init__`` with an opaque
+    ``AttributeError: 'NoneType' object has no attribute 'get'`` — with
+    an operator-readable message naming the missing key and listing the
+    image keys actually defined in the manifest.
+
+    Args:
+        images: The ``images`` dict from ``parse_config()``.
+        machine_os: The ``os`` value resolved for this machine
+            (merging machine entry + ``config_defaults``).
+        vm_name: The machine's ``vm_name``, used in the error message
+            so the operator knows which manifest entry is wrong.
+
+    Returns:
+        The image config dict from ``images[machine_os]``.
+
+    Raises:
+        typer.Exit: With code 1 if ``machine_os`` is not a key in
+            ``images``.
+    """
+    image_config = images.get(machine_os)
+    if image_config is None:
+        available = ", ".join(sorted(images.keys())) or "(no images defined)"
+        logger.error(
+            "Machine %r has os=%r, which is not defined in the manifest's "
+            "images section. Available image keys: %s",
+            vm_name,
+            machine_os,
+            available,
+        )
+        raise typer.Exit(code=1)
+    return image_config
+
+
 @app.command()
 def capabilities() -> None:
     """Print the raw hypervisor capabilities XML for qemu:///session."""
@@ -117,9 +154,8 @@ def cloudinit(vm_name: str) -> None:
     )
 
     if machine:
-        cloud_image = CloudImage(
-            machine.os, images.get(machine.os), environment, config_defaults
-        )
+        image_config = _resolve_image_config(images, machine.os, machine.vm_name)
+        cloud_image = CloudImage(machine.os, image_config, environment, config_defaults)
         # Render and write cloud-init config
         _, _, _ = machine.cloud_init(cloud_image, config_defaults)
 
@@ -663,8 +699,9 @@ def up(vm_name: str) -> None:
         else:
             typer.echo(f"Creating virtual machine: {machine.vm_name}")
 
+            image_config = _resolve_image_config(images, machine.os, machine.vm_name)
             cloud_image = CloudImage(
-                machine.os, images.get(machine.os), environment, config_defaults
+                machine.os, image_config, environment, config_defaults
             )
 
             machine.create_vdisks(environment, config_defaults, cloud_image)

@@ -77,6 +77,39 @@ def test_up_exits_nonzero_when_deploy_fails(tmp_path) -> None:
     fake_machine.deploy.assert_called_once()
 
 
+def test_up_exits_with_clear_error_when_machine_os_missing_from_images(
+    tmp_path,
+) -> None:
+    """``lvlab up`` must exit non-zero with a readable error when the
+    machine's ``os`` value has no matching key in the manifest's
+    ``images`` dict.
+
+    Regression for the AttributeError crash a smoke test surfaced when
+    a manifest entry had ``os: debian13.local`` (typo / wrong field) —
+    ``images.get("debian13.local")`` returned None, and CloudImage.__init__
+    crashed on ``config.get(...)`` with an opaque NoneType traceback.
+    The operator-readable message names the missing key and lists what
+    image keys are actually defined.
+    """
+    runner = CliRunner()
+    # Machine.os intentionally not in SAMPLE_IMAGES.
+    fake_machine = _make_fake_machine(deploy_returns=True, tmp_path=tmp_path)
+    fake_machine.os = "debian13.local"
+
+    with (
+        _patched_config(),
+        mock.patch.object(cli, "Machine", return_value=fake_machine),
+        # CloudImage must NOT be called — the error gates before it.
+        mock.patch.object(cli, "CloudImage") as cloud_image_mock,
+    ):
+        result = runner.invoke(app, ["up", "alpha"])
+
+    assert result.exit_code != 0
+    cloud_image_mock.assert_not_called()
+    # Deploy must also not run.
+    fake_machine.deploy.assert_not_called()
+
+
 def test_up_exits_zero_when_deploy_succeeds(tmp_path) -> None:
     """Happy-path sanity check: deploy True -> exit 0.
 

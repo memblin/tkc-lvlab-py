@@ -81,7 +81,7 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 
 `src/tkc_lvlab/templates/` contains the Jinja2 templates loaded via `PackageLoader("tkc_lvlab")`. `uv_build` auto-includes every file under the module root (`src/tkc_lvlab/`, set via `[tool.uv.build-backend] module-root = "src"` in `pyproject.toml`), so new templates ship automatically — but verify with `unzip -l dist/*.whl | grep templates` after a `uv build` if you add one.
 
-- `network-config.v1.j2` and `network-config.v2.j2` — selected by `image.network_version` (1 = ENI-style, 2 = netplan-style). Each image entry in the manifest pins which version cloud-init should emit.
+- `network-config.v1.j2` and `network-config.v2.j2` — selected by `image.network_version` (1 = ENI-style, 2 = netplan-style). Each image entry in the manifest pins which version cloud-init should emit. The v2 template uses netplan `match.driver: virtio_net` + `set-name: {{ iface.name }}` so the manifest's `iface.name` is operator-chosen (renames the matched NIC) rather than a kernel device name the operator has to guess per distro. Multi-NIC manifests are a documented limitation — netplan `set-name` only works reliably when match resolves to a single device; multi-NIC needs per-interface MAC matching, not yet supported.
 - `hosts.j2` renders both stdout-friendly output and a `cat <<EOF` heredoc form for runcmd injection.
 
 ### Host /etc/hosts handling inside the guest

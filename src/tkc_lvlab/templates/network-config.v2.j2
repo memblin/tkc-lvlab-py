@@ -1,9 +1,30 @@
 ---
+# cloud-init network-config v2 (netplan).
+#
+# The ``match.driver: virtio_net`` block decouples the manifest's
+# ``iface.name`` from the kernel-assigned device name. Every NIC
+# lvlab deploys uses ``model=virtio`` (see _virt_install_network_arg
+# in src/tkc_lvlab/utils/libvirt.py), so virtio_net matches
+# regardless of whether the cloud image keeps systemd predictable
+# naming on (debian/fedora → enp1s0) or disables it (almalinux10's
+# cloud cmdline → eth0).
+#
+# ``set-name`` renames the matched NIC to whatever ``iface.name`` is
+# in the manifest, so the in-guest device name is operator-chosen
+# rather than distro-chosen.
+#
+# Multi-NIC caveat: netplan ``set-name`` works reliably only when
+# the match resolves to a single device. For >1 virtio NIC, the
+# manifest needs a per-interface MAC match instead of driver match —
+# not supported by this template today.
 network:
   version: {{ config.network_version.value }}
   ethernets:
     {%- for iface in config.interfaces %}
     {{ iface.name }}:
+      match:
+        driver: virtio_net
+      set-name: {{ iface.name }}
       {%- if iface.ip4 %}
       dhcp4: false
       dhcp6: false

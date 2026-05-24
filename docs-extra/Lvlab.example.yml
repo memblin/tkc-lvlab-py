@@ -1,18 +1,15 @@
 ---
 # Example Lvlab.yml manifest covering each supported host OS.
 #
-# Interface naming caveat (until the netplan match-by-driver refactor
-# lands — see the long-term note at the bottom of this file):
+# Every VM's NIC ends up named ``eth0`` in the guest regardless of
+# the cloud image's default naming convention. The v2 network-config
+# template uses netplan's match-by-driver (``virtio_net``) plus
+# ``set-name`` to decouple the manifest's ``iface.name`` from the
+# kernel-assigned device name — see
+# ``src/tkc_lvlab/templates/network-config.v2.j2``.
 #
-#   debian12 / debian13 / fedora44 → enp1s0  (predictable naming on)
-#   almalinux10                    → eth0    (cloud image sets
-#                                             net.ifnames=0
-#                                             biosdevname=0 on the
-#                                             kernel cmdline)
-#
-# Pick the name that matches the OS or the VM will not get a network
-# address — cloud-init renders a config for an interface that doesn't
-# exist by that name.
+# If you want a different in-guest name (``mgmt0``, ``primary``,
+# etc.), set ``iface.name`` to it; the rename follows.
 
 environment:
   - name: libvirt-salt-dev
@@ -50,7 +47,6 @@ environment:
         shell: /bin/bash
 
     machines:
-      # Debian 12 — predictable naming on; NIC is enp1s0.
       - vm_name: salt.local
         hostname: salt
         # Default fqdn is {hostname}.{domain}. Override only when
@@ -61,7 +57,7 @@ environment:
           - name: primary
             size: 30G
         interfaces:
-          - name: enp1s0
+          - name: eth0
             ip4: 192.168.122.12/24
             ip4gw: 192.168.122.1
         # shared_directories defined here extend the config_defaults
@@ -73,27 +69,21 @@ environment:
           - source: ~/salt
             mount_tag: saltsrc
 
-      # Debian 13 — predictable naming on; NIC is enp1s0.
       - vm_name: vault.local
         hostname: vault
         os: debian13
         interfaces:
-          - name: enp1s0
+          - name: eth0
             ip4: 192.168.122.16/24
             ip4gw: 192.168.122.1
 
-      # Debian 13 with DHCP only — omit ip4 / ip4gw.
+      # DHCP-only — omit ip4 / ip4gw.
       - vm_name: dhcp-config.local
         hostname: dhcp-config
         os: debian13
         interfaces:
-          - name: enp1s0
+          - name: eth0
 
-      # AlmaLinux 10 — cloud image disables predictable naming via
-      # net.ifnames=0 biosdevname=0 kernel cmdline, so NIC is eth0
-      # (NOT enp1s0). The same gotcha applies to other RHEL-family
-      # images (Rocky, RHEL itself) — verify with `ip -br link` on a
-      # freshly booted instance if you add another RHEL variant.
       - vm_name: alma.local
         hostname: alma
         os: almalinux10
@@ -102,12 +92,11 @@ environment:
             ip4: 192.168.122.20/24
             ip4gw: 192.168.122.1
 
-      # Fedora 44 — predictable naming on; NIC is enp1s0.
       - vm_name: fed.local
         hostname: fed
         os: fedora44
         interfaces:
-          - name: enp1s0
+          - name: eth0
             ip4: 192.168.122.30/24
             ip4gw: 192.168.122.1
 
@@ -118,7 +107,7 @@ environment:
         hostname: rootless
         os: debian13
         interfaces:
-          - name: enp1s0
+          - name: eth0
             network_type: user
 
 images:
@@ -160,10 +149,3 @@ images:
   debian12-vault:
     image_url: http://192.168.122.1:8080/cloud_images/debian-12-vault-20250121-0716.qcow2
     network_version: 2
-
-# Long-term: the per-OS interface name gotcha at the top of this file
-# is tracked for removal. A future release will switch the network-config
-# template to netplan match-by-driver (virtio_net) with `set-name: eth0`,
-# so every VM exposes a stable `eth0` regardless of the guest OS's
-# default naming. After that change, every machine entry above will use
-# `name: eth0` and the per-OS callout becomes unnecessary.

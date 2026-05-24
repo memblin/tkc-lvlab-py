@@ -1,4 +1,19 @@
 ---
+# Example Lvlab.yml manifest covering each supported host OS.
+#
+# Interface naming caveat (until the netplan match-by-driver refactor
+# lands — see the long-term note at the bottom of this file):
+#
+#   debian12 / debian13 / fedora44 → enp1s0  (predictable naming on)
+#   almalinux10                    → eth0    (cloud image sets
+#                                             net.ifnames=0
+#                                             biosdevname=0 on the
+#                                             kernel cmdline)
+#
+# Pick the name that matches the OS or the VM will not get a network
+# address — cloud-init renders a config for an interface that doesn't
+# exist by that name.
+
 environment:
   - name: libvirt-salt-dev
     libvirt_uri: qemu:///system
@@ -35,9 +50,11 @@ environment:
         shell: /bin/bash
 
     machines:
+      # Debian 12 — predictable naming on; NIC is enp1s0.
       - vm_name: salt.local
         hostname: salt
-        # The default fqdn is {hostname}.{domain} so the machine.fqdn value is not needed unless you need a more specific fqdn.
+        # Default fqdn is {hostname}.{domain}. Override only when
+        # something other than that pattern is needed.
         fqdn: salt.some.specific.domain.local
         os: debian12
         disks:
@@ -47,46 +64,61 @@ environment:
           - name: enp1s0
             ip4: 192.168.122.12/24
             ip4gw: 192.168.122.1
-        # shared_directories defined here extend the config_defaults list.
-        # An entry with the same mount_tag as a default overrides that default;
-        # other defaults still apply. Below, salt.local mounts both `gitrepos`
-        # (from defaults) and an additional `saltsrc` mount.
+        # shared_directories defined here extend the config_defaults
+        # list. An entry with the same mount_tag as a default overrides
+        # that default; other defaults still apply. Below, salt.local
+        # mounts both `gitrepos` (from defaults) and an additional
+        # `saltsrc` mount.
         shared_directories:
           - source: ~/salt
             mount_tag: saltsrc
 
+      # Debian 13 — predictable naming on; NIC is enp1s0.
       - vm_name: vault.local
         hostname: vault
         os: debian13
         interfaces:
-          - name: eth0
+          - name: enp1s0
             ip4: 192.168.122.16/24
             ip4gw: 192.168.122.1
 
-      - vm_name: ghar.local
-        hostname: ghar
-        os: debian13
-        interfaces:
-          - name: eth0
-            ip4: 192.168.122.17/24
-            ip4gw: 192.168.122.1
-
+      # Debian 13 with DHCP only — omit ip4 / ip4gw.
       - vm_name: dhcp-config.local
         hostname: dhcp-config
         os: debian13
         interfaces:
-          - name: eth0
+          - name: enp1s0
 
-      # Example of a VM that uses user-mode networking. Suitable for
-      # qemu:///session deployments. Static IP fields are intentionally
-      # omitted because SLIRP/passt ignore them; lvlab will refuse the
-      # manifest at parse time if both 'network_type: user' and an
-      # 'ip4' are set on the same interface.
+      # AlmaLinux 10 — cloud image disables predictable naming via
+      # net.ifnames=0 biosdevname=0 kernel cmdline, so NIC is eth0
+      # (NOT enp1s0). The same gotcha applies to other RHEL-family
+      # images (Rocky, RHEL itself) — verify with `ip -br link` on a
+      # freshly booted instance if you add another RHEL variant.
+      - vm_name: alma.local
+        hostname: alma
+        os: almalinux10
+        interfaces:
+          - name: eth0
+            ip4: 192.168.122.20/24
+            ip4gw: 192.168.122.1
+
+      # Fedora 44 — predictable naming on; NIC is enp1s0.
+      - vm_name: fed.local
+        hostname: fed
+        os: fedora44
+        interfaces:
+          - name: enp1s0
+            ip4: 192.168.122.30/24
+            ip4gw: 192.168.122.1
+
+      # User-mode networking for qemu:///session. SLIRP/passt ignore
+      # static IPs; lvlab will refuse the manifest at parse time if
+      # both 'network_type: user' and an 'ip4' are set together.
       - vm_name: rootless.local
         hostname: rootless
         os: debian13
         interfaces:
-          - name: eth0
+          - name: enp1s0
             network_type: user
 
 images:
@@ -95,29 +127,43 @@ images:
     checksum_url: https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
     checksum_type: sha512
     network_version: 2
+
   debian12:
     image_url: https://cloud.debian.org/images/cloud/bookworm/20260518-2482/debian-12-generic-amd64-20260518-2482.qcow2
     checksum_url: https://cloud.debian.org/images/cloud/bookworm/20260518-2482/SHA512SUMS
     checksum_type: sha512
     network_version: 2
-  debian11:
-    image_url: https://cloud.debian.org/images/cloud/bullseye/20260518-2482/debian-11-generic-amd64-20260518-2482.qcow2
-    checksum_url: https://cloud.debian.org/images/cloud/bullseye/20260518-2482/SHA512SUMS
-    checksum_type: sha512
-    network_version: 1
+
+  almalinux10:
+    image_url: https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2
+    checksum_url: https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/CHECKSUM
+    checksum_type: sha256
+    network_version: 2
+
   fedora44:
     image_url: https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
     checksum_url: https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-44-1.7-x86_64-CHECKSUM
     checksum_url_gpg: https://fedoraproject.org/fedora.gpg
     checksum_type: sha256
     network_version: 2
-  # Custom images should follow a specific naming standard of $(--os-variant value)-$(ImageName)
-  # The ImageName can be free-form but the start of the name must align with a valid --os-variant
-  # value or the virt-install command will fail. See examples below, two debian12 based images
-  # with varied software installed.
+
+  # Custom images should follow a specific naming standard of
+  # $(--os-variant value)-$(ImageName). The ImageName can be free-form
+  # but the start of the name must align with a valid --os-variant
+  # value or virt-install will fail. The examples below point at a
+  # user-specific intranet image server (192.168.122.1:8080); replace
+  # with your own URLs if you keep custom images.
   debian12-salt:
     image_url: http://192.168.122.1:8080/cloud_images/debian-12-salt-20250121-0215.qcow2
     network_version: 2
+
   debian12-vault:
     image_url: http://192.168.122.1:8080/cloud_images/debian-12-vault-20250121-0716.qcow2
     network_version: 2
+
+# Long-term: the per-OS interface name gotcha at the top of this file
+# is tracked for removal. A future release will switch the network-config
+# template to netplan match-by-driver (virtio_net) with `set-name: eth0`,
+# so every VM exposes a stable `eth0` regardless of the guest OS's
+# default naming. After that change, every machine entry above will use
+# `name: eth0` and the per-OS callout becomes unnecessary.

@@ -73,15 +73,37 @@ case "${family}" in
     debian)
         info "installing host packages via apt"
         sudo apt-get update
+        # python3-gi is listed explicitly even though virtinst pulls
+        # it as a dependency: on a Debian 13 VM we hit a state where
+        # virt-install couldn't ``import gi`` because python3-gi was
+        # somehow missing. Belt-and-suspenders for the matrix host
+        # whose virt-install uses ``#!/usr/bin/env python3``.
         sudo apt-get install -y \
             libvirt-daemon-system \
             libvirt-clients \
             qemu-system-x86 \
             qemu-utils \
             virtinst \
+            python3-gi \
             git \
             curl \
             ca-certificates
+        # Debian packaging leaves /var/lib/libvirt/images/ as
+        # root:root drwx--x--x — libvirt-group members can traverse
+        # but can't write subdirs there. RHEL/Fedora ship it
+        # libvirt-group writable by default, so the test-storage
+        # mkdir below would fail on Debian without this fix.
+        images_perms="$(stat -c '%G %a' /var/lib/libvirt/images 2>/dev/null || true)"
+        case "${images_perms}" in
+            "libvirt 77"[05])
+                info "/var/lib/libvirt/images already libvirt-group writable (${images_perms})"
+                ;;
+            *)
+                info "loosening /var/lib/libvirt/images to libvirt:libvirt 0775"
+                sudo chgrp libvirt /var/lib/libvirt/images
+                sudo chmod g+rwx /var/lib/libvirt/images
+                ;;
+        esac
         ;;
     rhel | fedora)
         info "installing host packages via dnf"
@@ -96,6 +118,21 @@ case "${family}" in
         sudo systemctl enable --now libvirtd
         ;;
 esac
+
+# Ensure the qemu:///system 'default' libvirt network is active and
+# set to autostart. On RHEL/Fedora the libvirt package postinst
+# brings the default network online; on Debian it's defined but
+# inactive + no autostart, so the integration suite's qemu:///system
+# half would skip with "no 'default' libvirt network". This step is
+# idempotent — net-start on an already-active network errors which
+# we swallow.
+if sudo virsh -c qemu:///system net-info default >/dev/null 2>&1; then
+    info "ensuring qemu:///system 'default' network is active + autostart"
+    sudo virsh -c qemu:///system net-start default 2>/dev/null || true
+    sudo virsh -c qemu:///system net-autostart default 2>/dev/null || true
+else
+    info "no 'default' libvirt network on qemu:///system — skipping (custom net?)"
+fi
 
 if ! command -v uv >/dev/null 2>&1; then
     info "installing uv into ~/.local/bin"

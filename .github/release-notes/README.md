@@ -91,7 +91,12 @@ reproducible from the tagged commit alone.
 
 ## File conventions
 
-- One file per release, named `X.Y.Z.md` matching the tag.
+- One file per release, named to match the tag exactly. Stable:
+    `X.Y.Z.md`. Pre-release: `X.Y.ZrcN.md` / `X.Y.ZaN.md` /
+    `X.Y.ZbN.md`. The workflow looks up `${TAG}.md` directly, so any
+    tag-shape the workflow accepts (see
+    [`docs-extra/releases.md`](../../docs-extra/releases.md)
+    "Pre-release tags") uses the same filename convention.
 - Markdown. No frontmatter. Tables and code blocks render correctly
     on the GitHub release page.
 - Headings start at `##` (the release page already has the version

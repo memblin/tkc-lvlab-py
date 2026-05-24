@@ -97,9 +97,33 @@ ready) creates the release.
 
 ## Pre-release tags
 
-Not currently supported by the workflow regex. Tag pattern at
-`.github/workflows/build-release.yml` is `[0-9]+.[0-9]+.[0-9]+` —
-strict three-segment — so `0.3.0rc1` or `0.3.0a1` would push without
-triggering the build. If you want a pre-release lane, extend the
-pattern first and add a `--prerelease` flag to the `gh release create`
-step when the tag has a suffix.
+The workflow accepts PEP 440 pre-release suffixes alongside stable
+tags. Supported tag shapes:
+
+- `X.Y.Z` — stable release.
+- `X.Y.ZrcN` — release candidate (e.g. `0.4.0rc1`).
+- `X.Y.ZaN` — alpha (e.g. `0.4.0a1`).
+- `X.Y.ZbN` — beta (e.g. `0.4.0b1`).
+
+The workflow detects anything that isn't strict `X.Y.Z` and passes
+`--prerelease` to `gh release create`. GitHub marks the release as a
+pre-release in the UI, and `pip install tkc-lvlab` (without
+`--pre`) will not promote it over the latest stable.
+
+Procedure is identical to a stable release — same per-tag notes file
+under `.github/release-notes/`, same `pyproject.toml` version bump
+(use the same suffix in the version string), same tag-and-push:
+
+```bash
+# pyproject.toml: version = "0.4.0rc1"
+cp .github/release-notes/_template.md .github/release-notes/0.4.0rc1.md
+$EDITOR .github/release-notes/0.4.0rc1.md
+git add pyproject.toml uv.lock .github/release-notes/0.4.0rc1.md
+git commit -m "chore: bump version to 0.4.0rc1"
+git push
+git tag -m 'v0.4.0rc1' 0.4.0rc1
+git push --tags
+```
+
+The wheel artifact name follows the version field exactly:
+`tkc_lvlab-0.4.0rc1-py3-none-any.whl`.

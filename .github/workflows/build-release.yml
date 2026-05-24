@@ -8,7 +8,12 @@ on:
         required: true
   push:
     tags:
+      # Stable: X.Y.Z
       - '[0-9]+.[0-9]+.[0-9]+'
+      # PEP 440 pre-releases: X.Y.ZrcN, X.Y.ZaN, X.Y.ZbN
+      - '[0-9]+.[0-9]+.[0-9]+rc[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+a[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+b[0-9]+'
     branches:
       - 'main'
 
@@ -63,7 +68,15 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ github.ref_name }}
       run: |
-        gh release create "${TAG}" \
+        # Mark anything that isn't strict X.Y.Z as a pre-release so
+        # GitHub flags it in the UI and `pip install` defaults don't
+        # promote it over a stable.
+        if [[ "${TAG}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          prerelease_args=()
+        else
+          prerelease_args=(--prerelease)
+        fi
+        gh release create "${TAG}" "${prerelease_args[@]}" \
           --notes-file ".github/release-notes/${TAG}.md" \
           "./dist/tkc_lvlab-${TAG}-py3-none-any.whl"
 
@@ -108,6 +121,11 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ inputs.build_tag }}
       run: |
-        gh release create "${TAG}" \
+        if [[ "${TAG}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          prerelease_args=()
+        else
+          prerelease_args=(--prerelease)
+        fi
+        gh release create "${TAG}" "${prerelease_args[@]}" \
           --notes-file ".github/release-notes/${TAG}.md" \
           "./dist/tkc_lvlab-${TAG}-py3-none-any.whl"

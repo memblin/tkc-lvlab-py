@@ -8,6 +8,17 @@ on:
   push:
     branches:
       - main
+    # Only rebuild when the rendered site can actually change:
+    # - docs/**       — pages, embedded YAML, etc.
+    # - src/**        — mkdocstrings pulls API reference from package source.
+    # - mkdocs.yml    — nav, theme, extension config.
+    # workflow_dispatch is below for manual rebuilds when none of these
+    # changed but a republish is needed anyway.
+    paths:
+      - 'docs/**'
+      - 'src/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
 permissions:

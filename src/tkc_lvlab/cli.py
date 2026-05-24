@@ -59,6 +59,12 @@ from .utils.virsh import (
 logger = get_logger(__name__)
 
 
+DEFAULT_LIBVIRT_URI = "qemu:///session"
+CONFIG_PARSE_ERROR_MSG = "Could not parse config file."
+MACHINE_NOT_DEPLOYED_MSG = "Machine %s is not deployed to the configured in %s."
+MACHINE_NOT_IN_MANIFEST_MSG = "Machine not found in manifest: %s"
+
+
 app = typer.Typer(
     help="A command-line tool for managing VMs.",
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -133,7 +139,7 @@ def _resolve_image_config(images: dict, machine_os: str, vm_name: str) -> dict:
 def capabilities() -> None:
     """Print the raw hypervisor capabilities XML for qemu:///session."""
     try:
-        caps = virsh_capabilities("qemu:///session")
+        caps = virsh_capabilities(DEFAULT_LIBVIRT_URI)
     except VirshError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1)
@@ -146,7 +152,7 @@ def cloudinit(vm_name: str) -> None:
     try:
         environment, images, config_defaults, machines = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
     machine = Machine(
@@ -171,7 +177,7 @@ def destroy(
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -180,7 +186,7 @@ def destroy(
         machine = Machine(
             get_machine_by_vm_name(machines, vm_name), environment, config_defaults
         )
-        libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+        libvirt_endpoint = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
 
         if machine:
             exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
@@ -202,12 +208,12 @@ def destroy(
                     typer.echo(f"Destruction aborted for {machine.vm_name}.")
             else:
                 logger.warning(
-                    "Machine %s is not deployed to the configured in %s.",
+                    MACHINE_NOT_DEPLOYED_MSG,
                     machine.vm_name,
                     libvirt_endpoint,
                 )
     else:
-        logger.error("Machine not found in manifest: %s", vm_name)
+        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
 
 
 @app.command()
@@ -216,7 +222,7 @@ def down(vm_name: str) -> None:
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -227,14 +233,16 @@ def down(vm_name: str) -> None:
         )
 
         exists, state, _ = machine.exists_in_libvirt(
-            environment.get("libvirt_uri", "qemu:///session")
+            environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
         )
 
         if exists:
             if state in {"running", "paused"}:
                 typer.echo(f"Shutting down virtual machine {vm_name}.")
                 if (
-                    machine.shutdown(environment.get("libvirt_uri", "qemu:///session"))
+                    machine.shutdown(
+                        environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
+                    )
                     > 0
                 ):
                     logger.error("Shutdown appears to have failed.")
@@ -272,7 +280,7 @@ def hosts(
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         sys.exit()
 
     hosts_snippet = generate_hosts(environment, config_defaults, machines)
@@ -342,9 +350,9 @@ def ssh_config(vm_name: str = typer.Argument(None)) -> None:
     stdout; redirect or append it to ~/.ssh/config yourself.
     """
     try:
-        environment, _, config_defaults, machines = parse_config()
+        _, _, config_defaults, machines = parse_config()
     except TypeError:
-        typer.echo("Could not parse config file.")
+        typer.echo(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
     if vm_name:
@@ -400,7 +408,7 @@ def init() -> None:
     try:
         environment, images, config_defaults, _ = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         sys.exit()
 
     typer.echo()
@@ -474,7 +482,7 @@ def snapshot_list(vm_name: str) -> None:
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -483,7 +491,7 @@ def snapshot_list(vm_name: str) -> None:
         machine = Machine(
             get_machine_by_vm_name(machines, vm_name), environment, config_defaults
         )
-        libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+        libvirt_endpoint = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
 
         if machine:
             exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
@@ -497,12 +505,12 @@ def snapshot_list(vm_name: str) -> None:
                     typer.echo(f"No snapshots found for {machine.vm_name}")
             else:
                 logger.warning(
-                    "Machine %s is not deployed to the configured in %s.",
+                    MACHINE_NOT_DEPLOYED_MSG,
                     machine.vm_name,
                     libvirt_endpoint,
                 )
     else:
-        logger.error("Machine not found in manifest: %s", vm_name)
+        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
 
 
 @snapshot_app.command("create")
@@ -515,7 +523,7 @@ def snapshot_create(
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -524,7 +532,7 @@ def snapshot_create(
         machine = Machine(
             get_machine_by_vm_name(machines, vm_name), environment, config_defaults
         )
-        libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+        libvirt_endpoint = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
 
         if machine:
             exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
@@ -545,12 +553,12 @@ def snapshot_create(
                     )
             else:
                 logger.warning(
-                    "Machine %s is not deployed to the configured in %s.",
+                    MACHINE_NOT_DEPLOYED_MSG,
                     machine.vm_name,
                     libvirt_endpoint,
                 )
     else:
-        logger.error("Machine not found in manifest: %s", vm_name)
+        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
 
 
 @snapshot_app.command("delete")
@@ -563,7 +571,7 @@ def snapshot_delete(
     try:
         environment, _, config_defaults, machines = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -572,7 +580,7 @@ def snapshot_delete(
         machine = Machine(
             get_machine_by_vm_name(machines, vm_name), environment, config_defaults
         )
-        libvirt_endpoint = environment.get("libvirt_uri", "qemu:///session")
+        libvirt_endpoint = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
 
         if machine:
             exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
@@ -600,12 +608,12 @@ def snapshot_delete(
                     )
             else:
                 logger.warning(
-                    "Machine %s is not deployed to the configured in %s.",
+                    MACHINE_NOT_DEPLOYED_MSG,
                     machine.vm_name,
                     libvirt_endpoint,
                 )
     else:
-        logger.error("Machine not found in manifest: %s", vm_name)
+        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
 
 
 @app.command()
@@ -626,10 +634,10 @@ def status() -> None:
     try:
         environment, images, _, machines = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
-    uri = environment.get("libvirt_uri", "qemu:///session")
+    uri = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
     env_name = environment.get("name", "no-name-lvlab")
 
     typer.echo()
@@ -677,7 +685,7 @@ def up(vm_name: str) -> None:
     try:
         environment, images, config_defaults, machines = parse_config()
     except TypeError:
-        logger.error("Could not parse config file.")
+        logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
@@ -685,7 +693,7 @@ def up(vm_name: str) -> None:
         machine = Machine(machine_config, environment, config_defaults)
 
         exists, status_state, _ = machine.exists_in_libvirt(
-            environment.get("libvirt_uri", "qemu:///session")
+            environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
         )
 
         if exists:
@@ -719,7 +727,7 @@ def up(vm_name: str) -> None:
                 os.path.join(machine.config_fpath, "cidata.iso"),
             )
             logger.info("Writing cloud-init config ISO file %s", iso.fpath)
-            if iso.write(iso.fpath):
+            if iso.write():
                 logger.info("Writing cloud-init config ISO successful")
             else:
                 logger.error("Writing cloud-init config ISO failed.")
@@ -730,7 +738,7 @@ def up(vm_name: str) -> None:
             if machine.deploy(
                 machine.config_fpath,
                 config_defaults,
-                environment.get("libvirt_uri", "qemu:///session"),
+                environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI),
             ):
                 typer.echo("Virtual machine deployment complete.")
             else:

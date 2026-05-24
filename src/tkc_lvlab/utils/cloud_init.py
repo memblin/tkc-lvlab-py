@@ -274,18 +274,13 @@ class CloudInitIso:
         self.network_config_fpath = network_config_fpath
         self.fpath = iso_fpath
 
-    def write(self, config_fpath: str) -> bool:
+    def write(self) -> bool:
         """Build and write the ISO.
 
         Creates a fresh :class:`pycdlib.PyCdlib` with ``interchange_level=3``,
         ``vol_ident="cidata"``, Joliet, and Rock Ridge "1.09" extensions,
         then adds the three input files at the names cloud-init
-        expects.
-
-        Args:
-            config_fpath: Currently unused — kept in the signature
-                because callers (cli.py) pass it. The output path is
-                already on :attr:`fpath`.
+        expects. The output path comes from :attr:`fpath`.
 
         Returns:
             ``True`` on a successful write. ``False`` if pycdlib raised

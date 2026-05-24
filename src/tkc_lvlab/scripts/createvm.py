@@ -115,7 +115,7 @@ BUILTIN_IMAGES: dict[str, CatalogEntry] = {
             "debian-12-generic-amd64-20260518-2482.qcow2"
         ),
         checksum_url=(
-            "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/" "SHA512SUMS"
+            "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/SHA512SUMS"
         ),
         checksum_type="sha512",
         checksum_url_gpg=None,
@@ -618,7 +618,7 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         network_config_fpath=str(network_config_path),
         iso_fpath=str(cidata_path),
     )
-    if not iso.write(str(vm_dir)):
+    if not iso.write():
         raise _fail("Failed to build cidata.iso.")
 
     # Step 7: create the qcow2 disk.

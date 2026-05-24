@@ -50,11 +50,12 @@ def generate_hosts_entries(
             "ip4", None
         ):
             machine_fqdn = machine.get("fqdn", None)
-            if not machine_fqdn:
-                if machine.get("hostname", None) and config_defaults.get(
-                    "domain", None
-                ):
-                    machine_fqdn = f'{machine.get("hostname", None) + "." + config_defaults.get("domain", None)}'
+            if (
+                not machine_fqdn
+                and machine.get("hostname", None)
+                and config_defaults.get("domain", None)
+            ):
+                machine_fqdn = f'{machine.get("hostname", None) + "." + config_defaults.get("domain", None)}'
 
             hosts_entry: dict[str, str | None] = {
                 "ip4": machine["interfaces"][0]["ip4"].split("/")[0],

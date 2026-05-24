@@ -164,7 +164,7 @@ def all_external_mocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict
 
     # Stub out CloudInitIso.write so it doesn't touch real pycdlib.
     monkeypatch.setattr(
-        "tkc_lvlab.scripts.createvm.CloudInitIso.write", lambda self, p: True
+        "tkc_lvlab.scripts.createvm.CloudInitIso.write", lambda self: True
     )
 
     # Stub _build_cloud_image so we don't need real URLs / disk paths.

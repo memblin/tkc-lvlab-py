@@ -56,6 +56,22 @@ logger = get_logger(__name__)
 # wording in lockstep with the four call sites in this module.
 VM_DOES_NOT_EXIST_MSG = "The virtual machine %s does not exist in this Libvirt URI"
 
+# Maps a ``hosts.{family}.tmpl`` filename to the lowercased ``machine.os``
+# prefixes that should select it. Used by :meth:`Machine._resolve_hosts_template_path`
+# so the manifest-wide /etc/hosts snippet lands in the right cloud-init
+# template path for the guest distro. Extend here to support a new family.
+_HOSTS_TEMPLATE_MAPPING: dict[str, list[str]] = {
+    "hosts.debian.tmpl": ["debian", "ubuntu"],
+    "hosts.redhat.tmpl": [
+        "fedora",
+        "rocky",
+        "rockylinux",
+        "alma",
+        "almalinux",
+        "rhel",
+    ],
+}
+
 
 def _virt_install_network_arg(iface: dict[str, Any]) -> str:
     """Build the ``virt-install --network`` argument for one interface.
@@ -293,126 +309,118 @@ class Machine:
         Raises:
             ValueError: When :attr:`os` does not match a known
                 ``/etc/cloud/templates/hosts.*.tmpl`` distro family.
-                Extend ``template_file_mapping`` in the method body to
-                add a new family.
+                Extend :data:`_HOSTS_TEMPLATE_MAPPING` to add a new family.
             SystemExit: When :attr:`config_fpath` cannot be created or
                 when ``parse_config`` returns ``None``. This preserves
                 the historical "log + exit" behavior — future cleanup
                 may replace it with a raised exception.
         """
-        if not os.path.exists(self.config_fpath):
-            try:
-                os.makedirs(self.config_fpath)
-            except Exception as e:  # pylint: disable=broad-except
-                logger.error("Exception creating %s: %s", self.config_fpath, e)
-                sys.exit(1)
+        self._ensure_config_dir()
 
-        # Render and write cloud-init: network-config
-        network_config = NetworkConfig(
-            cloud_image.network_version, self.interfaces, self.nameservers
+        network_config_fpath = self._render_and_write(
+            NetworkConfig(
+                cloud_image.network_version, self.interfaces, self.nameservers
+            ),
+            "network-config",
         )
-        rendered_network_config = network_config.render_config()
-        network_config_fpath = os.path.join(self.config_fpath, "network-config")
-        logger.info("Writing cloud-init network config file %s", network_config_fpath)
-        with open(network_config_fpath, "w", encoding="utf-8") as network_config_file:
-            network_config_file.write(rendered_network_config)
+        metadata_config_fpath = self._render_and_write(
+            MetaData(self.libvirt_vm_name, self.fqdn),
+            "meta-data",
+        )
 
-        # Render and write cloud-init: meta-data
-        metadata_config = MetaData(self.libvirt_vm_name, self.fqdn)
-        rendered_metadata_config = metadata_config.render_config()
-        metadata_config_fpath = os.path.join(self.config_fpath, "meta-data")
-        logger.info("Writing cloud-init meta-data file %s", metadata_config_fpath)
-        with open(metadata_config_fpath, "w", encoding="utf-8") as metadata_config_file:
-            metadata_config_file.write(rendered_metadata_config)
+        cloud_init_config = self._merge_cloud_init_config(
+            config_defaults.get("cloud_init", {})
+        )
 
-        # Render and write cloud-init: user-data
-        cloud_init_defaults = config_defaults.get("cloud_init", {})
-
-        # Apply cloud_init defaults
-        if self.cloud_init_config.get("runcmd_ignore_defaults", False):
-            logger.debug(
-                "Ignoring config_defaults:cloud_init:runcmd for %s", self.vm_name
-            )
-            cloud_init_defaults_filtered = {
-                k: v for k, v in cloud_init_defaults.items() if k != "runcmd"
-            }
-            cloud_init_config = {
-                **cloud_init_defaults_filtered,
-                **self.cloud_init_config,
-            }
-        else:
-            logger.debug(
-                "Including config_defaults:cloud_init:runcmd for %s", self.vm_name
-            )
-            cloud_init_config = {**cloud_init_defaults, **self.cloud_init_config}
-
-            if "runcmd" in cloud_init_defaults and "runcmd" in self.cloud_init_config:
-                cloud_init_config["runcmd"] = (
-                    cloud_init_defaults["runcmd"] + self.cloud_init_config["runcmd"]
-                )
-            elif "runcmd" in cloud_init_defaults:
-                cloud_init_config["runcmd"] = cloud_init_defaults["runcmd"]
-
-        # Append /etc/hosts snippet to machine user-data runcmd list
         try:
             _, _, _, machines = parse_config()
-        except TypeError as e:
+        except TypeError:
             logger.error("Could not parse config file.")
             sys.exit()
 
         hosts_snippet = generate_hosts(
             self.environment, config_defaults, machines, heredoc="/etc/hosts"
         )
-
-        # We need to append entries to the correct cloud-init hosts template
-        # file in /etc/cloud/templates too.
-        template_file_mapping = {
-            "hosts.debian.tmpl": ["debian", "ubuntu"],
-            "hosts.redhat.tmpl": [
-                "fedora",
-                "rocky",
-                "rockylinux",
-                "alma",
-                "almalinux",
-                "rhel",
-            ],
-        }
-        template_fpath = None
-
-        for template, distros in template_file_mapping.items():
-            for distro in distros:
-                if self.os.lower().startswith(distro.lower()):
-                    template_fpath = "/etc/cloud/templates/" + template
-                    break
-            if template_fpath:
-                break
-
-        if not template_fpath:
-            raise ValueError(f"Could not find a template file for {self.os}")
-
+        template_fpath = self._resolve_hosts_template_path()
         hosts_template_snippet = generate_hosts(
             self.environment, config_defaults, machines, heredoc=template_fpath
         )
 
-        if "runcmd" not in cloud_init_config:
-            cloud_init_config["runcmd"] = []
+        # Prepend the two hosts heredoc snippets so /etc/hosts (and the
+        # cloud-init template) are populated before any runcmd entry that
+        # does DNS-ish work.
+        cloud_init_config["runcmd"] = [
+            hosts_snippet,
+            hosts_template_snippet,
+        ] + cloud_init_config.get("runcmd", [])
 
-        # Append the hosts_snippet to the top of the runcmd list so /etc/hosts gets
-        # populated first as the runcmd is processed.
-        cloud_init_config["runcmd"] = (
-            [hosts_snippet] + [hosts_template_snippet] + cloud_init_config["runcmd"]
+        userdata_config_fpath = self._render_and_write(
+            UserData(cloud_init_config, self.hostname, self.domain, self.fqdn),
+            "user-data",
         )
-
-        userdata_config = UserData(
-            cloud_init_config, self.hostname, self.domain, self.fqdn
-        )
-        rendered_userdata_config = userdata_config.render_config()
-        userdata_config_fpath = os.path.join(self.config_fpath, "user-data")
-        logger.info("Writing cloud-init user-data file %s", userdata_config_fpath)
-        with open(userdata_config_fpath, "w", encoding="utf-8") as userdata_config_file:
-            userdata_config_file.write(rendered_userdata_config)
 
         return metadata_config_fpath, userdata_config_fpath, network_config_fpath
+
+    def _ensure_config_dir(self) -> None:
+        """Create :attr:`config_fpath` if absent. Log + exit on failure."""
+        if os.path.exists(self.config_fpath):
+            return
+        try:
+            os.makedirs(self.config_fpath)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error("Exception creating %s: %s", self.config_fpath, e)
+            sys.exit(1)
+
+    def _render_and_write(self, renderable: Any, filename: str) -> str:
+        """Render ``renderable.render_config()`` to ``<config_fpath>/<filename>``.
+
+        Returns the resolved file path.
+        """
+        fpath = os.path.join(self.config_fpath, filename)
+        logger.info("Writing cloud-init %s file %s", filename, fpath)
+        with open(fpath, "w", encoding="utf-8") as fh:
+            fh.write(renderable.render_config())
+        return fpath
+
+    def _merge_cloud_init_config(self, cloud_init_defaults: dict[str, Any]) -> dict:
+        """Merge ``cloud_init_defaults`` and :attr:`cloud_init_config`.
+
+        Honours the per-machine ``runcmd_ignore_defaults`` opt-out: when
+        truthy, the defaults' ``runcmd`` is dropped before the merge
+        (every other defaults key still applies). Without the opt-out,
+        ``runcmd`` from defaults is prepended to the machine's runcmd.
+        """
+        if self.cloud_init_config.get("runcmd_ignore_defaults", False):
+            logger.debug(
+                "Ignoring config_defaults:cloud_init:runcmd for %s", self.vm_name
+            )
+            filtered_defaults = {
+                k: v for k, v in cloud_init_defaults.items() if k != "runcmd"
+            }
+            return {**filtered_defaults, **self.cloud_init_config}
+
+        logger.debug("Including config_defaults:cloud_init:runcmd for %s", self.vm_name)
+        merged = {**cloud_init_defaults, **self.cloud_init_config}
+        if "runcmd" in cloud_init_defaults and "runcmd" in self.cloud_init_config:
+            merged["runcmd"] = (
+                cloud_init_defaults["runcmd"] + self.cloud_init_config["runcmd"]
+            )
+        elif "runcmd" in cloud_init_defaults:
+            merged["runcmd"] = cloud_init_defaults["runcmd"]
+        return merged
+
+    def _resolve_hosts_template_path(self) -> str:
+        """Return ``/etc/cloud/templates/hosts.<family>.tmpl`` for :attr:`os`.
+
+        Raises:
+            ValueError: When :attr:`os` matches no entry in
+                :data:`_HOSTS_TEMPLATE_MAPPING`.
+        """
+        os_lower = self.os.lower()
+        for template, distros in _HOSTS_TEMPLATE_MAPPING.items():
+            if any(os_lower.startswith(d) for d in distros):
+                return "/etc/cloud/templates/" + template
+        raise ValueError(f"Could not find a template file for {self.os}")
 
     def create_vdisks(
         self,

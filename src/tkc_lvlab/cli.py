@@ -48,6 +48,8 @@ from .utils.libvirt import (
 )
 from .utils.images import CloudImage
 from .utils.virsh import (
+    DEAD_STATES,
+    DOMSTATE_RUNNING,
     VirshError,
     humanize_state,
     virsh_capabilities,
@@ -745,6 +747,66 @@ def status() -> None:
     typer.echo()
 
 
+def _up_start_existing(
+    machine: Machine, status_state: str | None, environment: dict
+) -> None:
+    """Power on or no-op a machine that already exists in libvirt."""
+    if status_state in DEAD_STATES:
+        typer.echo(f"Starting virtual machine {machine.vm_name}")
+        # Preserve the original ``None`` fallback used by the powering path
+        # (the existence check above uses DEFAULT_LIBVIRT_URI; keeping the
+        # asymmetry behaviour-preserving for this refactor).
+        if machine.poweron(environment.get("libvirt_uri", None)) > 0:
+            logger.error("Problem powering on VM %s", machine.vm_name)
+    elif status_state == DOMSTATE_RUNNING:
+        typer.echo(f"The virtual machine {machine.vm_name} is running already")
+
+
+def _up_build_cloud_init_iso(
+    machine: Machine, cloud_image: CloudImage, config_defaults: dict
+) -> None:
+    """Render cloud-init files, pack them into cidata.iso, exit on failure."""
+    metadata_config_fpath, userdata_config_fpath, network_config_fpath = (
+        machine.cloud_init(cloud_image, config_defaults)
+    )
+    iso = CloudInitIso(
+        metadata_config_fpath,
+        userdata_config_fpath,
+        network_config_fpath,
+        os.path.join(machine.config_fpath, "cidata.iso"),
+    )
+    logger.info("Writing cloud-init config ISO file %s", iso.fpath)
+    if iso.write():
+        logger.info("Writing cloud-init config ISO successful")
+    else:
+        logger.error("Writing cloud-init config ISO failed.")
+        raise typer.Exit(code=1)
+
+
+def _up_first_time_create(
+    machine: Machine, environment: dict, images: dict, config_defaults: dict
+) -> None:
+    """First-time create: vdisks → cloud-init ISO → virt-install."""
+    typer.echo(f"Creating virtual machine: {machine.vm_name}")
+
+    image_config = _resolve_image_config(images, machine.os, machine.vm_name)
+    cloud_image = CloudImage(machine.os, image_config, environment, config_defaults)
+
+    machine.create_vdisks(environment, config_defaults, cloud_image)
+    _up_build_cloud_init_iso(machine, cloud_image, config_defaults)
+
+    typer.echo(f"Attempting to start virtual maching: {machine.vm_name}")
+    if machine.deploy(
+        machine.config_fpath,
+        config_defaults,
+        environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI),
+    ):
+        typer.echo("Virtual machine deployment complete.")
+    else:
+        logger.error("Virtual machine installation failed.")
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def up(vm_name: str) -> None:
     """Start a machine defined in the Lvlab.yml manifest.
@@ -760,64 +822,18 @@ def up(vm_name: str) -> None:
         raise typer.Exit(code=1)
 
     machine_config = get_machine_by_vm_name(machines, vm_name)
-    if machine_config:
-        machine = Machine(machine_config, environment, config_defaults)
-
-        exists, status_state, _ = machine.exists_in_libvirt(
-            environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
-        )
-
-        if exists:
-            if status_state in {"shut off", "crashed"}:
-                typer.echo(f"Starting virtual machine {machine.vm_name}")
-                if machine.poweron(environment.get("libvirt_uri", None)) > 0:
-                    logger.error("Problem powering on VM %s", machine.vm_name)
-            elif status_state == "running":
-                typer.echo(f"The virtual machine {machine.vm_name} is running already")
-
-        else:
-            typer.echo(f"Creating virtual machine: {machine.vm_name}")
-
-            image_config = _resolve_image_config(images, machine.os, machine.vm_name)
-            cloud_image = CloudImage(
-                machine.os, image_config, environment, config_defaults
-            )
-
-            machine.create_vdisks(environment, config_defaults, cloud_image)
-
-            # Render and write cloud-init config
-            metadata_config_fpath, userdata_config_fpath, network_config_fpath = (
-                machine.cloud_init(cloud_image, config_defaults)
-            )
-
-            # Write cloud-init config files to ISO to mount during launch
-            iso = CloudInitIso(
-                metadata_config_fpath,
-                userdata_config_fpath,
-                network_config_fpath,
-                os.path.join(machine.config_fpath, "cidata.iso"),
-            )
-            logger.info("Writing cloud-init config ISO file %s", iso.fpath)
-            if iso.write():
-                logger.info("Writing cloud-init config ISO successful")
-            else:
-                logger.error("Writing cloud-init config ISO failed.")
-                raise typer.Exit(code=1)
-
-            # virt-install the VM and check status
-            typer.echo(f"Attempting to start virtual maching: {machine.vm_name}")
-            if machine.deploy(
-                machine.config_fpath,
-                config_defaults,
-                environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI),
-            ):
-                typer.echo("Virtual machine deployment complete.")
-            else:
-                logger.error("Virtual machine installation failed.")
-                raise typer.Exit(code=1)
-
-    else:
+    if not machine_config:
         logger.error("Machine %s not found in manifest.", vm_name)
+        return
+
+    machine = Machine(machine_config, environment, config_defaults)
+    libvirt_uri = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
+    exists, status_state, _ = machine.exists_in_libvirt(libvirt_uri)
+
+    if exists:
+        _up_start_existing(machine, status_state, environment)
+    else:
+        _up_first_time_create(machine, environment, images, config_defaults)
 
 
 # Backwards-compatible aliases. ``pyproject.toml`` entry-point references

@@ -94,3 +94,34 @@ def test_basedir_with_tilde_and_cloud_images_suffix_is_idempotent() -> None:
     without doubling."""
     image = _make_cloud_image("~/cloud-images")
     assert image.image_dir == "~/cloud-images"
+
+
+def test_cloud_image_resolves_os_variant_and_username_from_key() -> None:
+    """CloudImage exposes os_variant/default_username via the shared
+    catalog resolution — derived from the key when the config omits them.
+    These feed the manifest deploy path (--os-variant + first-boot user)."""
+    image = CloudImage(
+        name="fedora44",
+        config={"image_url": "https://example/fedora.qcow2"},
+        environment={},
+        config_defaults={},
+    )
+    assert image.os_variant == "fedora44"
+    assert image.default_username == "fedora"
+
+
+def test_cloud_image_honours_os_variant_and_username_overrides() -> None:
+    """A config override wins — e.g. an ``ubuntu2204`` key pins the
+    osinfo-valid ``ubuntu22.04`` and the ``ubuntu`` account."""
+    image = CloudImage(
+        name="ubuntu2204",
+        config={
+            "image_url": "https://example/jammy.img",
+            "os_variant": "ubuntu22.04",
+            "username": "ubuntu",
+        },
+        environment={},
+        config_defaults={},
+    )
+    assert image.os_variant == "ubuntu22.04"
+    assert image.default_username == "ubuntu"

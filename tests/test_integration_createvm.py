@@ -47,7 +47,8 @@ from pathlib import Path
 
 import pytest
 
-from tkc_lvlab.scripts.createvm import BUILTIN_IMAGES, derive_username
+from tkc_lvlab.scripts.createvm import BUILTIN_IMAGES
+from tkc_lvlab.utils.catalog import derive_username
 
 from tests.conftest import assert_owned_by_test, make_test_name
 from tests.integration_helpers import (

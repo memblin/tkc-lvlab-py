@@ -46,6 +46,7 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 from .. import __version__
 from ..config import parse_config
+from ..utils.catalog import ImageEntry as CatalogEntry, build_image_entry
 from ..utils.cloud_init import CloudInitIso, NetworkConfig
 from ..utils.images import CloudImage
 from ..utils.network import (
@@ -99,48 +100,20 @@ _ONEOFF_STORAGE_ROOT = Path("/var/lib/libvirt/images/lvlab/oneoff")
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class CatalogEntry:
-    """A fully-resolved cloud image ready for ``createvm`` to deploy.
-
-    Built by :func:`resolve_image_entry` from a merged catalog dict —
-    either a :data:`BUILTIN_IMAGES` entry or an ``Lvlab.yml`` ``images:``
-    entry. The ``os_variant`` and ``default_username`` fields are filled
-    by derivation from the image key unless the source dict overrides
-    them (see :func:`derive_os_variant` / :func:`derive_username`).
-
-    Attributes:
-        image_url: Direct URL to the qcow2 cloud image.
-        checksum_url: URL to the checksum manifest, or ``None`` for an
-            unverified custom image.
-        checksum_type: Hash algorithm — ``sha256`` or ``sha512`` — or
-            ``None`` when there's no checksum.
-        checksum_url_gpg: Optional URL to a GPG keyring for verifying the
-            checksum file. When ``None``, GPG verification is skipped.
-        network_version: cloud-init network-config schema version,
-            ``1`` (ENI-style) or ``2`` (netplan-style).
-        os_variant: ``virt-install --os-variant`` argument. Passed
-            through :func:`tkc_lvlab.utils.osinfo.resolve_os_variant`
-            at deploy time for osinfo-db fuzzy fallback.
-        default_username: First-boot account name cloud-init creates.
-    """
-
-    image_url: str
-    checksum_url: str | None
-    checksum_type: str | None
-    checksum_url_gpg: str | None
-    network_version: int
-    os_variant: str
-    default_username: str
+# ``CatalogEntry`` (the resolved image type) and the ``os_variant`` /
+# ``default_username`` derivation now live in ``utils/catalog.py`` so the
+# manifest ``Machine`` path resolves images the same way — see the import
+# above (``ImageEntry as CatalogEntry``).
 
 
 # Built-in cloud images the standalone ``createvm`` script can resolve via
 # ``VM_DISTRO`` out of the box. Each value uses the **same schema as an
 # ``Lvlab.yml`` ``images:`` entry** so the built-in catalog and a cwd
-# manifest merge through one code path (:func:`resolve_catalog`). The two
-# createvm-only knobs — ``os_variant`` and ``username`` — are intentionally
-# omitted: they're derived from the key (debian12 -> debian12 / debian) and
-# only need to appear when the derivation is wrong.
+# manifest merge through one code path (:func:`resolve_catalog`). The
+# optional ``os_variant`` / ``username`` keys are omitted here: they're
+# derived from the key (debian12 -> debian12 / debian) via
+# ``utils/catalog`` and only need to appear when the derivation is wrong
+# (both createvm and ``lvlab up`` honour them — see that module).
 #
 # The ``refresh-cloud-images`` skill under ``.claude/skills/`` keeps these
 # in sync with upstream and surfaces new-major / EOL drift.
@@ -195,72 +168,6 @@ BUILTIN_IMAGES: dict[str, dict[str, Any]] = {
 }
 
 
-# First-boot account names keyed by distro family. Anything not listed
-# falls back to the family token itself (e.g. ``alpine318`` -> ``alpine``),
-# and any entry can be overridden per image with a ``username:`` key.
-_USERNAME_BY_FAMILY: dict[str, str] = {
-    "debian": "debian",
-    "ubuntu": "ubuntu",
-    "fedora": "fedora",
-    "almalinux": "almalinux",
-    "rocky": "rocky",
-    "centos": "cloud-user",
-    "rhel": "cloud-user",
-}
-
-
-def _family_token(key: str) -> str:
-    """Return the leading alphabetic family token of a catalog key.
-
-    ``debian12`` -> ``debian``, ``debian12-salt`` -> ``debian``,
-    ``fedora44`` -> ``fedora``. Falls back to the whole lower-cased key
-    when it has no leading letters.
-
-    Args:
-        key: A catalog / ``VM_DISTRO`` key.
-
-    Returns:
-        The family token, lower-cased.
-    """
-    match = re.match(r"[a-z]+", key.lower())
-    return match.group(0) if match else key.lower()
-
-
-def derive_os_variant(key: str, explicit: str | None) -> str:
-    """Resolve the ``--os-variant`` value for a catalog key.
-
-    Args:
-        key: The catalog / ``VM_DISTRO`` key (e.g. ``debian12-salt``).
-        explicit: An ``os_variant`` provided by the catalog dict /
-            manifest, or ``None`` to derive.
-
-    Returns:
-        ``explicit`` when set; otherwise the segment of ``key`` before the
-        first ``-`` (``debian12-salt`` -> ``debian12``). The deploy path
-        runs this through ``resolve_os_variant`` for osinfo-db fuzzy
-        fallback, so an approximate value is fine.
-    """
-    return explicit if explicit else key.split("-")[0]
-
-
-def derive_username(key: str, explicit: str | None) -> str:
-    """Resolve the first-boot username for a catalog key.
-
-    Args:
-        key: The catalog / ``VM_DISTRO`` key.
-        explicit: A ``username`` provided by the catalog dict / manifest,
-            or ``None`` to derive.
-
-    Returns:
-        ``explicit`` when set; otherwise the family-conventional user from
-        :data:`_USERNAME_BY_FAMILY`, falling back to the family token.
-    """
-    if explicit:
-        return explicit
-    family = _family_token(key)
-    return _USERNAME_BY_FAMILY.get(family, family)
-
-
 def resolve_catalog(
     manifest_images: dict[str, Any] | None,
 ) -> dict[str, dict[str, Any]]:
@@ -308,16 +215,7 @@ def resolve_image_entry(
     if real_key is None:
         available = ", ".join(sorted(catalog))
         raise ValueError(f"Unknown distro '{distro}'. Available: {available}")
-    cfg = catalog[real_key]
-    return CatalogEntry(
-        image_url=cfg["image_url"],
-        checksum_url=cfg.get("checksum_url"),
-        checksum_type=cfg.get("checksum_type"),
-        checksum_url_gpg=cfg.get("checksum_url_gpg"),
-        network_version=cfg.get("network_version", 2),
-        os_variant=derive_os_variant(real_key, cfg.get("os_variant")),
-        default_username=derive_username(real_key, cfg.get("username")),
-    )
+    return build_image_entry(real_key, catalog[real_key])
 
 
 def load_manifest_images(config_path: Path | None = None) -> dict[str, Any] | None:
@@ -520,6 +418,10 @@ def _build_cloud_image(name: str, entry: CatalogEntry, image_dir: Path) -> Cloud
         "checksum_type": entry.checksum_type,
         "checksum_url_gpg": entry.checksum_url_gpg,
         "network_version": entry.network_version,
+        # Pass the already-resolved values so CloudImage's own catalog
+        # resolution lands on the same os_variant/username as ``entry``.
+        "os_variant": entry.os_variant,
+        "username": entry.default_username,
     }
     config_defaults = {"cloud_image_basedir": str(image_dir)}
     return CloudImage(

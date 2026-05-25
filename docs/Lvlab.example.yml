@@ -146,11 +146,14 @@ images:
   # with your own URLs if you keep custom images.
   #
   # The standalone `createvm` script also reads this `images:` section
-  # (merged over its built-in catalog) when run from this directory. It
-  # derives the guest's --os-variant and first-boot username from the
-  # image key, but you can override either per image with the optional
-  # `os_variant:` / `username:` keys shown (commented) below. `lvlab up`
-  # ignores these two keys; they only affect `createvm`.
+  # (merged over its built-in catalog) when run from this directory. Both
+  # `createvm` and `lvlab up` derive the guest's --os-variant and
+  # first-boot username from the image key, and both honour the optional
+  # `os_variant:` / `username:` overrides shown (commented) below — handy
+  # when the key doesn't derive to a valid osinfo variant (e.g. an
+  # `ubuntu2204` key pinning `os_variant: ubuntu22.04`). For `lvlab up`,
+  # `username` supplies the default `cloud_init.user` when a machine
+  # doesn't set one.
   debian12-salt:
     image_url: http://192.168.122.1:8080/cloud_images/debian-12-salt-20250121-0215.qcow2
     network_version: 2

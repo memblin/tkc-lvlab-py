@@ -36,8 +36,6 @@ from typer.testing import CliRunner
 from tkc_lvlab.scripts import createvm as cv_mod
 from tkc_lvlab.scripts.createvm import (
     BUILTIN_IMAGES,
-    derive_os_variant,
-    derive_username,
     ensure_cidr,
     parse_ip4_option,
     parse_memory_to_mib,
@@ -121,14 +119,6 @@ def test_resolve_image_entry_manifest_can_override_metadata() -> None:
     entry = resolve_image_entry("debian12", catalog)
     assert entry.os_variant == "debian-custom"
     assert entry.default_username == "admin"
-
-
-def test_derive_helpers_fall_back_to_family_token() -> None:
-    """Unknown families derive os_variant/username from the leading token."""
-    assert derive_os_variant("alpine318", None) == "alpine318"
-    assert derive_username("alpine318", None) == "alpine"
-    assert derive_os_variant("debian12", "x") == "x"
-    assert derive_username("debian12", "x") == "x"
 
 
 def test_builtin_catalog_includes_known_distros() -> None:

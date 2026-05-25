@@ -34,6 +34,7 @@ import requests
 from tqdm import tqdm
 
 from .._logging import get_logger
+from .catalog import derive_os_variant, derive_username
 
 
 logger = get_logger(__name__)
@@ -103,6 +104,12 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         self.checksum_type = config.get("checksum_type", None)
         self.checksum_url_gpg = config.get("checksum_url_gpg", None)
         self.network_version = config.get("network_version", 1)
+        # Shared image-entry resolution (see utils/catalog): derived from
+        # the image key, override via the entry's os_variant/username.
+        # Both deploy paths read these so a manifest image resolves its
+        # --os-variant and first-boot user the same way createvm does.
+        self.os_variant = derive_os_variant(name, config.get("os_variant"))
+        self.default_username = derive_username(name, config.get("username"))
         self.filename = os.path.basename(urlparse(self.image_url).path)
 
         configured_basedir = config_defaults.get(

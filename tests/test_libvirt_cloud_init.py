@@ -56,6 +56,7 @@ def _patch_collaborators():
     userdata_obj.render_config.return_value = "## user-data\n"
     cloud_image = mock.Mock()
     cloud_image.network_version = 2
+    cloud_image.default_username = "debian"
     return network_obj, metadata_obj, userdata_obj, cloud_image
 
 
@@ -137,6 +138,26 @@ def test_cloud_init_resolves_almalinux_template_path(tmp_path: Path) -> None:
     assert any(
         "/etc/cloud/templates/hosts.redhat.tmpl" in line for line in runcmd
     ), runcmd
+
+
+def test_cloud_init_defaults_user_to_image_default_username(tmp_path: Path) -> None:
+    """When the manifest omits cloud_init.user, it defaults to the image's
+    resolved default_username — so a manifest needn't hardcode the distro's
+    conventional account (the convergence with createvm's derivation)."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {}
+    captured: list = []
+    _run_cloud_init(machine, {"cloud_init": {}}, captured)
+    assert captured[0]["user"] == "debian"  # from cloud_image.default_username
+
+
+def test_cloud_init_explicit_user_overrides_image_default(tmp_path: Path) -> None:
+    """An explicit cloud_init.user still wins over the image default."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {"user": "root"}
+    captured: list = []
+    _run_cloud_init(machine, {"cloud_init": {}}, captured)
+    assert captured[0]["user"] == "root"
 
 
 def test_cloud_init_raises_value_error_on_unknown_distro(tmp_path: Path) -> None:

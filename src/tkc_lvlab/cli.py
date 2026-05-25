@@ -773,6 +773,7 @@ def _up_first_time_create(
         machine.config_fpath,
         config_defaults,
         environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI),
+        os_variant=cloud_image.os_variant,
     ):
         typer.echo("Virtual machine deployment complete.")
     else:

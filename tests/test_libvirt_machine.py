@@ -421,3 +421,37 @@ def test_machine_deploy_passes_system_first_env_to_virt_install(tmp_path) -> Non
     assert env["PATH"].startswith(
         "/usr/bin:/usr/sbin"
     ), f"deploy must pass env with system bin paths first; got PATH={env['PATH']!r}"
+
+
+def test_machine_deploy_honours_os_variant_override(tmp_path) -> None:
+    """``deploy`` resolves the os-variant from the passed value (the
+    image entry's override) rather than deriving from ``machine.os``.
+
+    Guards the convergence fix: a custom image keyed ``ubuntu2204`` (which
+    would derive the osinfo-unknown ``ubuntu2204``) can pin ``ubuntu22.04``
+    via its catalog/manifest entry, and the manifest deploy path honours it
+    — the same override createvm already respected.
+    """
+    from unittest import mock
+
+    from tkc_lvlab.utils.libvirt import Machine
+
+    m = object.__new__(Machine)
+    m.libvirt_vm_name = "u_lab"
+    m.memory = 1024
+    m.cpu = 1
+    m.os = "ubuntu2204"
+    m.interfaces = [{"name": "eth0", "network": "default"}]
+    m.shared_directories = []
+
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.resolve_os_variant",
+            return_value=("ubuntu22.04", None),
+        ) as rov,
+        mock.patch("tkc_lvlab.utils.libvirt.subprocess.run"),
+    ):
+        m.deploy(str(tmp_path), {}, "qemu:///session", os_variant="ubuntu22.04")
+
+    # The override is what gets resolved, NOT machine.os.split('-')[0].
+    rov.assert_called_once_with("ubuntu22.04")

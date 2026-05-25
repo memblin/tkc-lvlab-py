@@ -349,6 +349,11 @@ class Machine:
         cloud_init_config = self._merge_cloud_init_config(
             config_defaults.get("cloud_init", {})
         )
+        # Default the first-boot user to the image's conventional account
+        # (debian/fedora/almalinux/...) when the manifest doesn't set one,
+        # using the same derivation createvm applies. An explicit
+        # cloud_init.user still wins.
+        cloud_init_config.setdefault("user", cloud_image.default_username)
 
         try:
             _, _, _, machines = parse_config()
@@ -503,6 +508,7 @@ class Machine:
         config_path: str,
         config_defaults: dict[str, Any],
         uri: str,
+        os_variant: str | None = None,
     ) -> bool:
         """Define and start the libvirt domain via ``virt-install``.
 
@@ -510,8 +516,14 @@ class Machine:
         resolved config: memory, vCPUs, the qcow2 at
         ``<config_path>/disk0.qcow2``, the cloud-init ISO at
         ``<config_path>/cidata.iso``, the first interface's libvirt
-        network, and the ``--os-variant`` derived by splitting
-        :attr:`os` on ``-`` and taking the first segment.
+        network, and the ``--os-variant``. The os-variant comes from
+        the resolved image entry when ``os_variant`` is supplied (so a
+        manifest's per-image ``os_variant`` override is honoured —
+        e.g. ``ubuntu22.04`` for an ``ubuntu2204`` key); otherwise it
+        falls back to splitting :attr:`os` on ``-`` and taking the
+        first segment. Either way it's run through
+        :func:`tkc_lvlab.utils.osinfo.resolve_os_variant` for osinfo-db
+        fuzzy fallback.
 
         ``--graphics vnc,listen=0.0.0.0`` is hard-coded; review before
         exposing the host on an untrusted network.
@@ -535,7 +547,7 @@ class Machine:
             ``virt-install`` raised :class:`subprocess.CalledProcessError`
             (the error and the assembled command line are logged).
         """
-        requested_variant = self.os.split("-")[0]
+        requested_variant = os_variant or self.os.split("-")[0]
         try:
             resolved_variant, fallback_reason = resolve_os_variant(requested_variant)
         except OsInfoLookupError as exc:

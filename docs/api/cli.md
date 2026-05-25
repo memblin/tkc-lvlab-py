@@ -11,6 +11,6 @@ extension is required.
 
 The standalone one-off workflow (`createvm` / `deletevm` console
 scripts in `tkc_lvlab.scripts`) does not flow through this module —
-they have their own Click entry points that talk to virsh directly.
+they have their own Typer entry points that talk to virsh directly.
 
 ::: tkc_lvlab.cli

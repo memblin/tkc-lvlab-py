@@ -311,11 +311,20 @@ def pick_static_ip(uri: str, network: str = "default") -> tuple[str, str] | None
         network: Network name to derive the subnet + DHCP range from.
 
     Returns:
-        ``(ip, netmask)`` as dotted-quad strings, or ``None`` when no
-        address exists outside the DHCP range.
+        ``(ip, prefix_length)``, where ``ip`` is a dotted-quad string and
+        ``prefix_length`` is the CIDR prefix as a string (e.g. ``"24"``).
+        ``None`` when no address exists outside the DHCP range.
+
+        The prefix — not a dotted-quad netmask — is what ``createvm``'s
+        ``--netmask`` option expects (its default is ``"24"``). ``createvm``
+        appends it verbatim as ``f"{ip}/{netmask}"``; a dotted-quad here
+        would render ``192.168.122.x/255.255.255.0`` into the netplan
+        ``addresses`` list, which netplan silently rejects, leaving the
+        guest with no address.
     """
     gateway, netmask, start, end = network_ipv4_info(uri, network)
     subnet = ipaddress.IPv4Network(f"{gateway}/{netmask}", strict=False)
+    prefix = str(subnet.prefixlen)
     gw = ipaddress.IPv4Address(gateway)
     reserved = {subnet.network_address, subnet.broadcast_address, gw}
 
@@ -328,12 +337,12 @@ def pick_static_ip(uri: str, network: str = "default") -> tuple[str, str] | None
                 and candidate in subnet.hosts()
                 and not (pool_lo <= candidate <= pool_hi)
             ):
-                return str(candidate), netmask
+                return str(candidate), prefix
         return None
 
     # No DHCP range declared: any host address is fine; pick a high one.
     candidate = subnet.broadcast_address - 1
-    return (str(candidate), netmask) if candidate not in reserved else None
+    return (str(candidate), prefix) if candidate not in reserved else None
 
 
 def domain_lease_ipv4(uri: str, domain: str) -> str | None:

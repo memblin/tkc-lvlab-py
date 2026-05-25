@@ -85,6 +85,38 @@ pre-commit run --all-files
     default `88` still applies for new code — pylint just won't yell at lines
     that black accepted, like long string literals or URLs).
 
+- [just](https://github.com/casey/just) is the task runner for the common
+    workflows below. Every recipe just wraps the same `uv` / `pytest` /
+    `zensical` commands documented here, so `just` is a convenience, not a
+    requirement. Install it via your package manager (`dnf install just`,
+    `apt install just`, `cargo install just`, …).
+
+```bash
+# List every recipe
+just
+
+# Unit tests: current interpreter / with coverage / across 3.11–3.14
+just test
+just test-cov
+just test-matrix
+
+# Formatting + hygiene (pre-commit) and the integration-safety AST gate
+just lint
+just test-safety
+
+# Docs: strict build / live-reload serve
+just docs
+just docs-serve
+
+# Build the wheel, plus a fresh-venv install smoke check
+just build
+just build-smoke
+
+# Integration suites (libvirt host required; gated, never in CI)
+just integration              # every @pytest.mark.integration test
+just integration-createvm     # just the createvm/deletevm matrix
+```
+
 ## Unit tests
 
 The unit test suite runs against Python 3.11, 3.12, 3.13, and 3.14 in CI
@@ -171,6 +203,46 @@ log out and back in; `sg libvirt -c "…"` is an in-session escape
 hatch, **not** the intended invocation pattern for ongoing
 development work.
 
+### createvm / deletevm connectivity matrix
+
+`tests/test_integration_createvm.py` exercises **every image in
+`createvm`'s `BUILTIN_IMAGES` catalog in both addressing modes** — DHCP
+and static — on `qemu:///system` (createvm is system-only; the session
+URI parameter is skipped). Each case creates the VM, resolves its IP (the
+NAT DHCP lease via `virsh domifaddr` for DHCP, the assigned address for
+static), waits for first-boot SSH, and asserts the cloud-init default user
+(`id -un`). That one assertion proves connectivity **and** that `createvm`
+seeded the right user and public key, then `deletevm --force` removes it.
+
+The matrix is **serial by design**: each case tears its VM down (in a
+`finally`, then waits for the domain to disappear) before the next starts,
+so at most one test VM is ever live — no `pytest-xdist`. Run it with
+`just integration-createvm` or directly:
+
+```bash
+LVLAB_INTEGRATION=1 uv run pytest tests/test_integration_createvm.py -v
+```
+
+On a resource-constrained host, subset the matrix with two comma-separated
+env vars (default is the full catalog × both modes):
+
+```bash
+# One image, DHCP only — a single VM at a time
+LVLAB_TEST_DISTROS=debian13 LVLAB_TEST_MODES=dhcp \
+  just integration-createvm
+```
+
+**Static IP on the `default` network is gated.** `createvm` refuses an
+`--ip4` that falls inside the network's DHCP range, and libvirt's stock
+`default` network ranges over the whole usable subnet (`.2`–`.254`), so no
+valid static address exists on it. The static cases therefore **skip**
+with that explanation rather than fail, and the suite **never modifies
+your `default` network**. To exercise static addressing, narrow the
+network's DHCP range yourself (e.g. `.2`–`.199`, freeing `.200`–`.254`)
+and re-run, or use a dedicated test network. An opt-in, auto-reverting
+transient narrow is tracked in
+[#86](https://github.com/memblin/tkc-lvlab-py/issues/86).
+
 ## End-to-End Testing
 
 A smoke-test checklist for verifying CLI changes against a real
@@ -194,8 +266,9 @@ host setup:
 - **`qemu:///system`** — managed libvirt network (`default`).
     Requires the libvirt-group setup below so your user can write to
     `/var/lib/libvirt/images/` and reach the system daemon.
-- **`qemu:///session`** — user-mode networking
-    (`--network-type user` / `interfaces.network_type: user`).
+- **`qemu:///session`** — user-mode networking (manifest
+    `interfaces.network_type: user`; `createvm` itself is
+    `qemu:///system`-only).
     Rootless libvirt cannot manage a NAT network, so lvlab routes
     through virt-install's SLIRP/passt user-mode networking. **No
     libvirt network needs to exist** on the session URI; `virsh -c qemu:///session net-list` may legitimately be empty.
@@ -225,7 +298,7 @@ to drop), you can run any single command under the new group with
 `sg`:
 
 ```bash
-sg libvirt -c "uv run createvm smoketest --distro debian13"
+sg libvirt -c "uv run createvm smoketest debian13"
 sg libvirt -c "uv run lvlab up vault.local"
 sg libvirt -c "uv run lvlab destroy vault.local --force"
 ```

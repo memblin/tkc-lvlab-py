@@ -83,6 +83,13 @@ scripts/run-validation.sh
 #    LVLAB_INTEGRATION=1 uv run pytest tests/test_integration_*.py -v
 ```
 
+The createvm/deletevm connectivity matrix
+(`tests/test_integration_createvm.py`) can be narrowed on a
+resource-constrained host with `LVLAB_TEST_DISTROS` / `LVLAB_TEST_MODES`
+(comma-separated). Its static-IP cases skip unless the `default`
+network's DHCP range leaves room for an out-of-range address — see
+"createvm / deletevm connectivity matrix" in `docs-extra/CONTRIBUTING.md`.
+
 The unit suite should report `293 passed, 9 skipped` (Python 3.11–3.14;
 exact count drifts as tests are added — match the AlmaLinux 10
 baseline from the same git SHA, see "Latest validation" above).

@@ -42,6 +42,12 @@ uv build
 pre-commit run --all-files
 ```
 
+Common workflows are also wrapped as `just` recipes (run `just` to list them:
+`test`, `test-cov`, `test-matrix`, `lint`, `test-safety`, `docs`, `docs-serve`,
+`build`, `build-smoke`, `integration`, `integration-createvm`). Each recipe
+just wraps the equivalent command above — see `justfile` and the createvm/deletevm
+integration matrix notes in `docs-extra/CONTRIBUTING.md`.
+
 Python floor is `>=3.11` in `pyproject.toml`. The release workflow builds with 3.13.
 
 ## Architecture

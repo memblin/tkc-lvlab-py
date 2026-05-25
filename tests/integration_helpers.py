@@ -102,22 +102,6 @@ def network_type_for_uri(uri: str) -> str:
     return "user" if "session" in uri else "network"
 
 
-def createvm_network_args(uri: str) -> list[str]:
-    """Return the ``--network-type`` argv fragment createvm needs for ``uri``.
-
-    Mirror of :func:`network_type_for_uri` for the standalone
-    ``createvm`` surface. Tests spread the return value into the
-    subprocess argv so the same call works for both URIs.
-
-    Args:
-        uri: libvirt URI string.
-
-    Returns:
-        Two-element argv list ``["--network-type", <value>]``.
-    """
-    return ["--network-type", network_type_for_uri(uri)]
-
-
 def render_manifest(
     *,
     env_name: str,
@@ -222,7 +206,7 @@ def find_entry_point(name: str) -> str:
     """Resolve a console-script entry point's absolute path.
 
     ``uv run pytest`` puts ``.venv/bin`` on PATH, so the
-    ``lvlab`` / ``createvm`` / ``destroyvm`` scripts installed by
+    ``lvlab`` / ``createvm`` / ``deletevm`` scripts installed by
     ``uv sync`` resolve via ``shutil.which``. Fall back to
     :func:`pytest.fail` (not :func:`pytest.skip`) if the entry point is
     missing — that's a broken test environment, not a runtime skip
@@ -230,7 +214,7 @@ def find_entry_point(name: str) -> str:
 
     Args:
         name: Console-script name (``"lvlab"``, ``"createvm"``, or
-            ``"destroyvm"``).
+            ``"deletevm"``).
 
     Returns:
         Absolute path to the executable.

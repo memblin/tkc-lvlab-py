@@ -10,7 +10,7 @@ without needing ``LVLAB_INTEGRATION=1`` to be set.
 
 The check is intentionally narrow: it does NOT try to verify that every
 destructive subprocess in the test body has a matching guard, because
-the tests run real ``lvlab destroy --force`` / ``destroyvm --force``
+the tests run real ``lvlab destroy --force`` / ``deletevm --force``
 subprocesses that are themselves constrained by the
 ``make_test_name`` -> prefix invariant. The point of this lint is to
 make the absence of *any* guard impossible to miss.

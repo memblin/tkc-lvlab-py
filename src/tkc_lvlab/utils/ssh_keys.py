@@ -5,7 +5,7 @@ the first Phase 6 step — see ``docs-extra/lvscripts-survey.md`` §5 "Port + ad
 This module is a CLI-agnostic public library API: nothing here reads
 ``Lvlab.yml`` or shells out to ``virsh``/``qemu-img``/``virt-install``. Both
 the existing ``lvlab`` manifest workflow and the upcoming standalone
-``createvm`` / ``destroyvm`` console scripts will depend on it.
+``createvm`` / ``deletevm`` console scripts will depend on it.
 
 The whitelist of accepted key types is intentionally broader than
 :func:`tkc_lvlab.utils.cloud_init.UserData._is_valid_ssh_public_key`'s

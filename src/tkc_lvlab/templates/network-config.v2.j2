@@ -35,16 +35,22 @@ network:
       {%- if iface.ip4 %}
       addresses:
         - {{ iface.ip4 }}
-      {%- if config.nameservers.search is defined and config.nameservers.search | length > 0 %}
+      {%- set ns_addresses = config.nameservers.addresses if config.nameservers.addresses is defined else [] %}
+      {%- set ns_search = config.nameservers.search if config.nameservers.search is defined else [] %}
+      {%- if ns_addresses | length > 0 or ns_search | length > 0 %}
       nameservers:
-        search:
-          {%- for search_domain in config.nameservers.search %}
-          - {{ search_domain }}
-          {%- endfor %}
+        {%- if ns_addresses | length > 0 %}
         addresses:
-          {%- for dns_server in config.nameservers.addresses %}
+          {%- for dns_server in ns_addresses %}
           - {{ dns_server }}
           {%- endfor %}
+        {%- endif %}
+        {%- if ns_search | length > 0 %}
+        search:
+          {%- for search_domain in ns_search %}
+          - {{ search_domain }}
+          {%- endfor %}
+        {%- endif %}
       {%- endif %}
       routes:
         - to: 0.0.0.0/0

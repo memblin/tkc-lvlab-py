@@ -241,6 +241,28 @@ def virsh_domstate(uri: str, name: str) -> str:
     return result.stdout.strip().lower()
 
 
+def vm_exists(uri: str, name: str) -> bool:
+    """Return ``True`` when a libvirt domain named ``name`` is defined at ``uri``.
+
+    Uses ``virsh dominfo`` with ``check=False`` so a missing domain (nonzero
+    exit) reports ``False`` rather than raising. A missing ``virsh`` binary
+    also reports ``False`` — the caller's dependency precheck is responsible
+    for surfacing that earlier.
+
+    Args:
+        uri: libvirt connection URI.
+        name: The exact domain name to look up.
+
+    Returns:
+        ``True`` iff ``virsh dominfo <name>`` exits zero.
+    """
+    try:
+        result = run_virsh(uri, ["dominfo", name], check=False)
+    except VirshError:
+        return False
+    return result.returncode == 0
+
+
 def virsh_domstate_reason(uri: str, name: str) -> tuple[str, str]:
     """Return ``(state, reason)`` for ``name``.
 

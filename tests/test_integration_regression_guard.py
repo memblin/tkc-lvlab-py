@@ -1,38 +1,30 @@
-"""Integration test for the Phase 6 cross-surface architectural invariant.
+"""Integration test for the createvm/lvlab cross-surface isolation invariant.
 
-``createvm`` / ``destroyvm`` and ``lvlab`` are independent surfaces that
-must NEVER see each other's libvirt domains. Phase 6 locked this with
-two prefixes:
+`createvm` / `deletevm` (raw libvirt domain names) and `lvlab` (manifest
+names → `<vm>_<env>` domains) are independent surfaces. The invariant that
+matters now that the `oneoff-` prefix is gone is one-directional:
 
-- Standalone one-off VMs from ``createvm`` get the libvirt domain
-    ``oneoff-<vm_name>``.
-- Manifest VMs from ``lvlab`` get the libvirt domain
-    ``<vm_name>_<env_name>``.
+- **lvlab's manifest commands never see or touch a one-off VM.** `lvlab
+    status` must not list a `createvm`-made domain, and `lvlab destroy
+    <oneoff_name>` must be a no-op (the name isn't in the manifest), leaving
+    the one-off VM defined.
+- `deletevm` makes no such promise in reverse — it acts on the raw libvirt
+    name, so `deletevm <vm>_<env>` would intentionally remove a manifest
+    VM. That's by design and not tested here.
 
-This test exercises both halves of the invariant on a single
-parametrized URI run:
+This test exercises the invariant on the system URI (createvm is
+qemu:///system only; session is skipped):
 
-1. Create a one-off VM via ``createvm`` so a domain
-    ``oneoff-<vm_name_A>`` exists.
-2. Bring up a manifest VM via ``lvlab up`` so a separate domain
-    ``<vm_name_B>_<env_name>`` exists.
-3. Confirm both domains coexist on the same libvirt URI.
-4. ``lvlab status`` must report on the manifest VM only — it must NOT
-    list the one-off VM, even though both are visible to
-    ``virsh list``.
-5. ``destroyvm <vm_name_B> --force`` must fail with "not defined at
-    <uri>" — it's looking for ``oneoff-<vm_name_B>``, which doesn't
-    exist, and it must NOT silently fall through to looking up the
-    bare ``<vm_name_B>`` (which would match the manifest VM).
-6. The error must include the operator-helpful "use 'lvlab destroy'
-    instead" nudge.
-7. ``destroyvm <vm_name_A> --force`` must succeed (it finds
-    ``oneoff-<vm_name_A>``) and must NOT touch the manifest VM.
-8. After the targeted destroyvm, the manifest VM must still be
-    defined. ``lvlab destroy --force`` then cleans it up.
+1. `createvm` makes a one-off domain `<vm_A>`.
+2. `lvlab up` makes a manifest domain `<vm_B>_<env>`.
+3. Both coexist on the same URI.
+4. `lvlab status` reports the manifest VM only — never the one-off.
+5. `lvlab destroy <vm_A>` is a no-op (not in the manifest); the one-off
+    stays defined and the manifest VM is untouched.
+6. `deletevm <vm_A>` removes the one-off by its raw name.
 
-Gated by ``LVLAB_INTEGRATION=1``. Default test runs skip via the
-``integration`` marker.
+Gated by `LVLAB_INTEGRATION=1`. Default test runs skip via the
+`integration` marker.
 """
 
 from __future__ import annotations
@@ -44,7 +36,6 @@ import pytest
 
 from tests.conftest import assert_owned_by_test, make_test_name
 from tests.integration_helpers import (
-    createvm_network_args,
     find_entry_point,
     list_domains,
     render_manifest,
@@ -53,7 +44,7 @@ from tests.integration_helpers import (
 
 
 _CREATEVM_TIMEOUT_SECONDS = 300
-_DESTROYVM_TIMEOUT_SECONDS = 60
+_DELETEVM_TIMEOUT_SECONDS = 60
 _LVLAB_UP_TIMEOUT_SECONDS = 300
 _LVLAB_STATUS_TIMEOUT_SECONDS = 30
 _LVLAB_DESTROY_TIMEOUT_SECONDS = 60
@@ -66,50 +57,38 @@ def test_createvm_lvlab_cross_surface_isolation(
     test_ssh_pubkey_path: Path,
     tmp_path: Path,
 ) -> None:
-    """Two surfaces, two prefixes, no cross-contamination.
+    """lvlab's manifest surface stays blind to one-off VMs.
 
-    Creates one VM via each path so both coexist on the same libvirt
-    URI, then verifies that:
-
-    - ``lvlab status`` sees only the manifest VM (not the one-off).
-    - ``destroyvm <manifest-vm-name>`` fails with "not defined" — it
-        does not fall through to the manifest VM even when the bare
-        ``vm_name`` matches.
-    - The error message includes the "use 'lvlab destroy' instead"
-        nudge from ``destroyvm.py`` so operators get an actionable
-        message.
-    - ``destroyvm <oneoff-vm-name>`` cleans up only the one-off and
-        leaves the manifest VM untouched.
+    Creates one VM via each path so both coexist, then verifies that
+    ``lvlab status`` sees only the manifest VM and that ``lvlab destroy``
+    on the one-off's name is a no-op — while ``deletevm`` cleans the
+    one-off up by its raw libvirt name.
 
     Args:
-        integration_uri: libvirt URI parametrized by the
-            :func:`integration_uri` fixture (skipped per-URI if not
-            test-ready).
-        lvlab_integration_storage_root: libvirt-readable test storage
-            root (``/var/lib/libvirt/images/lvlab-test/``). Becomes
-            both createvm's ``--storage-root`` and the manifest's
+        integration_uri: libvirt URI parametrized by the ``integration_uri``
+            fixture. createvm targets qemu:///system, so session is skipped.
+        lvlab_integration_storage_root: libvirt-readable test storage root.
+            Becomes both createvm's ``--storage-root`` and the manifest's
             ``disk_image_basedir``.
-        tmp_path: pytest-managed scratch directory for the per-test
-            ``Lvlab.yml`` file.
+        test_ssh_pubkey_path: Path to a throwaway SSH public key.
+        tmp_path: pytest scratch dir for the per-test ``Lvlab.yml``.
     """
+    if "session" in integration_uri:
+        pytest.skip("createvm targets qemu:///system only")
+
     createvm = find_entry_point("createvm")
-    destroyvm = find_entry_point("destroyvm")
+    deletevm = find_entry_point("deletevm")
     lvlab = find_entry_point("lvlab")
-    pubkey_path = test_ssh_pubkey_path
 
-    uri_tag = "session" if "session" in integration_uri else "system"
-    oneoff_vm_name = make_test_name(f"regression-oneoff-{uri_tag}")
-    manifest_vm_name = make_test_name(f"regression-manifest-{uri_tag}")
-    env_name = make_test_name(f"regression-env-{uri_tag}")
+    oneoff_vm_name = make_test_name("regression-oneoff")
+    manifest_vm_name = make_test_name("regression-manifest")
+    env_name = make_test_name("regression-env")
 
-    expected_oneoff_domain = f"oneoff-{oneoff_vm_name}"
+    expected_oneoff_domain = oneoff_vm_name  # raw name, no prefix
     expected_manifest_domain = f"{manifest_vm_name}_{env_name}"
     assert_owned_by_test(expected_oneoff_domain)
     assert_owned_by_test(expected_manifest_domain)
 
-    # Manifest declares only the lvlab-side VM. The one-off is created
-    # via createvm and is INTENTIONALLY not in the manifest — that's
-    # the point of the invariant.
     manifest_path = tmp_path / "Lvlab.yml"
     manifest_path.write_text(
         render_manifest(
@@ -117,27 +96,19 @@ def test_createvm_lvlab_cross_surface_isolation(
             uri=integration_uri,
             storage_root=lvlab_integration_storage_root,
             vm_name=manifest_vm_name,
-            pubkey_path=pubkey_path,
+            pubkey_path=test_ssh_pubkey_path,
         )
     )
 
-    # Step 1: createvm makes the one-off VM. --copy keeps the per-VM
-    # qcow2 standalone (no backing-file tie to the shared cache) and
-    # --storage-root keeps artifacts inside the dedicated test root.
     create_result = subprocess.run(
         [
             createvm,
             oneoff_vm_name,
-            "--distro",
             "debian13",
-            "--uri",
-            integration_uri,
-            *createvm_network_args(integration_uri),
             "--storage-root",
             str(lvlab_integration_storage_root),
             "--public-key",
             str(test_ssh_pubkey_path),
-            "--copy",
             "--memory",
             "1024",
             "--cpu",
@@ -158,7 +129,6 @@ def test_createvm_lvlab_cross_surface_isolation(
             f"stderr:\n{create_result.stderr}"
         )
 
-        # Step 2: lvlab up brings up the manifest VM.
         up_result = subprocess.run(
             [lvlab, "up", manifest_vm_name],
             capture_output=True,
@@ -173,7 +143,6 @@ def test_createvm_lvlab_cross_surface_isolation(
             f"stderr:\n{up_result.stderr}"
         )
 
-        # Step 3: confirm both domains coexist on the same URI.
         domains_after_setup = list_domains(integration_uri)
         assert expected_oneoff_domain in domains_after_setup, (
             f"createvm reported success but {expected_oneoff_domain!r} "
@@ -184,7 +153,6 @@ def test_createvm_lvlab_cross_surface_isolation(
             f"missing from virsh list on {integration_uri}"
         )
 
-        # Step 4: lvlab status sees the manifest VM, not the one-off.
         status_result = subprocess.run(
             [lvlab, "status"],
             capture_output=True,
@@ -204,116 +172,71 @@ def test_createvm_lvlab_cross_surface_isolation(
             f"{manifest_vm_name!r}:\n{combined_status_output}"
         )
         assert oneoff_vm_name not in combined_status_output, (
-            f"lvlab status leaked the one-off VM name "
-            f"{oneoff_vm_name!r} into its output — the manifest "
-            f"surface must not see createvm-managed VMs:\n"
-            f"{combined_status_output}"
-        )
-        assert expected_oneoff_domain not in combined_status_output, (
-            f"lvlab status leaked the one-off domain "
-            f"{expected_oneoff_domain!r} into its output — the "
-            f"manifest surface must not see createvm-managed VMs:\n"
+            f"lvlab status leaked the one-off VM name {oneoff_vm_name!r} — "
+            f"the manifest surface must not see createvm-managed VMs:\n"
             f"{combined_status_output}"
         )
 
-        # Step 5 + 6: destroyvm on the manifest VM's bare name must
-        # fail (it looks for `oneoff-<name>`, finds nothing) AND must
-        # include the "lvlab destroy" nudge so operators are pointed
-        # at the right tool.
-        destroyvm_wrong_surface = subprocess.run(
-            [
-                destroyvm,
-                manifest_vm_name,
-                "--force",
-                "--uri",
-                integration_uri,
-                "--storage-root",
-                str(lvlab_integration_storage_root),
-            ],
+        # lvlab destroy on the one-off's name must be a no-op: the name is
+        # not in the manifest, so lvlab refuses to resolve it and must not
+        # remove the one-off domain.
+        lvlab_destroy_oneoff = subprocess.run(
+            [lvlab, "destroy", oneoff_vm_name, "--force"],
             capture_output=True,
             text=True,
             check=False,
-            timeout=_DESTROYVM_TIMEOUT_SECONDS,
+            timeout=_LVLAB_DESTROY_TIMEOUT_SECONDS,
+            cwd=tmp_path,
         )
-        assert destroyvm_wrong_surface.returncode != 0, (
-            f"destroyvm should have refused the manifest VM "
-            f"{manifest_vm_name!r} (no oneoff-{manifest_vm_name} domain "
-            f"exists), but it exited 0:\n"
-            f"stdout:\n{destroyvm_wrong_surface.stdout}\n"
-            f"stderr:\n{destroyvm_wrong_surface.stderr}"
-        )
-        destroyvm_wrong_combined = (
-            destroyvm_wrong_surface.stdout + destroyvm_wrong_surface.stderr
-        )
-        assert "not defined" in destroyvm_wrong_combined, (
-            f"destroyvm refused the manifest VM but the error did not "
-            f"say 'not defined' — the architectural error path may "
-            f"have regressed:\n{destroyvm_wrong_combined}"
-        )
-        assert "lvlab destroy" in destroyvm_wrong_combined, (
-            f"destroyvm refused the manifest VM but the error did not "
-            f"point at 'lvlab destroy' — the operator-helpful nudge "
-            f"may have regressed:\n{destroyvm_wrong_combined}"
+        assert expected_oneoff_domain in list_domains(integration_uri), (
+            f"lvlab destroy {oneoff_vm_name!r} removed a one-off VM that is "
+            f"not in the manifest — the manifest surface reached across the "
+            f"boundary:\nstdout:\n{lvlab_destroy_oneoff.stdout}\n"
+            f"stderr:\n{lvlab_destroy_oneoff.stderr}"
         )
 
-        # Confirm the failed destroyvm did NOT touch the manifest VM.
-        assert expected_manifest_domain in list_domains(integration_uri), (
-            f"destroyvm refused the manifest VM but the manifest "
-            f"domain {expected_manifest_domain!r} is no longer in "
-            f"virsh list — the architectural isolation has regressed "
-            f"and destroyvm killed something it should not have"
-        )
-
-        # Step 7: destroyvm on the one-off's bare name succeeds.
-        destroyvm_correct_surface = subprocess.run(
+        # deletevm removes the one-off by its raw libvirt name.
+        deletevm_result = subprocess.run(
             [
-                destroyvm,
+                deletevm,
                 oneoff_vm_name,
                 "--force",
-                "--uri",
-                integration_uri,
                 "--storage-root",
                 str(lvlab_integration_storage_root),
             ],
             capture_output=True,
             text=True,
             check=False,
-            timeout=_DESTROYVM_TIMEOUT_SECONDS,
+            timeout=_DELETEVM_TIMEOUT_SECONDS,
         )
-        assert destroyvm_correct_surface.returncode == 0, (
-            f"destroyvm on the one-off VM failed (exit "
-            f"{destroyvm_correct_surface.returncode}):\n"
-            f"stdout:\n{destroyvm_correct_surface.stdout}\n"
-            f"stderr:\n{destroyvm_correct_surface.stderr}"
+        assert deletevm_result.returncode == 0, (
+            f"deletevm on the one-off VM failed (exit "
+            f"{deletevm_result.returncode}):\n"
+            f"stdout:\n{deletevm_result.stdout}\n"
+            f"stderr:\n{deletevm_result.stderr}"
         )
         wait_for_no_domain(integration_uri, expected_oneoff_domain)
 
-        # Step 8: the manifest VM survived the targeted destroyvm.
         assert expected_manifest_domain in list_domains(integration_uri), (
-            f"destroyvm of the one-off succeeded but the manifest "
-            f"domain {expected_manifest_domain!r} also disappeared — "
-            f"the architectural isolation has regressed and "
-            f"destroyvm reached across the surface boundary"
+            f"deletevm of the one-off succeeded but the manifest domain "
+            f"{expected_manifest_domain!r} also disappeared — deletevm "
+            f"reached across the surface boundary"
         )
     finally:
-        # Best-effort cleanup of both halves. Each subprocess call
-        # below tolerates non-zero exits because we want both to run
-        # even if one fails; the session reapers are the final
+        # Best-effort cleanup of both halves; session reapers are the final
         # safety net.
         subprocess.run(
             [
-                destroyvm,
+                deletevm,
                 oneoff_vm_name,
                 "--force",
-                "--uri",
-                integration_uri,
                 "--storage-root",
                 str(lvlab_integration_storage_root),
             ],
             capture_output=True,
             text=True,
             check=False,
-            timeout=_DESTROYVM_TIMEOUT_SECONDS,
+            timeout=_DELETEVM_TIMEOUT_SECONDS,
         )
         subprocess.run(
             [lvlab, "destroy", manifest_vm_name, "--force"],

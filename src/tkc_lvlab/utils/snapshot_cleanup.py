@@ -1,6 +1,6 @@
 """Snapshot deletion + undefine helpers with the lvscripts-style fallback.
 
-Phase 6 step 5. Standalone ``destroyvm`` and the manifest ``Machine.destroy``
+Phase 6 step 5. Standalone ``deletevm`` and the manifest ``Machine.destroy``
 both need to deal with the same libvirt awkwardness: ``virsh undefine``
 refuses to drop a domain that owns snapshots, and ``virsh snapshot-delete``
 itself can fail when the snapshot has *external* children (the common case

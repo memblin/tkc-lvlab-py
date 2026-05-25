@@ -115,7 +115,7 @@ production `/var/lib/libvirt/images/oneoff/` path that the real
 /var/lib/libvirt/images/lvlab-test/
 ```
 
-Tests must pass this path to both `createvm` and `destroyvm` via
+Tests must pass this path to both `createvm` and `deletevm` via
 `--storage-root`. The `lvlab_integration_storage_root` session-scoped
 fixture in `tests/conftest.py` exposes the path; use that, don't
 hard-code the string.

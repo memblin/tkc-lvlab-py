@@ -22,7 +22,7 @@ and defaults match the Click implementation. Typer's underlying Click
 runtime keeps the test surface (``click.testing.CliRunner`` on the
 ``app`` Typer instance) working unchanged.
 
-The standalone one-off workflow (``createvm`` / ``destroyvm`` console
+The standalone one-off workflow (``createvm`` / ``deletevm`` console
 scripts in :mod:`tkc_lvlab.scripts`) still uses Click directly — this
 module does not flow through them.
 """

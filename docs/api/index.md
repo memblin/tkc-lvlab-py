@@ -28,7 +28,7 @@ via [mkdocstrings](https://mkdocstrings.github.io/).
 ### `tkc_lvlab.scripts`
 
 - [`tkc_lvlab.scripts.createvm`](scripts/createvm.md) — standalone one-off VM creation.
-- [`tkc_lvlab.scripts.destroyvm`](scripts/destroyvm.md) — standalone one-off VM removal.
+- [`tkc_lvlab.scripts.deletevm`](scripts/deletevm.md) — standalone one-off VM removal.
 
 Phase 7 (legacy docstring + type-hint conversion) is now complete —
 every module in the source tree is rendered above.

@@ -7,7 +7,7 @@ section of ``docs-extra/CONTRIBUTING.md`` for the storage and naming
 conventions every test here must follow.
 
 The manifest workflow has a wider blast radius than the standalone
-``createvm`` / ``destroyvm`` scripts: lvlab namespaces its libvirt
+``createvm`` / ``deletevm`` scripts: lvlab namespaces its libvirt
 domains as ``<vm_name>_<env_name>`` and places per-VM artifacts
 under ``<disk_image_basedir>/<env_name>/<vm_name>/``. To keep the
 session domain + storage reapers effective without making them

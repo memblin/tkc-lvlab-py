@@ -56,7 +56,7 @@ The same wheel installs three console scripts on your PATH:
 
 - `lvlab` — manifest workflow (drives `Lvlab.yml`).
 - `createvm` — one-off VM creation. Does not read `Lvlab.yml`.
-- `destroyvm` — one-off VM removal (matches `createvm`). Does not see manifest VMs.
+- `deletevm` — one-off VM removal by raw libvirt domain name (matches `createvm`). Use `lvlab destroy` for manifest VMs.
 
 ## Usage
 
@@ -70,32 +70,33 @@ the base image information.
 ## One-off VMs
 
 When you want a single VM without writing an `Lvlab.yml` manifest, use
-`createvm` / `destroyvm`. They share the same library code as `lvlab`
-but are intentionally separate at the command-line surface — they will
-not read your manifest and will not touch any VM `lvlab` manages.
+`createvm` / `deletevm` — faithful ports of the `lvscripts-py`
+`createvm` / `deletevm` commands. `createvm` resolves its positional
+`VM_DISTRO` against a built-in image catalog merged with the `images:`
+section of an `Lvlab.yml` in the current directory (if present), and
+shares the cloud-image cache with `lvlab up`. Both target
+`qemu:///system` and use raw libvirt domain names. (`lvlab destroy <vm>`
+is the manifest-scoped deleter; `deletevm` is the raw-name one.)
 
 ```bash
-# Create a one-off VM. Domain name on libvirt is "oneoff-testvm.local"
-# (the oneoff- prefix is what keeps it distinguishable from lvlab's
-# <vm_name>_<env> manifest VMs).
-sudo createvm testvm.local --distro debian12
+# Create a one-off VM. The libvirt domain is the raw name you pass.
+# VM_NAME and VM_DISTRO are positional.
+sudo createvm testvm.local debian12
 
-# Same, but with a static IP (validated against the network's
-# subnet + DHCP range before any VM state is written).
-sudo createvm testvm.local --distro debian13 --ip4 192.168.122.50
+# Same, but with a static IP (validated against the network's subnet +
+# DHCP range, then rendered into the guest's network-config).
+sudo createvm testvm.local debian13 --ip4 192.168.122.50
 
-# Same, but with a standalone qcow2 disk (cp + qemu-img resize) so
-# you can wipe and re-init the cloud-images dir later without
-# breaking this VM.
-sudo createvm testvm.local --distro debian12 --copy
+# Pre-download every catalog image (built-ins + any cwd Lvlab.yml).
+sudo createvm --init-cloud-images
 
-# Destroy a one-off VM. Errors out if the libvirt domain doesn't
-# carry the oneoff- prefix, so you can't accidentally remove a
-# manifest VM by typing the short name.
-sudo destroyvm testvm.local --force
+# Delete a VM by its raw libvirt domain name (destroy + undefine +
+# remove the one-off dir if present). No Lvlab.yml translation, so a
+# short manifest name won't resolve — but a full <vm>_<env> domain will.
+sudo deletevm testvm.local --force
 ```
 
-See `createvm --help` and `destroyvm --help` for the full flag list.
+See `createvm --help` and `deletevm --help` for the full flag list.
 
 ## Help Output
 

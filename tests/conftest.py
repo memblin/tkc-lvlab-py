@@ -359,7 +359,7 @@ _INTEGRATION_URIS: tuple[str, ...] = ("qemu:///session", "qemu:///system")
 # Dedicated test-only storage root, kept distinct from the production
 # ``/var/lib/libvirt/images/oneoff/`` directory that ``createvm`` uses
 # by default. Tests must pass ``--storage-root <this path>`` to both
-# ``createvm`` and ``destroyvm`` so per-VM artifacts never share a
+# ``createvm`` and ``deletevm`` so per-VM artifacts never share a
 # parent dir with a real user's one-off VMs.
 #
 # Convention: createvm.py already passes ``exist_ok=False`` to the
@@ -492,7 +492,7 @@ def integration_uri(request: pytest.FixtureRequest) -> str:
 def lvlab_integration_storage_root() -> Path:
     """Expose the libvirt-readable test storage root.
 
-    Tests pass this path to ``createvm`` / ``destroyvm`` via
+    Tests pass this path to ``createvm`` / ``deletevm`` via
     ``--storage-root`` so per-VM artifacts land in a dedicated,
     qemu-traversable directory — distinct from the production
     ``/var/lib/libvirt/images/oneoff/`` that real users' one-off VMs
@@ -517,7 +517,7 @@ def _reap_test_prefixed_storage() -> None:
 
     Companion to :func:`_reap_test_prefixed_domains`. The domain reaper
     handles libvirt state; this handles the qcow2 / cloud-init ISO
-    state that ``destroyvm`` would normally remove but which can
+    state that ``deletevm`` would normally remove but which can
     survive a crashing test. Walks ONLY directories matching the
     per-session prefix (plain or ``oneoff-`` prefixed); never iterates
     over unrelated entries.

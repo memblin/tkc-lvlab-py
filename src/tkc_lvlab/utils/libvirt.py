@@ -8,7 +8,7 @@ parsed-manifest tuple and dispatches operations against
 ``libvirt-python`` import lives in this module — Phase 2 removed that
 C-extension dependency.
 
-The standalone one-off workflow (``createvm`` / ``destroyvm``) does not
+The standalone one-off workflow (``createvm`` / ``deletevm``) does not
 use this module — it talks to virsh directly via the helpers in
 :mod:`tkc_lvlab.utils.virsh`,
 :mod:`tkc_lvlab.utils.snapshot_cleanup`,

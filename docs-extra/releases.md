@@ -6,11 +6,17 @@ version bump.
 
 `.github/workflows/build-release.yml` triggers on a tag push matching
 `X.Y.Z`, builds a wheel with `uv build`, and uploads the artifact to
-a GitHub release. Two hard requirements:
+a GitHub release. The package version is derived from the tag itself
+by `uv-dynamic-versioning` (Hatchling build backend) — there is **no
+`version` field in `pyproject.toml` to keep in sync**. Two things to
+know:
 
-- The tag's name **must match** the `version` field in `pyproject.toml`
-    exactly, or the workflow looks for an artifact filename that
-    doesn't exist.
+- The tag **is** the version. Building from the exact tagged commit
+    yields a clean version (`0.3.1` from tag `0.3.1`), so the workflow
+    uploads `tkc_lvlab-<tag>-py3-none-any.whl`. This relies on the
+    release workflow checking out full history (`fetch-depth: 0`,
+    already configured); a shallow checkout would hide the tag and
+    produce a `0.0.0.devN` fallback version instead.
 - A release-notes file **must exist** at
     `.github/release-notes/X.Y.Z.md` in the tagged commit, must be
     non-empty, and must not still contain the template sentinel. The
@@ -31,35 +37,21 @@ a GitHub release. Two hard requirements:
     Replace the template sentinel and every `<placeholder>`. Trim
     sections that don't apply.
 
-1. **Bump the version in `pyproject.toml`.** The `uv_build` PEP 517
-    backend has no `uv version` sub-command analogous to `poetry version`
-    — edit the field directly.
-
-    ```toml
-    [project]
-    name = "tkc-lvlab"
-    version = "0.3.1"   # bumped from 0.3.0
-    ```
-
-    Semver as a reminder: patch (`0.3.0` → `0.3.1`), minor (`0.3.0` →
-    `0.4.0`), major (`0.3.0` → `1.0.0`).
-
-1. **Regenerate the lockfile** so the wheel build picks up the new
-    version cleanly:
+1. **Commit the notes file on `main`** and push. There is **no
+    version bump** — the version comes from the tag at build time, so
+    this commit carries only the notes file:
 
     ```bash
-    uv lock
-    ```
-
-1. **Commit on `main`** with all three files in one commit:
-
-    ```bash
-    git add pyproject.toml uv.lock .github/release-notes/0.3.1.md
-    git commit -m "chore: bump version to 0.3.1"
+    git add .github/release-notes/0.3.1.md
+    git commit -m "docs: add 0.3.1 release notes"
     git push
     ```
 
-1. **Tag and push the tag.** The tag triggers the release workflow.
+1. **Tag and push the tag.** The tag name *is* the version — nothing
+    in `pyproject.toml` to bump. The semver decision is made here when
+    you choose the tag: patch (`0.3.0` → `0.3.1`), minor (`0.3.0` →
+    `0.4.0`), major (`0.3.0` → `1.0.0`). Tag a commit on `main` that
+    already contains the notes file.
 
     ```bash
     git tag -m 'v0.3.1' 0.3.1
@@ -111,19 +103,18 @@ pre-release in the UI, and `pip install tkc-lvlab` (without
 `--pre`) will not promote it over the latest stable.
 
 Procedure is identical to a stable release — same per-tag notes file
-under `.github/release-notes/`, same `pyproject.toml` version bump
-(use the same suffix in the version string), same tag-and-push:
+under `.github/release-notes/`, same commit-then-tag. The pre-release
+suffix lives only in the tag name:
 
 ```bash
-# pyproject.toml: version = "0.4.0rc1"
 cp .github/release-notes/_template.md .github/release-notes/0.4.0rc1.md
 $EDITOR .github/release-notes/0.4.0rc1.md
-git add pyproject.toml uv.lock .github/release-notes/0.4.0rc1.md
-git commit -m "chore: bump version to 0.4.0rc1"
+git add .github/release-notes/0.4.0rc1.md
+git commit -m "docs: add 0.4.0rc1 release notes"
 git push
 git tag -m 'v0.4.0rc1' 0.4.0rc1
 git push --tags
 ```
 
-The wheel artifact name follows the version field exactly:
+The wheel artifact name follows the tag exactly:
 `tkc_lvlab-0.4.0rc1-py3-none-any.whl`.

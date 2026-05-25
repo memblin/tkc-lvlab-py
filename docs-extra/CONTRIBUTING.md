@@ -43,7 +43,8 @@ The project uses..
 
 - [uv](https://docs.astral.sh/uv/) for dependency management and packaging.
     Install via the [official installer](https://docs.astral.sh/uv/getting-started/installation/).
-    The build backend is `uv_build` (declared in `pyproject.toml`).
+    The build backend is Hatchling with `uv-dynamic-versioning` for
+    git-tag-based versions (both declared in `pyproject.toml`).
 
 These are some common uv commands:
 

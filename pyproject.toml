@@ -1,10 +1,10 @@
 [build-system]
-requires = ["uv_build>=0.11.16,<0.12"]
-build-backend = "uv_build"
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
 
 [project]
 name = "tkc-lvlab"
-version = "0.3.0"
+dynamic = ["version"]
 description = "The Libvirt Labs project provides the `lvlab` Python application which can be used to manage Libvirt based development environments in a familiar way."
 authors = [
     {name = "Chris Row", email = "1418370+memblin@users.noreply.github.com"},
@@ -28,9 +28,23 @@ lvlab = "tkc_lvlab.cli:run"
 createvm = "tkc_lvlab.scripts.createvm:run"
 deletevm = "tkc_lvlab.scripts.deletevm:run"
 
-[tool.uv.build-backend]
-module-root = "src"
-module-name = "tkc_lvlab"
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+vcs = "git"
+style = "pep440"
+bump = true
+# This repo's tags are unprefixed (0.3.0, not v0.3.0); dunamai's default
+# pattern expects a "v" prefix and would otherwise match no tag.
+pattern = "default-unprefixed"
+fallback-version = "0.0.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tkc_lvlab"]
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [dependency-groups]
 dev = [

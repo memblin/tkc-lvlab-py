@@ -21,7 +21,7 @@ Because state lives in libvirt + on-disk qcow2 files, **bugs here can damage rea
 
 ## Build / dev / lint commands
 
-This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: `uv_build`). CI runs pre-commit and the pytest matrix (Python 3.11/3.12/3.13/3.14) on every PR and push to `main`. Integration tests (`@pytest.mark.integration`) are gated by `LVLAB_INTEGRATION=1` and **never** enabled in CI — see `tests/conftest.py` and the "Integration tests" safety rules in the Testing conventions section below. Don't claim a behavior is "tested" because CI is green — that only covers what someone wrote a unit test for. For changes that touch `virsh`, also do a manual smoke test against `qemu:///session` before reporting done.
+This project uses [uv](https://docs.astral.sh/uv/) (PEP 517 backend: Hatchling, with `uv-dynamic-versioning` deriving the package version from git tags). CI runs pre-commit and the pytest matrix (Python 3.11/3.12/3.13/3.14) on every PR and push to `main`. Integration tests (`@pytest.mark.integration`) are gated by `LVLAB_INTEGRATION=1` and **never** enabled in CI — see `tests/conftest.py` and the "Integration tests" safety rules in the Testing conventions section below. Don't claim a behavior is "tested" because CI is green — that only covers what someone wrote a unit test for. For changes that touch `virsh`, also do a manual smoke test against `qemu:///session` before reporting done.
 
 The CLI shells out to `virsh` (and `qemu-img`, `virt-install`) for all hypervisor operations — there is no longer a `libvirt-python` C extension dependency, so `uv sync` works without `libvirt-dev` / `pkg-config` on the host. Lab functionality still requires `libvirt-clients` (or equivalent) for the `virsh` binary at runtime.
 
@@ -83,7 +83,7 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 
 ### Templates
 
-`src/tkc_lvlab/templates/` contains the Jinja2 templates loaded via `PackageLoader("tkc_lvlab")`. `uv_build` auto-includes every file under the module root (`src/tkc_lvlab/`, set via `[tool.uv.build-backend] module-root = "src"` in `pyproject.toml`), so new templates ship automatically — but verify with `unzip -l dist/*.whl | grep templates` after a `uv build` if you add one.
+`src/tkc_lvlab/templates/` contains the Jinja2 templates loaded via `PackageLoader("tkc_lvlab")`. Hatchling ships every file inside the package directory (`src/tkc_lvlab/`, configured via `[tool.hatch.build.targets.wheel] packages = ["src/tkc_lvlab"]` in `pyproject.toml`), so new templates ship automatically — but verify with `unzip -l dist/*.whl | grep templates` after a `uv build` if you add one.
 
 - `network-config.v1.j2` and `network-config.v2.j2` — selected by `image.network_version` (1 = ENI-style, 2 = netplan-style). Each image entry in the manifest pins which version cloud-init should emit. The v2 template uses netplan `match.driver: virtio_net` + `set-name: {{ iface.name }}` so the manifest's `iface.name` is operator-chosen (renames the matched NIC) rather than a kernel device name the operator has to guess per distro. Multi-NIC manifests are a documented limitation — netplan `set-name` only works reliably when match resolves to a single device; multi-NIC needs per-interface MAC matching, not yet supported.
 - `hosts.j2` renders both stdout-friendly output and a `cat <<EOF` heredoc form for runcmd injection.
@@ -308,4 +308,4 @@ The remote `origin` is configured for SSH (`git@github.com:...`) but the gh PAT 
 
 ## Releasing
 
-Tagging `X.Y.Z` on `main` triggers `.github/workflows/build-release.yml`, which runs `poetry build` and uploads the wheel to a GitHub release. Bump `version` in `pyproject.toml` to match the tag before pushing it, or the artifact filename won't line up with the release.
+Tagging `X.Y.Z` on `main` triggers `.github/workflows/build-release.yml`, which runs `uv build` and uploads the wheel to a GitHub release. The version is derived from the git tag by `uv-dynamic-versioning` (Hatchling backend) — there is **no `version` field in `pyproject.toml` to bump**; the tag name *is* the version. The release workflow checks out full history (`fetch-depth: 0`, already set) so the tag resolves to a clean version rather than a `…devN+g<hash>` fallback. Full procedure in `docs-extra/releases.md`.

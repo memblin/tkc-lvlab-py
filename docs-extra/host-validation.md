@@ -98,6 +98,13 @@ both `qemu:///session` and `qemu:///system` reachable; URIs that
 aren't ready are skipped with a clear reason rather than failing
 the run.
 
+For an end-to-end check of the **declarative manifest path**
+(`lvlab up`/`down`/`destroy`) across every default image — one static
+and one DHCP machine per distro, with SSH verified — run the manual
+smoke bundle in `docs-extra/smoke/` (`./run-smoke.sh`; see its
+`README.md`). It complements the createvm/deletevm suite, which covers
+the standalone scripts rather than the manifest workflow.
+
 ## What to record from each host run
 
 `scripts/run-validation.sh` already captures everything below into a

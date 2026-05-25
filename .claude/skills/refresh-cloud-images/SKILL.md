@@ -36,18 +36,18 @@ and EOL rows always wait on the user.
 
 ## Files this skill edits
 
-Three files stay in lockstep — every entry that appears in more than
+Four files stay in lockstep — every entry that appears in more than
 one must be updated in all of them together. Never edit only one.
 
 - `tkc_lvlab/scripts/createvm.py` — the `BUILTIN_IMAGES` dict for the
     standalone `createvm` console script. Currently
-    `{debian12, debian13, fedora44}`. Each value uses the **same schema
-    as an `Lvlab.yml` `images:` entry** (`image_url`, `checksum_url`,
-    `checksum_type`, `checksum_url_gpg`, `network_version`). The
-    `os_variant` and `username` keys are **optional**: `createvm` derives
-    them from the entry key (e.g. `fedora44` → os_variant `fedora44`,
-    user `fedora`), so only add them to a dict when the derivation would
-    be wrong.
+    `{debian12, debian13, fedora44, almalinux10}`. Each value uses the
+    **same schema as an `Lvlab.yml` `images:` entry** (`image_url`,
+    `checksum_url`, `checksum_type`, `checksum_url_gpg`,
+    `network_version`). The `os_variant` and `username` keys are
+    **optional**: `createvm` derives them from the entry key (e.g.
+    `fedora44` → os_variant `fedora44`, user `fedora`), so only add them
+    to a dict when the derivation would be wrong.
 - `Lvlab.yml` (repo root) — the maintainer's working manifest, also a
     de-facto example for users who clone the repo. `images:` section.
 - `docs/Lvlab.example.yml` — the canonical example for new users.
@@ -56,6 +56,14 @@ one must be updated in all of them together. Never edit only one.
     extension. Wider catalog than `BUILTIN_IMAGES` (currently
     lists debian12, debian13, almalinux10, fedora44 plus two
     custom intranet images).
+- `docs-extra/smoke/Lvlab.yml` — the manifest-path smoke-test manifest
+    (`docs-extra/smoke/README.md`). Its `images:` section must carry
+    every shipping default image, and it additionally defines one
+    `*-static` + one `*-dhcp` machine per image. On a `PROPOSE-ADD` /
+    `PROPOSE-REMOVE`, update its `images:` AND add/remove the machine
+    pair, plus the matching row in `docs-extra/smoke/run-smoke.sh`'s
+    `PAIRS` table (pick a free static IP outside the DHCP range). On a
+    plain intra-major `UPDATE`, only the `images:` URLs change.
 
 When a `PROPOSE-REMOVE` row is confirmed, also sweep the rendered
 `docs/` user-guide pages (walkthrough.md, why.md, libvirt-notes.md,

@@ -1,0 +1,112 @@
+---
+# Smoke-test manifest: each currently-shipping cloud image, one static
+# and one DHCP machine apiece. Validates the lvlab up/down manifest path
+# and the MAC-matching network-config fix across distros.
+environment:
+  - name: smoke
+    libvirt_uri: qemu:///system
+    config_defaults:
+      domain: local
+      cpu: 1
+      memory: 1024
+      disks:
+        - name: primary
+          size: 12G
+      interfaces:
+        network: default
+        network_type: network
+        nameservers:
+          search: [local]
+          addresses: [192.168.122.1]
+      cloud_init:
+        pubkey: ~/.ssh/id_ed25519.pub
+        sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+        shell: /bin/bash
+
+    machines:
+      # --- Debian 12 ---
+      - vm_name: deb12-static
+        hostname: deb12-static
+        os: debian12
+        cloud_init: {user: debian}
+        interfaces:
+          - name: eth0
+            ip4: 192.168.122.190/24
+            ip4gw: 192.168.122.1
+      - vm_name: deb12-dhcp
+        hostname: deb12-dhcp
+        os: debian12
+        cloud_init: {user: debian}
+        interfaces:
+          - name: eth0
+
+      # --- Debian 13 ---
+      - vm_name: deb13-static
+        hostname: deb13-static
+        os: debian13
+        cloud_init: {user: debian}
+        interfaces:
+          - name: eth0
+            ip4: 192.168.122.191/24
+            ip4gw: 192.168.122.1
+      - vm_name: deb13-dhcp
+        hostname: deb13-dhcp
+        os: debian13
+        cloud_init: {user: debian}
+        interfaces:
+          - name: eth0
+
+      # --- Fedora 44 ---
+      - vm_name: fed44-static
+        hostname: fed44-static
+        os: fedora44
+        cloud_init: {user: fedora}
+        interfaces:
+          - name: eth0
+            ip4: 192.168.122.192/24
+            ip4gw: 192.168.122.1
+      - vm_name: fed44-dhcp
+        hostname: fed44-dhcp
+        os: fedora44
+        cloud_init: {user: fedora}
+        interfaces:
+          - name: eth0
+
+      # --- AlmaLinux 10 ---
+      - vm_name: alma10-static
+        hostname: alma10-static
+        os: almalinux10
+        cloud_init: {user: almalinux}
+        interfaces:
+          - name: eth0
+            ip4: 192.168.122.193/24
+            ip4gw: 192.168.122.1
+      - vm_name: alma10-dhcp
+        hostname: alma10-dhcp
+        os: almalinux10
+        cloud_init: {user: almalinux}
+        interfaces:
+          - name: eth0
+
+images:
+  debian12:
+    image_url: https://cloud.debian.org/images/cloud/bookworm/20260518-2482/debian-12-generic-amd64-20260518-2482.qcow2
+    checksum_url: https://cloud.debian.org/images/cloud/bookworm/20260518-2482/SHA512SUMS
+    checksum_type: sha512
+    network_version: 2
+  debian13:
+    image_url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+    checksum_url: https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
+    checksum_type: sha512
+    network_version: 2
+  fedora44:
+    image_url: https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
+    checksum_url: https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-44-1.7-x86_64-CHECKSUM
+    checksum_url_gpg: https://fedoraproject.org/fedora.gpg
+    checksum_type: sha256
+    network_version: 2
+  almalinux10:
+    image_url: https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2
+    checksum_url: https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/CHECKSUM
+    checksum_type: sha256
+    network_version: 2

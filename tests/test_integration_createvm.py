@@ -65,6 +65,14 @@ from tests.integration_helpers import (
 _CREATEVM_TIMEOUT_SECONDS = 600
 _DELETEVM_TIMEOUT_SECONDS = 120
 
+# createvm copies the base image then runs ``qemu-img resize <disk> <size>``.
+# That resize must be a *grow*: qemu-img refuses to shrink below the base
+# image's virtual size without ``--shrink``. The largest base we test is
+# AlmaLinux 10 GenericCloud (10 GiB virtual), so the test disk size has to
+# exceed that for every distro. qcow2 grow-resize is metadata-only (sparse),
+# so a larger virtual size costs nothing on disk beyond the copied base.
+_TEST_DISK_SIZE = "12G"
+
 
 def _env_subset(env_var: str, allowed: Sequence[str]) -> list[str]:
     """Return ``allowed`` filtered by a comma-separated env var (or all).
@@ -159,7 +167,7 @@ def test_createvm_connectivity_and_deletevm(
         "--cpu",
         "1",
         "--disk-size",
-        "5G",
+        _TEST_DISK_SIZE,
     ]
     static_ip = ""
     if mode == "static":

@@ -1,24 +1,27 @@
-"""Standalone ``destroyvm`` console script — one-off VM removal.
+"""Standalone ``destroyvm`` console script — VM removal by raw domain name.
 
-Phase 6 step 5. The companion to ``createvm``. Translates the
-user-supplied short name into the ``oneoff-<vm_name>`` libvirt domain,
-forcibly powers it off, undefines (with snapshot fallback), and removes
-the storage directory.
+The companion to ``createvm``. Operates on **raw libvirt domain names**,
+matching the ``lvscripts-py`` reference: it looks up exactly the name you
+pass, forcibly powers it off, undefines (with snapshot fallback), and
+removes the per-VM storage directory.
 
-Per the Phase 6 architecture lock, ``destroyvm`` MUST NOT read
-``Lvlab.yml`` and MUST NOT operate on names that don't start with the
-``oneoff-`` prefix on the libvirt side. The user types
-``destroyvm testvm.local`` and we look up domain ``oneoff-testvm.local``
-— if it's not present, that's the end of it (we do NOT silently fall
-through to looking up the bare ``testvm.local``, which could be a
-manifest VM).
+``destroyvm`` does NOT read ``Lvlab.yml`` — short manifest names like
+``web01`` are not translated into their ``<vm_name>_<env>`` domain. But
+because the lookup is the raw name, passing the actual domain name of a
+manifest VM (e.g. ``destroyvm web01_lab``) WILL destroy it if it exists.
+There is no ``oneoff-`` guard. The confirmation prompt (skip with
+``--force``) echoes the exact domain about to be removed — that is the
+guard against deleting the wrong VM.
 
-Phase 9 follow-up ported this file from Click to Typer. The UX
-contract is preserved: same option names, same defaults, same exit
-codes, same error-message phrasing. ``run = app`` is kept as a
-backwards-compat alias so the pyproject ``[project.scripts]`` entry
-point (``tkc_lvlab.scripts.destroyvm:run``) and test imports continue
-to work unchanged.
+Note: a manifest VM's disks live at
+``/var/lib/libvirt/images/lvlab/<env>/<vm>/diskN.qcow2``, which the
+one-off storage convention (``<storage-root>/<name>/``) won't match — so
+destroying a manifest domain by raw name undefines it but leaves its disk
+files behind.
+
+``run = app`` is kept as a backwards-compat alias so the pyproject
+``[project.scripts]`` entry point (``tkc_lvlab.scripts.destroyvm:run``)
+and test imports continue to work unchanged.
 
 Wired up as a console script via
 ``[project.scripts] destroyvm = "tkc_lvlab.scripts.destroyvm:run"``.
@@ -39,15 +42,15 @@ from ..utils.virsh import (
     virsh_domstate,
     virsh_list_all_names,
 )
-from .createvm import domain_name_for, storage_dir_for
+from .createvm import storage_dir_for
 
 
 _DEFAULT_URI = "qemu:///system"
-_ONEOFF_STORAGE_ROOT = Path("/var/lib/libvirt/images/oneoff")
+_ONEOFF_STORAGE_ROOT = Path("/var/lib/libvirt/images/lvlab/oneoff")
 
 
 app = typer.Typer(
-    help="Destroy and undefine a one-off libvirt VM created by createvm.",
+    help="Destroy and undefine a libvirt VM by its raw domain name.",
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 
@@ -65,7 +68,10 @@ def _fail(message: str) -> typer.Exit:
 
 @app.command()
 def destroyvm(
-    vm_name: str = typer.Argument(..., help="Short name of the one-off VM."),
+    vm_name: str = typer.Argument(
+        ...,
+        help="Raw libvirt domain name to destroy (exactly as 'virsh list' shows it).",
+    ),
     force: bool = typer.Option(False, "--force", help="Skip the confirmation prompt."),
     uri: str = typer.Option(
         _DEFAULT_URI, "--uri", show_default=True, help="libvirt connection URI."
@@ -78,14 +84,13 @@ def destroyvm(
         help="Override the per-VM storage root (test seam).",
     ),
 ) -> None:
-    """Destroy and undefine the one-off VM named ``VM_NAME``.
+    """Destroy and undefine the libvirt domain named ``VM_NAME``.
 
-    Looks up the libvirt domain ``oneoff-<VM_NAME>``. If the prefix
-    isn't on the domain list, this exits with a clear error rather than
-    falling through to any other lookup — keeping the manifest workflow
-    fully invisible.
+    Looks up exactly ``VM_NAME`` on the domain list — no prefixing, no
+    ``Lvlab.yml`` translation. If it isn't defined, this exits with a
+    clear error.
     """
-    domain_name = domain_name_for(vm_name)
+    domain_name = vm_name
     vm_dir = storage_dir_for(vm_name, root=storage_root)
 
     try:
@@ -96,12 +101,7 @@ def destroyvm(
         ) from exc
 
     if domain_name not in present_domains:
-        # Important: the bare vm_name is NEVER looked up. A manifest VM
-        # that happened to share the short name stays invisible.
-        raise _fail(
-            f"One-off VM '{domain_name}' is not defined at {uri}. "
-            "(If you expected to manage a manifest VM, use 'lvlab destroy' instead.)"
-        )
+        raise _fail(f"No libvirt domain named '{domain_name}' is defined at {uri}.")
 
     if not force:
         typer.echo(

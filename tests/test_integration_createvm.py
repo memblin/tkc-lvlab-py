@@ -7,17 +7,19 @@ function in this module via the ``integration`` marker. See
 
 Every libvirt domain, qcow2 file, and cloud-init ISO this module
 creates is named via :func:`make_test_name` so the session reaper can
-clean up after a crashing test. Storage lives under the dedicated
-``/var/lib/libvirt/images/lvlab-test/`` directory (exposed via the
-:func:`lvlab_integration_storage_root` fixture), distinct from the
-production ``/var/lib/libvirt/images/oneoff/`` that real users' VMs
-occupy. ``createvm`` refuses to overwrite an existing per-VM dir
-(``mkdir(exist_ok=False)`` in the script), so a leftover prefixed
-directory from a crashed prior run becomes a loud failure rather than
-silent state corruption.
+clean up after a crashing test. Because ``createvm`` / ``destroyvm`` now
+use raw libvirt domain names, the domain name IS the prefixed
+``make_test_name`` value — the reaper still recognizes it. Storage lives
+under the dedicated ``/var/lib/libvirt/images/lvlab-test/`` directory
+(exposed via the :func:`lvlab_integration_storage_root` fixture),
+distinct from the production ``/var/lib/libvirt/images/lvlab/oneoff/``
+that real users' VMs occupy. ``createvm`` refuses to overwrite an
+existing per-VM dir (``mkdir(exist_ok=False)`` in the script), so a
+leftover prefixed directory from a crashed prior run becomes a loud
+failure rather than silent state corruption.
 
-The cloud-image cache at ``/var/lib/libvirt/images/cloud-images/`` is
-intentionally shared with the developer's normal lvlab usage — the
+The cloud-image cache at ``/var/lib/libvirt/images/lvlab/cloud-images/``
+is intentionally shared with the developer's normal lvlab usage — the
 cache is read-only after download, and forcing tests to re-download a
 432 MB qcow2 every run would make the suite hostile to iterate.
 """
@@ -56,11 +58,11 @@ def test_createvm_destroyvm_roundtrip(
     backing-file tie to the shared cloud-images cache) and
     ``--storage-root`` set to the dedicated test storage location so
     per-VM artifacts land outside the production
-    ``/var/lib/libvirt/images/oneoff/`` directory.
+    ``/var/lib/libvirt/images/lvlab/oneoff/`` directory.
 
     The cloud image (``debian13``) is fetched into the shared
-    ``/var/lib/libvirt/images/cloud-images/`` cache on first run; the
-    test does not wipe it.
+    ``/var/lib/libvirt/images/lvlab/cloud-images/`` cache on first run;
+    the test does not wipe it.
 
     Args:
         integration_uri: libvirt URI parametrized by the
@@ -78,7 +80,9 @@ def test_createvm_destroyvm_roundtrip(
     # reaper still recognize it.
     uri_tag = "session" if "session" in integration_uri else "system"
     vm_name = make_test_name(f"createvm-roundtrip-{uri_tag}")
-    expected_domain = f"oneoff-{vm_name}"
+    # Raw-name contract: the libvirt domain is exactly vm_name (which
+    # already carries LVLAB_TEST_PREFIX from make_test_name).
+    expected_domain = vm_name
     assert_owned_by_test(expected_domain)
 
     storage_root = lvlab_integration_storage_root

@@ -7,12 +7,15 @@ beyond the test's own ``tmp_path``.
 
 What they lock in:
 
-- The ``oneoff-`` domain prefix and ``<storage_root>/<vm_name>/`` storage
-    convention from the Phase 6 architecture lock.
+- The raw libvirt domain name (no prefix) and ``<storage_root>/<vm_name>/``
+    storage convention.
+- ``--distro`` resolves against the built-in catalog merged with a cwd
+    ``Lvlab.yml`` ``images:`` section (manifest wins on collision); an
+    unknown name errors with the available list.
 - ``DependencyError`` from the tooling check translates to a nonzero
     exit + ClickException-rendered message.
-- The ``--copy`` flag selects the cp+resize disk strategy; without it,
-    qemu-img is invoked with ``-b`` (backing file).
+- The disk is copied (cp+resize) by default; ``--no-copy`` switches to
+    ``qemu-img`` backing-file mode (``-b``).
 - ``--ip4`` flows through to network validation (with the network's
     DHCP range honored).
 - A bridge network without explicit defaults surfaces as a
@@ -37,8 +40,11 @@ from typer.testing import CliRunner
 from tkc_lvlab.scripts import createvm as cv_mod
 from tkc_lvlab.scripts.createvm import (
     BUILTIN_IMAGES,
-    domain_name_for,
+    derive_os_variant,
+    derive_username,
     parse_ip4_option,
+    resolve_catalog,
+    resolve_image_entry,
     run,
     storage_dir_for,
 )
@@ -47,19 +53,88 @@ from tkc_lvlab.utils.requirements import DependencyError
 
 
 # ---------------------------------------------------------------------------
-# Naming + storage path helpers
+# Storage path helper
 # ---------------------------------------------------------------------------
 
 
-def test_domain_name_for_adds_oneoff_prefix() -> None:
-    """The Phase 6 naming lock — oneoff-<name> is what hits libvirt."""
-    assert domain_name_for("testvm.local") == "oneoff-testvm.local"
-    assert domain_name_for("bare") == "oneoff-bare"
-
-
-def test_storage_dir_for_under_oneoff_root(tmp_path: Path) -> None:
+def test_storage_dir_for_under_root(tmp_path: Path) -> None:
     """Per-VM storage lands under <root>/<vm_name>/, not in <root>/ directly."""
     assert storage_dir_for("alpha", root=tmp_path) == tmp_path / "alpha"
+
+
+# ---------------------------------------------------------------------------
+# Catalog resolution: merge + metadata derivation
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_catalog_merges_manifest_over_builtins() -> None:
+    """Manifest images override built-ins on collision; built-ins survive otherwise."""
+    manifest = {
+        "debian12": {
+            "image_url": "http://host/custom-debian12.qcow2",
+            "network_version": 1,
+        },
+        "myapp": {"image_url": "http://host/myapp.qcow2"},
+    }
+    catalog = resolve_catalog(manifest)
+    # Manifest wins for the colliding key.
+    assert catalog["debian12"]["image_url"] == "http://host/custom-debian12.qcow2"
+    # New manifest-only image is present.
+    assert "myapp" in catalog
+    # A built-in not redefined by the manifest still resolves.
+    assert "fedora44" in catalog
+
+
+def test_resolve_catalog_none_is_builtins_only() -> None:
+    """With no manifest, the catalog is exactly the built-ins."""
+    assert resolve_catalog(None).keys() == BUILTIN_IMAGES.keys()
+
+
+def test_resolve_image_entry_is_case_insensitive() -> None:
+    """--distro matching ignores case (parity with the old click.Choice behavior)."""
+    entry = resolve_image_entry("DEBIAN12", resolve_catalog(None))
+    assert entry.os_variant == "debian12"
+    assert entry.default_username == "debian"
+
+
+def test_resolve_image_entry_unknown_distro_lists_available() -> None:
+    """An unknown --distro raises ValueError naming the available keys."""
+    with pytest.raises(ValueError, match="Unknown distro 'nope'. Available:"):
+        resolve_image_entry("nope", resolve_catalog(None))
+
+
+def test_resolve_image_entry_derives_metadata_for_manifest_image() -> None:
+    """A manifest image with no os_variant/username gets derived values."""
+    catalog = resolve_catalog({"debian12-salt": {"image_url": "http://h/x.qcow2"}})
+    entry = resolve_image_entry("debian12-salt", catalog)
+    assert entry.os_variant == "debian12"  # text before first '-'
+    assert entry.default_username == "debian"  # family map
+    assert entry.network_version == 2  # default when omitted
+
+
+def test_resolve_image_entry_manifest_can_override_metadata() -> None:
+    """Explicit os_variant/username in the manifest win over derivation."""
+    catalog = resolve_catalog(
+        {
+            "debian12": {
+                "image_url": "http://h/x.qcow2",
+                "os_variant": "debian-custom",
+                "username": "admin",
+            }
+        }
+    )
+    entry = resolve_image_entry("debian12", catalog)
+    assert entry.os_variant == "debian-custom"
+    assert entry.default_username == "admin"
+
+
+def test_derive_helpers_fall_back_to_family_token() -> None:
+    """Unknown families derive os_variant/username from the leading token."""
+    assert derive_os_variant("alpine318", None) == "alpine318"
+    assert derive_username("alpine318", None) == "alpine"
+    # Explicit values always win.
+    assert derive_os_variant("debian12", "x") == "x"
+    assert derive_username("debian12", "x") == "x"
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +211,9 @@ def all_external_mocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict
                 args=[], returncode=0, stdout="", stderr=""
             )
         ),
+        # createvm copies the cloud image by default; keep the copy inert
+        # so the default path doesn't try to read a nonexistent fake image.
+        "copyfile": mock.Mock(),
     }
 
     # Patch in the createvm namespace.
@@ -155,12 +233,18 @@ def all_external_mocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict
 
     # Patch subprocess.run inside the createvm module (qemu-img, virt-install).
     monkeypatch.setattr(subprocess, "run", mocks["subprocess_run"])
+    monkeypatch.setattr("tkc_lvlab.scripts.createvm.shutil.copyfile", mocks["copyfile"])
 
     # Bypass the osinfo-db lookup — it would otherwise add an extra
     # subprocess call ('virt-install --osinfo list') that pollutes the
     # call-count assertions in these tests. The fallback resolution is
     # exercised in tests/test_osinfo.py.
     monkeypatch.setattr(cv_mod, "resolve_os_variant", lambda v: (v, None))
+
+    # Built-ins-only by default so these tests don't depend on whether the
+    # cwd happens to have an Lvlab.yml. The merge path is covered by the
+    # resolve_catalog unit tests above and the dedicated merge CLI test.
+    monkeypatch.setattr(cv_mod, "load_manifest_images", lambda: None)
 
     # Stub out CloudInitIso.write so it doesn't touch real pycdlib.
     monkeypatch.setattr(
@@ -194,27 +278,63 @@ def test_run_happy_path_with_defaults(
     )
     assert result.exit_code == 0, result.output
 
-    # virt-install was invoked with the oneoff- prefix on the domain name.
+    # virt-install was invoked with the raw vm_name as the domain name.
     subprocess_run = all_external_mocked["subprocess_run"]
     virt_install_calls = [
         c for c in subprocess_run.call_args_list if c.args[0][0] == "virt-install"
     ]
     assert len(virt_install_calls) == 1
     argv = virt_install_calls[0].args[0]
-    assert "--name=oneoff-testvm.local" in argv
+    assert "--name=testvm.local" in argv
     # Default network on a NAT setup.
     assert any(arg.startswith("network=default,") for arg in argv)
 
 
-def test_run_uses_backing_file_disk_by_default(
-    all_external_mocked: dict, tmp_path: Path
-) -> None:
-    """Without --copy, qemu-img is invoked with -b (backing-file mode)."""
+def test_run_copies_disk_by_default(all_external_mocked: dict, tmp_path: Path) -> None:
+    """By default (no flag), the disk is shutil.copyfile'd then qemu-img resize'd.
+
+    createvm produces a standalone qcow2 by default so a one-off VM
+    survives a wipe of the shared cloud-images cache.
+    """
     runner = CliRunner()
     result = runner.invoke(
         run, ["testvm.local", "--distro", "debian12", "--storage-root", str(tmp_path)]
     )
     assert result.exit_code == 0, result.output
+
+    # The cloud image was copied (standalone disk), not backing-file linked.
+    all_external_mocked["copyfile"].assert_called_once()
+
+    # qemu-img was called for resize, not for create.
+    qemu_img_calls = [
+        c
+        for c in all_external_mocked["subprocess_run"].call_args_list
+        if c.args[0][0] == "qemu-img"
+    ]
+    assert len(qemu_img_calls) == 1
+    assert qemu_img_calls[0].args[0][1] == "resize"
+
+
+def test_run_no_copy_uses_backing_file_disk(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """With --no-copy, qemu-img is invoked with -b (backing-file mode)."""
+    runner = CliRunner()
+    result = runner.invoke(
+        run,
+        [
+            "testvm.local",
+            "--distro",
+            "debian12",
+            "--no-copy",
+            "--storage-root",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    # No copy in backing-file mode.
+    all_external_mocked["copyfile"].assert_not_called()
 
     qemu_img_calls = [
         c
@@ -225,40 +345,6 @@ def test_run_uses_backing_file_disk_by_default(
     assert len(qemu_img_calls) == 1
     assert qemu_img_calls[0].args[0][1] == "create"
     assert "-b" in qemu_img_calls[0].args[0]
-
-
-def test_run_copy_flag_uses_cp_plus_resize(
-    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """With --copy, the disk is shutil.copyfile'd then qemu-img resize'd."""
-    copy_mock = mock.Mock()
-    monkeypatch.setattr("tkc_lvlab.scripts.createvm.shutil.copyfile", copy_mock)
-
-    runner = CliRunner()
-    result = runner.invoke(
-        run,
-        [
-            "testvm.local",
-            "--distro",
-            "debian12",
-            "--copy",
-            "--storage-root",
-            str(tmp_path),
-        ],
-    )
-    assert result.exit_code == 0, result.output
-
-    # shutil.copyfile was called once with image -> disk path.
-    copy_mock.assert_called_once()
-
-    # qemu-img was called for resize, not for create.
-    qemu_img_calls = [
-        c
-        for c in all_external_mocked["subprocess_run"].call_args_list
-        if c.args[0][0] == "qemu-img"
-    ]
-    assert len(qemu_img_calls) == 1
-    assert qemu_img_calls[0].args[0][1] == "resize"
 
 
 def test_run_dependency_failure_exits_nonzero(
@@ -584,14 +670,89 @@ def test_builtin_catalog_includes_known_distros() -> None:
     """The catalog has at least one stable distro family — regression guard.
 
     A future refactor that accidentally clears the catalog (or renames
-    keys) would silently break the --distro click.Choice. This locks
-    the minimum surface.
+    keys) would silently break ``--distro`` resolution. This locks the
+    minimum surface and the shared image-entry schema.
     """
     assert "debian12" in BUILTIN_IMAGES
     assert "debian13" in BUILTIN_IMAGES
-    # Every entry must have the required fields populated.
-    for name, entry in BUILTIN_IMAGES.items():
-        assert entry.image_url.startswith("https://"), name
-        assert entry.checksum_type in {"sha256", "sha512"}, name
-        assert entry.network_version in {1, 2}, name
-        assert entry.default_username, name
+    # Every entry uses the Lvlab.yml `images:` schema (no os_variant/username
+    # — those are derived). Required fields must be populated.
+    for name, cfg in BUILTIN_IMAGES.items():
+        assert cfg["image_url"].startswith("https://"), name
+        assert cfg["checksum_type"] in {"sha256", "sha512"}, name
+        assert cfg["network_version"] in {1, 2}, name
+
+
+def test_run_unknown_distro_errors_with_available_list(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """An unknown --distro fails at the CLI with the available names."""
+    runner = CliRunner()
+    result = runner.invoke(
+        run,
+        ["testvm.local", "--distro", "nope", "--storage-root", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "Unknown distro 'nope'" in result.output
+    assert "Available:" in result.output
+
+
+def test_run_uses_manifest_image_when_present(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cwd Lvlab.yml contributes a manifest-only distro that resolves."""
+    monkeypatch.setattr(
+        cv_mod,
+        "load_manifest_images",
+        lambda: {"myapp": {"image_url": "http://h/myapp.qcow2", "network_version": 2}},
+    )
+    captured: dict = {}
+
+    def fake_build(name, entry, image_dir):
+        captured["name"] = name
+        captured["image_dir"] = image_dir
+        return all_external_mocked["fake_image"]
+
+    monkeypatch.setattr(cv_mod, "_build_cloud_image", fake_build)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        run, ["testvm.local", "--distro", "myapp", "--storage-root", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["name"] == "myapp"
+    # Cloud images share the lvlab cache with `lvlab up`.
+    assert str(captured["image_dir"]) == "/var/lib/libvirt/images/lvlab"
+
+
+def test_ensure_storage_root_writable_raises_with_guidance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """The writability precheck raises with libvirt-group / 0771 guidance."""
+    import typer
+
+    monkeypatch.setattr(cv_mod.os, "access", lambda path, mode: False)
+    with pytest.raises(typer.Exit):
+        cv_mod._ensure_storage_root_writable(tmp_path)
+    err = capsys.readouterr().err
+    assert "not writable" in err
+    assert "libvirt" in err
+
+
+def test_run_writability_precheck_runs_before_image_work(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The storage precheck fails fast, before any image download/verify."""
+
+    def boom(_root: Path) -> None:
+        raise cv_mod._fail("storage root boom")
+
+    monkeypatch.setattr(cv_mod, "_ensure_storage_root_writable", boom)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        run, ["testvm.local", "--distro", "debian12", "--storage-root", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+    assert "storage root boom" in result.output
+    all_external_mocked["ensure_image_available"].assert_not_called()

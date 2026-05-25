@@ -1,24 +1,31 @@
 """Standalone ``createvm`` console script — one-off VM creation.
 
-Phase 6 step 4. The orchestrator that turns a single command-line into a
-fully-deployed libvirt VM without going through ``Lvlab.yml``. Per the
-Phase 6 architecture lock the script:
+The orchestrator that turns a single command-line into a fully-deployed
+libvirt VM. The script:
 
-- prefixes every libvirt domain name with ``oneoff-`` so it can never
-    collide with an lvlab manifest VM's ``<vm_name>_<env>`` pattern;
-- writes per-VM state under ``/var/lib/libvirt/images/oneoff/<vm_name>/``;
+- names the libvirt domain with the **raw** ``vm_name`` you pass (no
+    prefix), matching the ``lvscripts-py`` reference. ``destroyvm`` undoes
+    it by the same raw name;
+- resolves ``--distro`` against a merged image catalog: the built-in
+    :data:`BUILTIN_IMAGES` plus the ``images:`` section of an ``Lvlab.yml``
+    in the current directory, if one is present. Manifest entries win on a
+    name collision; built-in names still resolve when the manifest doesn't
+    redefine them;
+- caches cloud images under ``/var/lib/libvirt/images/lvlab/cloud-images``
+    — the same cache ``lvlab up`` uses, so an image downloaded by either
+    path is reused by the other;
+- writes per-VM state under ``/var/lib/libvirt/images/lvlab/oneoff/<vm_name>/``;
 - defaults to ``qemu:///system`` (most lab setups), with a ``--uri`` flag
     to override;
-- uses the lvlab-native qcow2 backing-file strategy by default, with an
-    opt-in ``--copy`` flag that produces a standalone qcow2 with no
-    cloud-images dependency (image-upgrade safety).
+- produces a standalone qcow2 by default (``--copy``: cp + resize, no
+    cloud-images dependency — the right default for throwaway one-off
+    VMs); ``--no-copy`` opts into the qemu-img backing-file strategy
+    (storage-efficient but tied to the cached image). ``lvlab up`` keeps
+    the backing-file strategy.
 
-Phase 9 follow-up ported this file from Click to Typer. UX is
-preserved: same positional, same 9 options, same defaults,
-same ``case_sensitive=False`` matching on ``--distro``. The script
-keeps a minimal ``import click`` for ``click.Choice`` (passed to
-Typer via ``click_type=``) since Typer doesn't have a native
-case-insensitive choice idiom. ``run = app`` is kept as a
+``--distro`` matches case-insensitively. The script keeps a minimal
+``import click`` for ``click.Choice`` on ``--network-type`` and
+``click.BadParameter`` in ``--ip4`` parsing. ``run = app`` is kept as a
 backwards-compat alias for the entry point and tests.
 
 Wired up as a console script via
@@ -28,16 +35,19 @@ Wired up as a console script via
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import click
 import typer
+import yaml
 
+from ..config import parse_config
 from ..utils.cloud_init import CloudInitIso, NetworkConfig
 from ..utils.images import CloudImage
 from ..utils.network import (
@@ -72,113 +82,257 @@ from ..utils.standalone_cloud_init import OneoffCloudInit
 
 @dataclass(frozen=True)
 class CatalogEntry:
-    """Built-in cloud-image catalog entry.
+    """A fully-resolved cloud image ready for ``createvm`` to deploy.
+
+    Built by :func:`resolve_image_entry` from a merged catalog dict —
+    either a :data:`BUILTIN_IMAGES` entry or an ``Lvlab.yml`` ``images:``
+    entry. The ``os_variant`` and ``default_username`` fields are filled
+    by derivation from the image key unless the source dict overrides
+    them (see :func:`derive_os_variant` / :func:`derive_username`).
 
     Attributes:
         image_url: Direct URL to the qcow2 cloud image.
-        checksum_url: URL to the checksum manifest. Required.
-        checksum_type: Hash algorithm — ``sha256`` or ``sha512``.
+        checksum_url: URL to the checksum manifest, or ``None`` for an
+            unverified custom image.
+        checksum_type: Hash algorithm — ``sha256`` or ``sha512`` — or
+            ``None`` when there's no checksum.
         checksum_url_gpg: Optional URL to a GPG keyring for verifying
             the checksum file. When ``None``, GPG verification is
             skipped (still strongly recommended where the upstream
             provides one).
         network_version: cloud-init network-config schema version,
             ``1`` (ENI-style) or ``2`` (netplan-style).
-        os_variant: ``virt-install --os-variant`` argument. Looked
-            up via ``virt-install --os-variant list`` /
-            ``osinfo-query os``.
+        os_variant: ``virt-install --os-variant`` argument. Passed
+            through :func:`tkc_lvlab.utils.osinfo.resolve_os_variant`
+            at deploy time for osinfo-db fuzzy fallback.
         default_username: First-boot account name cloud-init creates.
     """
 
     image_url: str
-    checksum_url: str
-    checksum_type: str
+    checksum_url: str | None
+    checksum_type: str | None
     checksum_url_gpg: str | None
     network_version: int
     os_variant: str
     default_username: str
 
 
-# Catalog of cloud-image URLs the standalone ``createvm`` script can
-# resolve via ``--distro``. Entries point at specific pinned point
-# releases; when a distro release goes EOL, its URL eventually returns
-# a 404 HTML page (the checksum-verification path defensively catches
-# that — discovered in the Phase 9 destructive smoke test on
-# 2026-05-23, when Fedora 40's URL had aged out). The
-# ``refresh-cloud-images`` skill under ``.claude/skills/`` keeps these
-# in sync with upstream and surfaces new-major / EOL drift for user
-# confirmation.
-BUILTIN_IMAGES: dict[str, CatalogEntry] = {
-    "debian12": CatalogEntry(
-        image_url=(
+# Built-in cloud images the standalone ``createvm`` script can resolve
+# via ``--distro`` out of the box. Each value uses the **same schema as an
+# ``Lvlab.yml`` ``images:`` entry** so the built-in catalog and a cwd
+# manifest merge through one code path (:func:`resolve_catalog`). The two
+# createvm-only knobs — ``os_variant`` and ``username`` — are intentionally
+# omitted here: they're derived from the key (debian12 -> debian12 /
+# debian) and only need to appear in a dict when the derivation is wrong.
+#
+# Entries point at specific pinned point releases; when a distro release
+# goes EOL its URL eventually 404s (the checksum-verification path catches
+# that). The ``refresh-cloud-images`` skill under ``.claude/skills/`` keeps
+# these in sync with upstream and surfaces new-major / EOL drift.
+BUILTIN_IMAGES: dict[str, dict[str, Any]] = {
+    "debian12": {
+        "image_url": (
             "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/"
             "debian-12-generic-amd64-20260518-2482.qcow2"
         ),
-        checksum_url=(
+        "checksum_url": (
             "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/SHA512SUMS"
         ),
-        checksum_type="sha512",
-        checksum_url_gpg=None,
-        network_version=2,
-        os_variant="debian12",
-        default_username="debian",
-    ),
-    "debian13": CatalogEntry(
-        image_url=(
+        "checksum_type": "sha512",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+    },
+    "debian13": {
+        "image_url": (
             "https://cloud.debian.org/images/cloud/trixie/latest/"
             "debian-13-generic-amd64.qcow2"
         ),
-        checksum_url=("https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"),
-        checksum_type="sha512",
-        checksum_url_gpg=None,
-        network_version=2,
-        os_variant="debian13",
-        default_username="debian",
-    ),
-    "fedora44": CatalogEntry(
-        image_url=(
+        "checksum_url": "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
+        "checksum_type": "sha512",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+    },
+    "fedora44": {
+        "image_url": (
             "https://download.fedoraproject.org/pub/fedora/linux/releases/44/"
             "Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
         ),
-        checksum_url=(
+        "checksum_url": (
             "https://download.fedoraproject.org/pub/fedora/linux/releases/44/"
             "Cloud/x86_64/images/Fedora-Cloud-44-1.7-x86_64-CHECKSUM"
         ),
-        checksum_type="sha256",
-        checksum_url_gpg="https://fedoraproject.org/fedora.gpg",
-        network_version=2,
-        os_variant="fedora44",
-        default_username="fedora",
-    ),
+        "checksum_type": "sha256",
+        "checksum_url_gpg": "https://fedoraproject.org/fedora.gpg",
+        "network_version": 2,
+    },
 }
 
 
-# ---------------------------------------------------------------------------
-# Naming + storage path conventions (Phase 6 lock)
-# ---------------------------------------------------------------------------
+# First-boot account names keyed by distro family. Cloud images ship a
+# distro-conventional default user; this map covers the families lvlab
+# targets. Anything not listed falls back to the family token itself
+# (e.g. ``alpine318`` -> ``alpine``), and any entry can be overridden per
+# image with a ``username:`` key in the catalog dict / manifest.
+_USERNAME_BY_FAMILY: dict[str, str] = {
+    "debian": "debian",
+    "ubuntu": "ubuntu",
+    "fedora": "fedora",
+    "almalinux": "almalinux",
+    "rocky": "rocky",
+    "centos": "cloud-user",
+    "rhel": "cloud-user",
+}
 
 
-_ONEOFF_PREFIX = "oneoff-"
-_ONEOFF_STORAGE_ROOT = Path("/var/lib/libvirt/images/oneoff")
+def _family_token(key: str) -> str:
+    """Return the leading alphabetic family token of a catalog key.
 
-
-def domain_name_for(vm_name: str) -> str:
-    """Return the libvirt domain name a one-off VM gets.
-
-    The ``oneoff-`` prefix is Phase 6's collision-prevention against
-    lvlab manifest VMs (which use ``<vm_name>_<env>``).
+    ``debian12`` -> ``debian``, ``debian12-salt`` -> ``debian``,
+    ``fedora44`` -> ``fedora``. Falls back to the whole lower-cased key
+    when it has no leading letters.
 
     Args:
-        vm_name: The user-supplied short name (e.g. ``testvm.local``).
+        key: A catalog / ``--distro`` key.
 
     Returns:
-        ``f"{_ONEOFF_PREFIX}{vm_name}"``.
+        The family token, lower-cased.
     """
-    return f"{_ONEOFF_PREFIX}{vm_name}"
+    match = re.match(r"[a-z]+", key.lower())
+    return match.group(0) if match else key.lower()
+
+
+def derive_os_variant(key: str, explicit: str | None) -> str:
+    """Resolve the ``--os-variant`` value for a catalog key.
+
+    Args:
+        key: The catalog / ``--distro`` key (e.g. ``debian12-salt``).
+        explicit: An ``os_variant`` provided by the catalog dict /
+            manifest, or ``None`` to derive.
+
+    Returns:
+        ``explicit`` when set; otherwise the segment of ``key`` before
+        the first ``-`` (``debian12-salt`` -> ``debian12``). The deploy
+        path runs this through ``resolve_os_variant`` for osinfo-db
+        fuzzy fallback, so an approximate value is fine.
+    """
+    return explicit if explicit else key.split("-")[0]
+
+
+def derive_username(key: str, explicit: str | None) -> str:
+    """Resolve the first-boot username for a catalog key.
+
+    Args:
+        key: The catalog / ``--distro`` key.
+        explicit: A ``username`` provided by the catalog dict /
+            manifest, or ``None`` to derive.
+
+    Returns:
+        ``explicit`` when set; otherwise the family-conventional user
+        from :data:`_USERNAME_BY_FAMILY`, falling back to the family
+        token itself.
+    """
+    if explicit:
+        return explicit
+    family = _family_token(key)
+    return _USERNAME_BY_FAMILY.get(family, family)
+
+
+def resolve_catalog(
+    manifest_images: dict[str, Any] | None
+) -> dict[str, dict[str, Any]]:
+    """Merge the built-in catalog with a manifest's ``images:`` section.
+
+    Args:
+        manifest_images: The ``images:`` map from a cwd ``Lvlab.yml``,
+            or ``None`` when no manifest is present.
+
+    Returns:
+        A new dict of ``{name: image_config}``. Manifest entries override
+        built-ins on a name collision; built-in names not redefined by the
+        manifest remain resolvable.
+    """
+    catalog: dict[str, dict[str, Any]] = {
+        name: dict(cfg) for name, cfg in BUILTIN_IMAGES.items()
+    }
+    if manifest_images:
+        for name, cfg in manifest_images.items():
+            catalog[name] = dict(cfg)
+    return catalog
+
+
+def resolve_image_entry(
+    distro: str, catalog: dict[str, dict[str, Any]]
+) -> CatalogEntry:
+    """Resolve a ``--distro`` value against a merged catalog.
+
+    Matching is case-insensitive. ``os_variant`` and ``default_username``
+    are taken from the source dict when present, else derived from the
+    key.
+
+    Args:
+        distro: The user-supplied ``--distro`` value.
+        catalog: A merged catalog from :func:`resolve_catalog`.
+
+    Returns:
+        A fully-populated :class:`CatalogEntry`.
+
+    Raises:
+        ValueError: ``distro`` isn't in the catalog (message lists the
+            available names).
+    """
+    index = {name.lower(): name for name in catalog}
+    real_key = index.get(distro.lower())
+    if real_key is None:
+        available = ", ".join(sorted(catalog))
+        raise ValueError(f"Unknown distro '{distro}'. Available: {available}")
+    cfg = catalog[real_key]
+    return CatalogEntry(
+        image_url=cfg["image_url"],
+        checksum_url=cfg.get("checksum_url"),
+        checksum_type=cfg.get("checksum_type"),
+        checksum_url_gpg=cfg.get("checksum_url_gpg"),
+        network_version=cfg.get("network_version", 2),
+        os_variant=derive_os_variant(real_key, cfg.get("os_variant")),
+        default_username=derive_username(real_key, cfg.get("username")),
+    )
+
+
+def load_manifest_images() -> dict[str, Any] | None:
+    """Return the ``images:`` map from a cwd ``Lvlab.yml``, if present.
+
+    Returns:
+        The ``images:`` dict when an ``Lvlab.yml`` is found and parses,
+        or ``None`` when no manifest exists in the current directory.
+
+    Raises:
+        ValueError: An ``Lvlab.yml`` exists but couldn't be parsed.
+    """
+    try:
+        parsed = parse_config()
+    except (KeyError, IndexError, TypeError, AttributeError, yaml.YAMLError) as exc:
+        raise ValueError(f"Found Lvlab.yml but couldn't parse it: {exc}") from exc
+    if parsed is None:
+        return None
+    _environment, images, _config_defaults, _machines = parsed
+    return images
+
+
+# ---------------------------------------------------------------------------
+# Storage path conventions
+# ---------------------------------------------------------------------------
+
+
+# Per-VM state (disk, cidata.iso, cloud-init files) lands under this root,
+# namespaced beside the shared cloud-image cache at
+# ``/var/lib/libvirt/images/lvlab/cloud-images``. It is deliberately
+# distinct from ``lvlab up``'s ``lvlab/<env>/<vm>/`` layout, so one-off VMs
+# never collide with manifest VM disks. The libvirt domain itself is the
+# raw ``vm_name`` you pass — ``destroyvm`` undoes it by that same name.
+_ONEOFF_STORAGE_ROOT = Path("/var/lib/libvirt/images/lvlab/oneoff")
 
 
 def storage_dir_for(vm_name: str, root: Path = _ONEOFF_STORAGE_ROOT) -> Path:
-    """Return the per-VM storage directory under the oneoff root.
+    """Return the per-VM storage directory under the one-off root.
 
     Args:
         vm_name: The user-supplied short name.
@@ -260,12 +414,13 @@ def _create_disk(
 ) -> None:
     """Create the per-VM qcow2 disk.
 
-    Default (``copy_strategy=False``): ``qemu-img create -F qcow2 -b <image_path> -f qcow2 <disk_path> <size>`` — backing-file mode, storage-efficient but ties the VM to the
-    cloud image's lifetime.
+    ``copy_strategy=True`` (the ``createvm`` default): ``cp`` the cloud
+    image then ``qemu-img resize`` it to ``<size>``. Standalone qcow2,
+    no cloud-images dependency, but takes the full image size.
 
-    Opt-in (``copy_strategy=True``): ``cp`` the cloud image then
-    ``qemu-img resize`` it to ``<size>``. Standalone qcow2, no cloud-images
-    dependency, but takes the full image size.
+    ``copy_strategy=False``: ``qemu-img create -F qcow2 -b <image_path>
+    -f qcow2 <disk_path> <size>`` — backing-file mode, storage-efficient
+    but ties the VM to the cloud image's lifetime.
 
     Args:
         image_path: Verified cloud image on disk.
@@ -354,7 +509,7 @@ def _virt_install(
 
     Args:
         uri: libvirt URI to deploy against.
-        domain_name: ``oneoff-<vm_name>`` per the Phase 6 lock.
+        domain_name: The raw ``vm_name`` (no prefix).
         memory_mib: Guest memory in MiB.
         cpus: vCPU count.
         disk_path: Primary qcow2 disk.
@@ -438,6 +593,36 @@ def _fail(message: str) -> typer.Exit:
     """
     typer.echo(f"Error: {message}", err=True)
     return typer.Exit(code=1)
+
+
+def _ensure_storage_root_writable(storage_root: Path) -> None:
+    """Verify ``createvm`` can create the per-VM storage directory.
+
+    Walks up to the nearest existing ancestor of ``storage_root`` and
+    checks it's writable. This fails fast with actionable guidance
+    before any image download, rather than deep inside ``mkdir``.
+
+    Args:
+        storage_root: The per-VM storage root (``--storage-root``).
+
+    Raises:
+        typer.Exit: The nearest existing ancestor denies write. The
+            message points at the expected ``libvirt`` group membership
+            and ``root:libvirt 0771`` permissions on
+            ``/var/lib/libvirt/images``.
+    """
+    probe = storage_root
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    if not os.access(probe, os.W_OK):
+        raise _fail(
+            f"Cannot write under {storage_root} (nearest existing ancestor "
+            f"{probe} is not writable). Ensure your user is in the 'libvirt' "
+            f"group and that /var/lib/libvirt/images is root:libvirt mode 0771 "
+            f"so group members can create sub-directories — e.g. "
+            f"`sudo usermod -aG libvirt $USER` (then re-login) and "
+            f"`sudo chmod 0771 /var/lib/libvirt/images`."
+        )
 
 
 def _createvm_resolve_network(
@@ -550,8 +735,11 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     distro: str = typer.Option(
         ...,
         "--distro",
-        click_type=click.Choice(sorted(BUILTIN_IMAGES.keys()), case_sensitive=False),
-        help="Built-in cloud image to use.",
+        help=(
+            "Cloud image to use (case-insensitive). Resolves against the "
+            "built-in catalog merged with the 'images:' section of an "
+            "Lvlab.yml in the current directory, if present."
+        ),
     ),
     memory: int = typer.Option(_DEFAULT_MEMORY_MIB, "--memory", show_default=True),
     cpu: int = typer.Option(_DEFAULT_CPUS, "--cpu", show_default=True),
@@ -591,12 +779,14 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         help="Path to an additional SSH public key (appended after discovered defaults).",
     ),
     copy_strategy: bool = typer.Option(
-        False,
-        "--copy",
+        True,
+        "--copy/--no-copy",
         help=(
-            "Create a standalone qcow2 via cp + qemu-img resize instead of the "
-            "default qemu-img create -b backing-file. Lets you wipe and re-init "
-            "the cloud-images directory without breaking this VM."
+            "Disk strategy. Default --copy: a standalone qcow2 (cp + qemu-img "
+            "resize) independent of the cloud-images cache, so you can wipe and "
+            "re-init that cache without breaking this VM. --no-copy uses "
+            "qemu-img create -b backing-file (storage-efficient, but ties the "
+            "VM to the cached image)."
         ),
     ),
     uri: str = typer.Option(
@@ -610,26 +800,34 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         help="Override the per-VM storage root (test seam).",
     ),
 ) -> None:
-    """Create a one-off libvirt VM named ``VM_NAME`` from a built-in cloud image.
+    """Create a one-off libvirt VM named ``VM_NAME`` from a cloud image.
 
-    The libvirt domain becomes ``oneoff-<VM_NAME>`` so it can't collide
-    with an lvlab manifest VM. Storage lands under
-    ``<storage-root>/<VM_NAME>/`` (default ``/var/lib/libvirt/images/oneoff/``).
+    The libvirt domain is the raw ``VM_NAME`` you pass. ``--distro``
+    resolves against the built-in catalog merged with the ``images:``
+    section of an ``Lvlab.yml`` in the current directory (manifest entries
+    win on a name collision). Storage lands under ``<storage-root>/<VM_NAME>/``
+    (default ``/var/lib/libvirt/images/lvlab/oneoff/``).
     """
-    domain_name = domain_name_for(vm_name)
+    domain_name = vm_name
     vm_dir = storage_dir_for(vm_name, root=storage_root)
 
-    typer.echo(f"Creating one-off VM '{domain_name}' under {vm_dir}", err=True)
+    typer.echo(f"Creating VM '{domain_name}' under {vm_dir}", err=True)
 
-    # Step 1: dependency precheck.
+    # Step 1: dependency precheck + storage writability.
     try:
         check_createvm_tooling()
     except DependencyError as exc:
         raise _fail(str(exc)) from exc
+    _ensure_storage_root_writable(storage_root)
 
-    # Step 2: resolve image. Use lvlab's CloudImage for download + verify.
-    entry = BUILTIN_IMAGES[distro.lower()]
-    image_dir = Path("/var/lib/libvirt/images")
+    # Step 2: resolve image against built-ins merged with a cwd Lvlab.yml.
+    # Use lvlab's CloudImage for download + verify, sharing the lvlab cache.
+    try:
+        catalog = resolve_catalog(load_manifest_images())
+        entry = resolve_image_entry(distro, catalog)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+    image_dir = Path("/var/lib/libvirt/images/lvlab")
     cloud_image = _build_cloud_image(distro, entry, image_dir)
     _ensure_image_available(cloud_image)
 

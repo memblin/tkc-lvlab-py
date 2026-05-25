@@ -259,31 +259,40 @@ The same wheel ships two additional console scripts for single-VM,
 no-manifest use cases:
 
 - `createvm <vm_name> --distro <key>` creates a libvirt domain named
-    `oneoff-<vm_name>` (the prefix is the collision-prevention against
-    manifest VMs), provisioned from a built-in cloud image.
-- `destroyvm <vm_name>` removes it.
+    exactly `<vm_name>` — a raw domain name, no prefix — provisioned
+    from a cloud image.
+- `destroyvm <domain_name>` removes the domain of that exact name.
 
-Both scripts are intentionally separate from `lvlab`:
+How they relate to `lvlab`:
 
-- They do not read `Lvlab.yml`.
-- They will not list, start, stop, or destroy manifest VMs. `lvlab   status` reciprocally does not show one-off VMs in its inventory.
+- `createvm` resolves `--distro` against its built-in catalog merged
+    with the `images:` section of an `Lvlab.yml` in the current
+    directory, if one is present (manifest entries win on a name
+    collision). `destroyvm` does not read `Lvlab.yml`.
+- They share the cloud-image cache
+    (`/var/lib/libvirt/images/lvlab/cloud-images`) with `lvlab up`, so
+    an image fetched by either path is reused by the other. Per-VM state
+    lands under `/var/lib/libvirt/images/lvlab/oneoff/<vm_name>/`.
+- Because they act on raw domain names, `destroyvm <vm>_<env>` WILL
+    remove a manifest VM if you pass that VM's actual domain name — the
+    confirmation prompt (skip with `--force`) is the guard.
 - They default to `qemu:///system` (most lab setups). Pass `--uri` to
     override.
 
 ### createvm flags
 
-| Flag             | Purpose                                                                                                                                                                                                                     |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--distro`       | Required. Key into the built-in image catalog (`debian12`, `debian13`).                                                                                                                                                     |
-| `--memory`       | RAM in MiB. Default 2048.                                                                                                                                                                                                   |
-| `--cpu`          | vCPU count. Default 2.                                                                                                                                                                                                      |
-| `--disk-size`    | qcow2 disk size. Default `20G`.                                                                                                                                                                                             |
-| `--network`      | libvirt network name. Default `default` (the stock NAT). Only consulted with `--network-type network` (the default).                                                                                                        |
-| `--network-type` | Attachment mode: `network` (default; managed libvirt network), `user` (SLIRP), or `passt`. Use `user`/`passt` for `qemu:///session` where rootless libvirt cannot manage a NAT network. `--ip4` is rejected with user-mode. |
-| `--ip4`          | Optional static IPv4. Accepts `IP` (uses `--network`) or `NETWORK,IP`. Validated against the network's subnet AND DHCP range. Incompatible with `--network-type user` / `--network-type passt`.                             |
-| `--public-key`   | Optional extra SSH public key file (appended after discovered defaults).                                                                                                                                                    |
-| `--copy`         | Use `cp` + `qemu-img resize` instead of the default backing-file mode. Trades storage efficiency for cloud-image independence.                                                                                              |
-| `--uri`          | libvirt connection URI. Default `qemu:///system`.                                                                                                                                                                           |
+| Flag                   | Purpose                                                                                                                                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--distro`             | Required. Image key, matched case-insensitively against the built-in catalog (`debian12`, `debian13`, `fedora44`) merged with any `images:` in a cwd `Lvlab.yml`.                                                            |
+| `--memory`             | RAM in MiB. Default 2048.                                                                                                                                                                                                    |
+| `--cpu`                | vCPU count. Default 2.                                                                                                                                                                                                       |
+| `--disk-size`          | qcow2 disk size. Default `20G`.                                                                                                                                                                                              |
+| `--network`            | libvirt network name. Default `default` (the stock NAT). Only consulted with `--network-type network` (the default).                                                                                                         |
+| `--network-type`       | Attachment mode: `network` (default; managed libvirt network), `user` (SLIRP), or `passt`. Use `user`/`passt` for `qemu:///session` where rootless libvirt cannot manage a NAT network. `--ip4` is rejected with user-mode.  |
+| `--ip4`                | Optional static IPv4. Accepts `IP` (uses `--network`) or `NETWORK,IP`. Validated against the network's subnet AND DHCP range. Incompatible with `--network-type user` / `--network-type passt`.                              |
+| `--public-key`         | Optional extra SSH public key file (appended after discovered defaults).                                                                                                                                                     |
+| `--copy` / `--no-copy` | Disk strategy. Default `--copy`: standalone qcow2 (`cp` + `qemu-img resize`), independent of the cloud-images cache. `--no-copy` uses `qemu-img` backing-file mode (storage-efficient, but ties the VM to the cached image). |
+| `--uri`                | libvirt connection URI. Default `qemu:///system`.                                                                                                                                                                            |
 
 ### Network types (`--network-type` / `interfaces.network_type`)
 
@@ -349,20 +358,21 @@ losing the terminal output.
 
 ### Disk strategy
 
-By default, `createvm` uses the lvlab-native backing-file approach
-(`qemu-img create -b <cloud_image>`): fast to create, storage-efficient
-across many VMs, but ties the VM's disk to the cloud image's lifetime.
-Wiping `cloud-images/` would break VMs that depend on it.
+By default, `createvm` produces a **standalone** qcow2: it `cp`s the
+cloud image into the VM directory, then `qemu-img resize`s it to
+`--disk-size`. The disk has no dependency on the shared `cloud-images/`
+cache, so you can wipe and re-init that cache later without breaking a
+one-off VM. The trade is that each VM takes the full image size on
+disk. This independence is the right default for throwaway one-off VMs.
 
-`--copy` flips this: `cp` the cloud image to the VM directory, then
-`qemu-img resize` to `--disk-size`. The qcow2 is standalone. You can
-wipe and re-init `cloud-images/` later without affecting any
-`--copy`-created VM. The trade is that each VM takes the full image
-size on disk.
+`--no-copy` switches to the backing-file approach
+(`qemu-img create -b <cloud_image>`): fast to create and
+storage-efficient across many VMs, but ties the VM's disk to the cached
+cloud image's lifetime — wiping `cloud-images/` would break it.
 
 The manifest workflow (`lvlab up`) always uses backing-file mode —
-the trade-off is appropriate when you've explicitly committed to a
-shared manifest setup.
+appropriate when you've explicitly committed to a shared manifest
+setup.
 
 ### destroyvm
 
@@ -371,10 +381,12 @@ sudo destroyvm testvm.local           # prompts
 sudo destroyvm testvm.local --force   # skips the prompt
 ```
 
-`destroyvm` looks up `oneoff-testvm.local` on the libvirt side. If the
-prefix isn't present, it errors out — it does NOT fall through to the
-bare name. A manifest VM named `testvm.local_<env>` is completely
-invisible to `destroyvm`; use `lvlab destroy` for those.
+`destroyvm` looks up exactly the domain name you pass — no prefixing,
+no `Lvlab.yml` translation. If no domain of that name is defined, it
+errors out. The flip side: passing a manifest VM's actual
+`<vm_name>_<env>` domain name WILL destroy it (its disks live elsewhere,
+so they're left behind — the undefine is the operative effect). The
+confirmation prompt is the guard; `--force` skips it.
 
 Snapshot fallback: if `virsh undefine` refuses because snapshots
 exist, `destroyvm` deletes them (preferring `--children`, falling back

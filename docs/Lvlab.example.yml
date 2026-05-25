@@ -142,9 +142,18 @@ images:
   # value or virt-install will fail. The examples below point at a
   # user-specific intranet image server (192.168.122.1:8080); replace
   # with your own URLs if you keep custom images.
+  #
+  # The standalone `createvm` script also reads this `images:` section
+  # (merged over its built-in catalog) when run from this directory. It
+  # derives the guest's --os-variant and first-boot username from the
+  # image key, but you can override either per image with the optional
+  # `os_variant:` / `username:` keys shown (commented) below. `lvlab up`
+  # ignores these two keys; they only affect `createvm`.
   debian12-salt:
     image_url: http://192.168.122.1:8080/cloud_images/debian-12-salt-20250121-0215.qcow2
     network_version: 2
+    # os_variant: debian12   # override createvm's key-based derivation
+    # username: salt         # override the first-boot account name
 
   debian12-vault:
     image_url: http://192.168.122.1:8080/cloud_images/debian-12-vault-20250121-0716.qcow2

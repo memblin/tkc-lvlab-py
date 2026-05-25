@@ -21,9 +21,10 @@ Three classes of change; only one applies without an extra confirmation:
 - **New-major proposal** (`PROPOSE-ADD`, user-confirmed). Upstream
     carries a newer major release (e.g. `fedora43`) that this catalog
     doesn't list. The skill surfaces it in the diff table with the
-    upstream metadata the user would need (`os_variant`,
-    `default_username`, `network_version`, checksum + GPG URLs) — and
-    **only** adds it if the user explicitly confirms.
+    upstream metadata the user would need (`network_version`, checksum +
+    GPG URLs; plus an explicit `os_variant`/`username` only if the
+    key-based derivation would be wrong) — and **only** adds it if the
+    user explicitly confirms.
 - **EOL proposal** (`PROPOSE-REMOVE`, user-confirmed). An entry the
     catalog carries is no longer published on the live upstream
     mirror — codename moved to an archive host, `image_url` 404s, or
@@ -40,7 +41,13 @@ one must be updated in all of them together. Never edit only one.
 
 - `tkc_lvlab/scripts/createvm.py` — the `BUILTIN_IMAGES` dict for the
     standalone `createvm` console script. Currently
-    `{debian12, debian13}` after the 2026-05-23 fedora40 drop.
+    `{debian12, debian13, fedora44}`. Each value uses the **same schema
+    as an `Lvlab.yml` `images:` entry** (`image_url`, `checksum_url`,
+    `checksum_type`, `checksum_url_gpg`, `network_version`). The
+    `os_variant` and `username` keys are **optional**: `createvm` derives
+    them from the entry key (e.g. `fedora44` → os_variant `fedora44`,
+    user `fedora`), so only add them to a dict when the derivation would
+    be wrong.
 - `Lvlab.yml` (repo root) — the maintainer's working manifest, also a
     de-facto example for users who clone the repo. `images:` section.
 - `docs/Lvlab.example.yml` — the canonical example for new users.
@@ -126,9 +133,10 @@ them in the diff table with action "skip (intranet)" and move on.
     - `skip (intranet)` — custom/intranet entry, never touched.
     - `PROPOSE-ADD` — new major not in the catalog. `current build`
         is `—`; `latest upstream` is the newest dated build of the
-        new major; `notes` includes `os_variant`, `default_username`,
-        `network_version`, and the checksum + GPG URLs the user will
-        need.
+        new major; `notes` includes `network_version`, the checksum +
+        GPG URLs the user will need, and the derived `os_variant` /
+        username (flag if the key-based derivation looks wrong and an
+        explicit override is needed).
     - `PROPOSE-REMOVE` — existing entry no longer on the live mirror.
         `latest upstream` is `—`; `notes` gives the reason
         (e.g. "moved to archive.debian.org", "404 on image_url",
@@ -144,11 +152,10 @@ them in the diff table with action "skip (intranet)" and move on.
     row, ask the user explicitly — one decision per proposal. Do not
     bundle adds and removes together. Sample question shapes:
 
-    - "Add fedora43? It would use `os_variant=fedora43`,
-        `default_username=fedora`, `network_version=2`, image at
-        `<url>`, checksums at `<url>`, GPG
-        `https://fedoraproject.org/fedora.gpg`. Add it to all three
-        files?"
+    - "Add fedora43? `network_version=2`, image at `<url>`, checksums
+        at `<url>`, GPG `https://fedoraproject.org/fedora.gpg`.
+        os_variant/user derive from the key as `fedora43`/`fedora`. Add
+        it to all three files?"
     - "Remove fedora40? It's no longer in
         `https://download.fedoraproject.org/pub/fedora/linux/releases/`
         and the existing `image_url` 404s. Remove from `BUILTIN_IMAGES`
@@ -170,8 +177,9 @@ them in the diff table with action "skip (intranet)" and move on.
     Leave the other fields untouched on `UPDATE`: `checksum_type`,
     `checksum_url_gpg` (Fedora's `https://fedoraproject.org/fedora.gpg`
     is stable across point releases; never bump it as part of an
-    intra-major refresh), `network_version`, `os_variant`,
-    `default_username` (in `BUILTIN_IMAGES`).
+    intra-major refresh), `network_version`, and any explicit
+    `os_variant` / `username` override that happens to be present (most
+    entries omit these and rely on key-based derivation).
 
     For `PROPOSE-ADD`, fill all fields from the upstream answer in
     step 7 and add the entry in the same three-file shape as
@@ -246,14 +254,14 @@ them in the diff table with action "skip (intranet)" and move on.
     buster/bullseye/bookworm/trixie; that may change.
 - **Debian (new-major signal)**: when a new stable codename appears
     in the mirror listing (e.g. `forky`), treat it as a
-    `PROPOSE-ADD`. Defaults to fill in: `os_variant=debianN`
-    (matching the release number, not the codename),
-    `default_username=debian`, `network_version=2` (post-bullseye),
-    image filename `debian-N-generic-amd64.qcow2`, image URL under
-    `<codename>/latest/`, checksum URL `SHA512SUMS` in the same
-    directory, no GPG (Debian's cloud-image checksums aren't
-    GPG-signed in the same way Fedora's are; our entries leave
-    `checksum_url_gpg` unset).
+    `PROPOSE-ADD`. Fields to fill in for `BUILTIN_IMAGES`:
+    `network_version=2` (post-bullseye), image URL under
+    `<codename>/latest/` (filename `debian-N-generic-amd64.qcow2`),
+    checksum URL `SHA512SUMS` in the same directory, no GPG (Debian's
+    cloud-image checksums aren't GPG-signed in the same way Fedora's
+    are; our entries leave `checksum_url_gpg` unset). `os_variant` and
+    `username` derive correctly from the key (`debianN` →
+    `debianN`/`debian`), so leave them off the dict.
 - **Fedora (intra-major)**: lives under
     `releases/<N>/Cloud/x86_64/images/`. Build filenames look like
     `Fedora-Cloud-Base-Generic-<N>-<date>.x86_64.qcow2`; the
@@ -262,13 +270,12 @@ them in the diff table with action "skip (intranet)" and move on.
 - **Fedora (new-major signal)**: the highest numbered directory at
     `https://download.fedoraproject.org/pub/fedora/linux/releases/`
     is the newest release. If we carry `fedoraN` and upstream has
-    `fedoraN+M`, surface `fedoraN+M` as `PROPOSE-ADD`. Defaults to
-    fill in: `os_variant=fedoraN+M`, `default_username=fedora`,
-    `network_version=2`,
-    `checksum_url_gpg=https://fedoraproject.org/fedora.gpg`
-    (stable across releases). The catalog has been Debian-only
-    since 2026-05-23; adding a current Fedora back is exactly the
-    case this trigger was designed for.
+    `fedoraN+M`, surface `fedoraN+M` as `PROPOSE-ADD`. Fields to fill
+    in for `BUILTIN_IMAGES`: `network_version=2`,
+    `checksum_url_gpg=https://fedoraproject.org/fedora.gpg` (stable
+    across releases), plus the image + checksum URLs. `os_variant` and
+    `username` derive from the key (`fedoraN+M` → `fedoraN+M`/`fedora`),
+    so leave them off the dict.
 - **Fedora (EOL signal)**: a release number's removal from the
     release index (it's moved to
     `https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/`)

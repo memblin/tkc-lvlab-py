@@ -2,11 +2,10 @@
 
 Locked-in contracts:
 
-- The user-supplied name is translated to ``oneoff-<vm_name>`` before
-    any libvirt lookup happens. Bare names are NEVER consulted — that
-    keeps manifest VMs invisible.
-- A missing one-off domain produces a clear error mentioning
-    ``lvlab destroy`` as the alternative.
+- The user-supplied name is the **raw** libvirt domain name — looked up
+    exactly, no prefixing, no Lvlab.yml translation. Passing a manifest
+    VM's actual ``<vm>_<env>`` domain name therefore destroys it.
+- A name not on the domain list produces a clear "no domain named" error.
 - Running VMs are force-off'd before undefine; already-shut-off VMs
     skip the force-off step.
 - Snapshot fallback wires through ``undefine_with_snapshot_cleanup``.
@@ -35,7 +34,7 @@ URI = "qemu:///system"
 def stub_libvirt(monkeypatch: pytest.MonkeyPatch):
     """Patch every libvirt-touching helper in the destroyvm namespace."""
     mocks = {
-        "virsh_list_all_names": mock.Mock(return_value=["oneoff-testvm.local"]),
+        "virsh_list_all_names": mock.Mock(return_value=["testvm.local"]),
         "virsh_domstate": mock.Mock(return_value="running"),
         "run_virsh": mock.Mock(),
         "undefine_with_snapshot_cleanup": mock.Mock(),
@@ -64,16 +63,14 @@ def test_happy_path_force_running_vm(stub_libvirt, tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
 
-    # The libvirt name used is oneoff-prefixed.
-    stub_libvirt["virsh_domstate"].assert_called_once_with(
-        mock.ANY, "oneoff-testvm.local"
-    )
+    # The libvirt name used is the raw vm_name (no prefix).
+    stub_libvirt["virsh_domstate"].assert_called_once_with(mock.ANY, "testvm.local")
     # Running state → force-off via virsh destroy.
     destroy_calls = [
         c for c in stub_libvirt["run_virsh"].call_args_list if c.args[1][0] == "destroy"
     ]
     assert len(destroy_calls) == 1
-    assert destroy_calls[0].args[1] == ["destroy", "oneoff-testvm.local"]
+    assert destroy_calls[0].args[1] == ["destroy", "testvm.local"]
 
     # Undefine via the snapshot-cleanup helper.
     stub_libvirt["undefine_with_snapshot_cleanup"].assert_called_once()
@@ -105,20 +102,9 @@ def test_shut_off_vm_skips_force_off(stub_libvirt, tmp_path: Path) -> None:
     assert destroy_calls == []
 
 
-def test_missing_one_off_domain_does_not_consult_bare_name(
-    stub_libvirt, tmp_path: Path
-) -> None:
-    """If oneoff-<name> isn't on the domain list, error out — don't peek at the bare name.
-
-    This is THE cross-contamination guarantee from the Phase 6
-    architecture lock: a manifest VM named 'testvm.local' must stay
-    invisible to destroyvm.
-    """
-    # Domain list contains the bare name (manifest VM) but NOT the oneoff prefix.
-    stub_libvirt["virsh_list_all_names"].return_value = [
-        "testvm.local_dev",  # a manifest VM in env 'dev'
-        "testvm.local",  # someone's bare-named domain
-    ]
+def test_missing_domain_errors_without_destroying(stub_libvirt, tmp_path: Path) -> None:
+    """A name not on the domain list errors out before any destroy/undefine."""
+    stub_libvirt["virsh_list_all_names"].return_value = ["something-else"]
 
     runner = CliRunner()
     result = runner.invoke(
@@ -126,11 +112,32 @@ def test_missing_one_off_domain_does_not_consult_bare_name(
         ["testvm.local", "--force", "--storage-root", str(tmp_path)],
     )
     assert result.exit_code != 0
-    assert "oneoff-testvm.local" in result.output
-    # And we never queried domstate at all — early exit before that.
+    assert "No libvirt domain named 'testvm.local'" in result.output
+    # Early exit before state queries / mutations.
     stub_libvirt["virsh_domstate"].assert_not_called()
-    # No destroy/undefine attempted.
     stub_libvirt["undefine_with_snapshot_cleanup"].assert_not_called()
+
+
+def test_destroys_manifest_domain_by_raw_name(stub_libvirt, tmp_path: Path) -> None:
+    """Passing a manifest VM's actual <vm>_<env> domain name destroys it.
+
+    The raw-name contract: there's no oneoff- guard, so a domain that
+    happens to be a manifest VM is undefined when its exact name is
+    passed. (Its disks live elsewhere, so the per-VM dir cleanup is a
+    no-op here — undefine is the operative effect.)
+    """
+    stub_libvirt["virsh_list_all_names"].return_value = ["web01_lab"]
+
+    runner = CliRunner()
+    result = runner.invoke(
+        run,
+        ["web01_lab", "--force", "--storage-root", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.output
+    stub_libvirt["virsh_domstate"].assert_called_once_with(mock.ANY, "web01_lab")
+    undefine = stub_libvirt["undefine_with_snapshot_cleanup"]
+    undefine.assert_called_once()
+    assert undefine.call_args.args[1] == "web01_lab"
 
 
 def test_undefine_failure_leaves_storage_dir(stub_libvirt, tmp_path: Path) -> None:

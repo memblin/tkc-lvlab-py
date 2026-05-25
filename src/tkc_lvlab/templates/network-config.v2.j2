@@ -1,10 +1,23 @@
 ---
 # cloud-init network-config v2 (netplan).
 #
-# Each NIC is selected by ``match.driver: virtio_net`` — every NIC lvlab
-# deploys is model=virtio (see _virt_install_network_arg in
-# src/tkc_lvlab/utils/libvirt.py) — and configured under whatever name
-# the distro assigns it (enp1s0 / ens3 / eth0).
+# Each NIC is selected by ``match.macaddress`` — lvlab pins a deterministic
+# MAC per interface (see generate_mac in src/tkc_lvlab/utils/network.py) and
+# passes the same address to both ``virt-install --network ...,mac=`` and
+# this config — and configured under whatever name the distro assigns it
+# (enp1s0 / ens3 / eth0).
+#
+# MAC matching is the only selector cloud-init honours across BOTH of its
+# renderers. cloud-init translates this v2 doc to the distro's native
+# format: a verbatim netplan file on Debian/Ubuntu (systemd-networkd) but
+# a NetworkManager keyfile on Fedora/RHEL. The NM renderer does NOT honour
+# ``match: driver`` — it reduces the netplan stanza key to a literal
+# ``interface-name``, so a driver match silently binds only when the guest
+# NIC happens to be named like the label (``eth0``). It got that wrong on
+# Fedora (NIC is ``enp1s0``) and the static profile never bound, falling
+# back to NM's default DHCP. ``match: macaddress`` becomes a MAC-bound
+# keyfile that activates regardless of device name. ``match: driver`` is
+# kept only as a fallback for the (now unexpected) MAC-less interface.
 #
 # We deliberately do NOT ``set-name`` the interface. Renaming via netplan
 # works under NetworkManager (Fedora) but leaves the NIC unconfigured
@@ -12,16 +25,22 @@
 # DHCP. The ``iface.name`` below is therefore only a netplan label, not
 # the in-guest device name.
 #
-# Multi-NIC caveat: ``match.driver: virtio_net`` matches every virtio NIC,
-# so this template reliably supports a single NIC. More than one virtio
-# NIC needs a per-interface MAC match instead — not supported today.
+# Per-interface MAC matching also disambiguates multiple NICs (the old
+# driver match could not), though multi-NIC manifests are not yet exercised
+# end-to-end.
 network:
   version: {{ config.network_version.value }}
   ethernets:
     {%- for iface in config.interfaces %}
     {{ iface.name }}:
       match:
+      {%- if iface.macaddress %}
+        # Quoted: an all-numeric MAC (every octet <= 0x3b) would otherwise
+        # be misparsed as a YAML 1.1 base-60 integer by cloud-init's loader.
+        macaddress: "{{ iface.macaddress }}"
+      {%- else %}
         driver: virtio_net
+      {%- endif %}
       {%- if iface.ip4 %}
       dhcp4: false
       dhcp6: false

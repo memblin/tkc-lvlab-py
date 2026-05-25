@@ -10,11 +10,14 @@ constructor has unrelated filesystem side effects.
 
 from __future__ import annotations
 
+import re
 from unittest import mock
 
 import pytest
+import yaml
 
-from tkc_lvlab.utils.libvirt import Machine
+from tkc_lvlab.utils.cloud_init import NetworkConfig
+from tkc_lvlab.utils.libvirt import Machine, _virt_install_network_arg
 from tkc_lvlab.utils.virsh import VirshError
 
 
@@ -291,6 +294,91 @@ def test_virt_install_network_arg_user_mode_ignores_network_field() -> None:
         {"name": "eth0", "network": "default", "network_type": "user"}
     )
     assert arg == "user,model=virtio"
+
+
+def test_virt_install_network_arg_threads_pinned_mac_managed() -> None:
+    """A pinned ``macaddress`` is threaded into the managed-network arg as
+    ``mac=`` so it matches the cloud-init ``match: macaddress`` selector."""
+    arg = _virt_install_network_arg(
+        {"name": "eth0", "network": "default", "macaddress": "52:54:00:de:ad:be"}
+    )
+    assert arg.startswith("network=default,model=virtio,mac=52:54:00:de:ad:be,")
+    assert "address.type=pci" in arg
+
+
+def test_virt_install_network_arg_threads_pinned_mac_user_mode() -> None:
+    """User-mode carries the pinned MAC too — the guest NIC still has one
+    and the NM renderer still matches by it."""
+    arg = _virt_install_network_arg(
+        {"name": "eth0", "network_type": "user", "macaddress": "52:54:00:de:ad:be"}
+    )
+    assert arg == "user,model=virtio,mac=52:54:00:de:ad:be"
+
+
+# ---------------------------------------------------------------------------
+# Machine MAC pinning — cross-renderer NIC matching (Fedora static fix)
+# ---------------------------------------------------------------------------
+
+
+def test_machine_pins_qemu_oui_mac_per_interface() -> None:
+    """Machine.__init__ assigns a QEMU-OUI MAC to each interface that omits
+    one, so the network-config can match by MAC."""
+    m = Machine(
+        {"vm_name": "web01", "interfaces": [{"name": "eth0", "network": "default"}]},
+        {"name": "lab"},
+        _minimal_config_defaults(),
+    )
+    mac = m.interfaces[0]["macaddress"]
+    assert mac.startswith("52:54:00:")
+    assert re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac)
+
+
+def test_machine_respects_manifest_supplied_macaddress() -> None:
+    """A manifest-provided macaddress is preserved, not overwritten."""
+    m = Machine(
+        {
+            "vm_name": "web01",
+            "interfaces": [{"name": "eth0", "macaddress": "52:54:00:00:00:01"}],
+        },
+        {"name": "lab"},
+        _minimal_config_defaults(),
+    )
+    assert m.interfaces[0]["macaddress"] == "52:54:00:00:00:01"
+
+
+def test_machine_virt_install_mac_matches_network_config_mac() -> None:
+    """The MAC in the ``--network`` arg equals the ``match: macaddress`` in
+    the rendered network-config.
+
+    This is the invariant that makes the NetworkManager-renderer (Fedora)
+    static config bind to the right NIC. If the deploy arg and the cloud-init
+    config ever pinned different MACs, the guest profile would match no
+    device and fall back to NM's default DHCP — exactly the bug this guards.
+    """
+    m = Machine(
+        {
+            "vm_name": "web01",
+            "interfaces": [
+                {
+                    "name": "eth0",
+                    "network": "default",
+                    "ip4": "192.168.122.50/24",
+                    "ip4gw": "192.168.122.1",
+                }
+            ],
+        },
+        {"name": "lab"},
+        _minimal_config_defaults(),
+    )
+    pinned = m.interfaces[0]["macaddress"]
+
+    arg = _virt_install_network_arg(m.interfaces[0])
+    assert f"mac={pinned}" in arg
+
+    rendered = yaml.safe_load(
+        NetworkConfig(2, m.interfaces, m.nameservers).render_config()
+    )
+    assert rendered["network"]["ethernets"]["eth0"]["match"] == {"macaddress": pinned}
 
 
 # ---------------------------------------------------------------------------

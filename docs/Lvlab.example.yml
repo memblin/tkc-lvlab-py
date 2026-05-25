@@ -1,10 +1,13 @@
 ---
 # Example Lvlab.yml manifest covering each supported host OS.
 #
-# The v2 network-config template matches each NIC by driver
-# (``virtio_net``) and configures it under whatever name the distro
-# assigns (``enp1s0`` / ``ens3`` / ``eth0``); it does not rename the
-# interface — see ``src/tkc_lvlab/templates/network-config.v2.j2``.
+# The v2 network-config template matches each NIC by its MAC address
+# (lvlab pins one per interface and hands the same address to
+# virt-install) and configures it under whatever name the distro assigns
+# (``enp1s0`` / ``ens3`` / ``eth0``); it does not rename the interface —
+# see ``src/tkc_lvlab/templates/network-config.v2.j2``. MAC matching is
+# the only NIC selector cloud-init honours on both its netplan
+# (Debian/Ubuntu) and NetworkManager (Fedora/RHEL) renderers.
 #
 # ``iface.name`` below is just the netplan stanza key (a label), not
 # the in-guest device name. (``set-name`` renaming was removed because

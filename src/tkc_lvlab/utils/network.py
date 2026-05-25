@@ -31,9 +31,35 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import ipaddress
+import secrets
 import xml.etree.ElementTree as ET
 
 from .virsh import VirshError, run_virsh
+
+
+# QEMU/KVM's registered OUI. libvirt assigns guest NICs MACs from this
+# prefix by default, so generating our own from the same range keeps the
+# address indistinguishable from an auto-assigned one.
+_QEMU_OUI = "52:54:00"
+
+
+def generate_mac() -> str:
+    """Generate a random virtio NIC MAC address in QEMU's ``52:54:00`` OUI.
+
+    lvlab pins a deterministic MAC per interface so the same address can be
+    written into both the ``virt-install --network`` argument and the
+    cloud-init ``network-config`` (``match: macaddress``). MAC matching is
+    the only NIC selector cloud-init honours across *both* its netplan
+    (Debian/Ubuntu) and NetworkManager (Fedora/RHEL) renderers — matching by
+    driver works on netplan but is reduced to a literal ``interface-name`` on
+    the NM renderer, which then binds only when the guest NIC happens to be
+    named like the netplan label.
+
+    Returns:
+        A MAC address string such as ``"52:54:00:1a:2b:3c"`` (lowercase hex).
+    """
+    suffix = ":".join(f"{secrets.randbelow(256):02x}" for _ in range(3))
+    return f"{_QEMU_OUI}:{suffix}"
 
 
 # Valid values for ``interfaces.network_type`` (manifest) and

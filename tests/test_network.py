@@ -38,11 +38,14 @@ from tkc_lvlab.utils import network as net_mod
 from tkc_lvlab.utils.network import (
     LibvirtNetworkError,
     LibvirtNetworkInfo,
+    generate_mac,
     get_network_info,
     resolve_network_settings,
     validate_static_ip,
 )
 from tkc_lvlab.utils.virsh import VirshError
+
+import re
 
 
 # Realistic virsh net-dumpxml output for libvirt's stock "default" NAT
@@ -400,3 +403,27 @@ def test_resolve_search_domains_default_to_empty_list() -> None:
     info = _nat_default()
     _, _, search = resolve_network_settings(info)
     assert search == []
+
+
+# ---------------------------------------------------------------------------
+# generate_mac
+# ---------------------------------------------------------------------------
+
+
+def test_generate_mac_uses_qemu_oui_and_valid_format() -> None:
+    """The MAC sits in QEMU's 52:54:00 OUI and is well-formed lowercase hex.
+
+    virt-install and netplan both accept a colon-separated 6-octet MAC;
+    using QEMU's own OUI keeps lvlab-pinned MACs indistinguishable from
+    libvirt's auto-assigned ones.
+    """
+    mac = generate_mac()
+    assert mac.startswith("52:54:00:")
+    assert re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac), mac
+
+
+def test_generate_mac_varies_across_calls() -> None:
+    """Successive MACs differ — a fixed MAC would collide when two VMs
+    share a network. Not cryptographic; just guards against a constant."""
+    macs = {generate_mac() for _ in range(20)}
+    assert len(macs) > 1

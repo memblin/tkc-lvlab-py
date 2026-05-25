@@ -1,10 +1,17 @@
 """Unit tests for :class:`tkc_lvlab.utils.cloud_init.NetworkConfig`
 render output — both v1 (ENI) and v2 (netplan) templates.
 
-The v2 template selects each NIC by ``match.driver: virtio_net`` and
-configures it under whatever name the distro assigns (predictable
-``enp1s0`` on Debian / Fedora vs. ``eth0`` on AlmaLinux 10, whose cloud
-image disables predictable naming via the kernel cmdline). It
+The v2 template selects each NIC by ``match.macaddress`` (the lvlab-pinned
+MAC) when one is supplied, falling back to ``match.driver: virtio_net``
+otherwise. MAC matching is the only selector cloud-init honours across both
+its netplan (Debian/Ubuntu) and NetworkManager (Fedora/RHEL) renderers — the
+NM renderer reduces a driver match to a literal ``interface-name`` and only
+binds when the guest NIC happens to be named like the netplan label (it
+silently failed Fedora's ``enp1s0`` static config before MAC matching).
+
+The template configures the NIC under whatever name the distro assigns
+(predictable ``enp1s0`` on Debian / Fedora vs. ``eth0`` on AlmaLinux 10,
+whose cloud image disables predictable naming via the kernel cmdline). It
 deliberately does NOT ``set-name``/rename: netplan renaming leaves the
 NIC unconfigured under systemd-networkd (Debian/Ubuntu) and the guest
 never gets a DHCP lease. Regression guards here keep the rename from
@@ -58,6 +65,52 @@ def test_v2_static_ip_renders_match_by_driver_without_rename() -> None:
     assert eth0["dhcp4"] is False
     assert eth0["dhcp6"] is False
     assert eth0["routes"] == [{"to": "0.0.0.0/0", "via": "192.168.122.1"}]
+
+
+def test_v2_static_ip_matches_by_macaddress_when_pinned() -> None:
+    """A pinned ``macaddress`` becomes a ``match: macaddress`` block — NOT
+    a driver match and NOT a set-name.
+
+    This is the cross-renderer fix: cloud-init's NetworkManager renderer
+    (Fedora/RHEL) ignores ``match: driver`` and binds the profile to a
+    literal ``interface-name`` taken from the netplan label, so a driver
+    match silently failed Fedora's ``enp1s0`` static config. A MAC match
+    binds the right NIC on both renderers regardless of its device name.
+    """
+    nc = NetworkConfig(
+        network_version=NetworkVersion.V2,
+        interfaces=[
+            {
+                "name": "eth0",
+                "macaddress": "52:54:00:ab:cd:ef",
+                "ip4": "192.168.122.50/24",
+                "ip4gw": "192.168.122.1",
+            }
+        ],
+        nameservers=_empty_nameservers(),
+    )
+    parsed = yaml.safe_load(nc.render_config())
+
+    eth0 = parsed["network"]["ethernets"]["eth0"]
+    assert eth0["match"] == {"macaddress": "52:54:00:ab:cd:ef"}
+    assert "driver" not in eth0["match"]
+    assert "set-name" not in eth0
+    assert eth0["addresses"] == ["192.168.122.50/24"]
+
+
+def test_v2_dhcp_matches_by_macaddress_when_pinned() -> None:
+    """DHCP-only interfaces match by MAC too when one is pinned — the same
+    binding fix applies, just without static addressing."""
+    nc = NetworkConfig(
+        network_version=NetworkVersion.V2,
+        interfaces=[{"name": "eth0", "macaddress": "52:54:00:11:22:33"}],
+        nameservers=_empty_nameservers(),
+    )
+    parsed = yaml.safe_load(nc.render_config())
+
+    eth0 = parsed["network"]["ethernets"]["eth0"]
+    assert eth0["match"] == {"macaddress": "52:54:00:11:22:33"}
+    assert eth0["dhcp4"] is True
 
 
 def test_v2_dhcp_only_renders_match_without_rename() -> None:

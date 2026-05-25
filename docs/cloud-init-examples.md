@@ -81,14 +81,23 @@ network:
 ## network-config (v2, netplan)
 
 The v2 template selects when an image entry sets
-`network_version: 2`. It matches each NIC by
-`match.driver: virtio_net` (every lvlab NIC is `model=virtio`) and
-configures it under whatever name the distro assigns — it does **not**
-rename the interface. (`set-name` was removed: netplan renaming breaks
-interface bring-up under systemd-networkd on Debian/Ubuntu, so the guest
-never gets a DHCP lease.) The manifest's `iface.name` is just the
-netplan stanza key (a label); the in-guest device keeps its kernel name
-(`enp1s0` / `ens3` / `eth0`).
+`network_version: 2`. It matches each NIC by `match.macaddress` — `lvlab`
+pins a deterministic MAC per interface and passes the same address to
+both `virt-install` and this config — and configures it under whatever
+name the distro assigns. It does **not** rename the interface.
+(`set-name` was removed: netplan renaming breaks interface bring-up under
+systemd-networkd on Debian/Ubuntu, so the guest never gets a DHCP lease.)
+The manifest's `iface.name` is just the netplan stanza key (a label); the
+in-guest device keeps its kernel name (`enp1s0` / `ens3` / `eth0`).
+
+MAC matching (rather than matching by driver) is what makes this work on
+**every** distro. cloud-init renders this v2 document to the guest's
+native format: a verbatim netplan file on Debian/Ubuntu, but a
+NetworkManager keyfile on Fedora/RHEL — and the NetworkManager renderer
+ignores a `match: driver`, binding the profile to a literal interface
+name taken from the stanza label instead. That silently left Fedora's
+`enp1s0` static config unbound (it fell back to DHCP). A MAC match binds
+the right NIC under both renderers.
 
 ```yaml
 network:
@@ -96,7 +105,7 @@ network:
   ethernets:
     eth0:
       match:
-        driver: virtio_net
+        macaddress: "52:54:00:1a:2b:3c"
       dhcp4: false
       dhcp6: false
       addresses:
@@ -109,11 +118,11 @@ network:
           via: 192.168.122.1
 ```
 
-`match.driver: virtio_net` is reliable for a single NIC per VM.
-Multi-NIC manifests are a documented limitation — a driver match
-selects *every* virtio NIC, so it can't disambiguate more than one.
-Multi-NIC needs per-interface MAC matching, which is not yet
-supported in `lvlab`.
+The MAC is quoted because an all-numeric MAC would otherwise be misread
+as a YAML base-60 integer. Because each NIC matches its own MAC, this
+also disambiguates multiple NICs in principle (the old driver match
+could not) — though multi-NIC manifests are not yet exercised
+end-to-end in `lvlab`.
 
 ## See also
 

@@ -226,7 +226,6 @@ def all_external_mocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict
         "ensure_image_available": mock.Mock(),
         "vm_exists": mock.Mock(return_value=False),
         "wait_for_dhcp_lease": mock.Mock(return_value=None),
-        "lookup_vm_mac": mock.Mock(return_value=None),
         "subprocess_run": mock.Mock(
             return_value=subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
@@ -253,7 +252,6 @@ def all_external_mocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict
     )
     monkeypatch.setattr(cv_mod, "vm_exists", mocks["vm_exists"])
     monkeypatch.setattr(cv_mod, "_wait_for_dhcp_lease", mocks["wait_for_dhcp_lease"])
-    monkeypatch.setattr(cv_mod, "_lookup_vm_mac", mocks["lookup_vm_mac"])
 
     monkeypatch.setattr(subprocess, "run", mocks["subprocess_run"])
     monkeypatch.setattr("tkc_lvlab.scripts.createvm.shutil.copyfile", mocks["copyfile"])
@@ -397,6 +395,39 @@ def test_ip4_is_rendered_into_network_config(
     assert "100.64.10.100/24" in network_config
     # NAT resolver (gateway) lands as a nameserver even with no search domains.
     assert "192.168.122.1" in network_config
+
+
+def test_pinned_mac_threads_into_virt_install_and_network_config(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """createvm pins one MAC into BOTH the virt-install ``--network`` arg and
+    the cloud-init ``match: macaddress``; the two must agree.
+
+    If they ever drifted, the guest profile would match no NIC on the
+    NetworkManager renderer (Fedora) and fall back to default DHCP — the
+    static-IP bug this whole mechanism fixes.
+    """
+    import re
+
+    import yaml
+
+    result = _invoke(["testvm.local", "debian12", "--ip4", "192.168.122.50"], tmp_path)
+    assert result.exit_code == 0, result.output
+
+    virt_install_calls = [
+        c
+        for c in all_external_mocked["subprocess_run"].call_args_list
+        if c.args[0][0] == "virt-install"
+    ]
+    argv = virt_install_calls[0].args[0]
+    network_arg = next(a for a in argv if a.startswith("network=default,"))
+    match = re.search(r"mac=((?:[0-9a-f]{2}:){5}[0-9a-f]{2})", network_arg)
+    assert match, f"no mac= in {network_arg!r}"
+    pinned = match.group(1)
+    assert pinned.startswith("52:54:00:")
+
+    parsed = yaml.safe_load((tmp_path / "testvm.local" / "network-config").read_text())
+    assert parsed["network"]["ethernets"]["eth0"]["match"] == {"macaddress": pinned}
 
 
 def test_ip4_in_dhcp_range_errors(all_external_mocked: dict, tmp_path: Path) -> None:

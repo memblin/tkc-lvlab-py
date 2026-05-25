@@ -30,7 +30,7 @@ from .osinfo import OsInfoLookupError, resolve_os_variant
 from .subprocess_env import system_first_env
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
-from .network import NETWORK_TYPES, USER_MODE_NETWORK_TYPES
+from .network import NETWORK_TYPES, USER_MODE_NETWORK_TYPES, generate_mac
 from .virsh import (
     DEAD_STATES,
     RUNNING_STATES,
@@ -84,22 +84,32 @@ def _virt_install_network_arg(iface: dict[str, Any]) -> str:
     is required for ``qemu:///session`` where rootless libvirt cannot
     manage a NAT network.
 
+    The interface's pinned MAC (``Machine.__init__`` assigns one via
+    :func:`tkc_lvlab.utils.network.generate_mac` if the manifest omits it)
+    is appended as ``mac=`` so it matches the ``match: macaddress`` selector
+    rendered into the guest's cloud-init network-config. Without that pin
+    the two would disagree and the static/DHCP config would bind to the
+    wrong (or no) device on the NetworkManager renderer.
+
     Args:
         iface: The merged interface dict from ``Machine.interfaces``
-            (already had ``config_defaults['interfaces']`` applied).
+            (already had ``config_defaults['interfaces']`` applied, and a
+            ``macaddress`` pinned by ``Machine.__init__``).
 
     Returns:
         The exact string to pass after ``--network`` on the
         ``virt-install`` command line.
     """
+    mac = iface.get("macaddress")
+    mac_suffix = f",mac={mac}" if mac else ""
     network_type = iface.get("network_type", "network")
     if network_type == "user":
-        return "user,model=virtio"
+        return f"user,model=virtio{mac_suffix}"
     if network_type == "passt":
-        return "passt,model=virtio"
+        return f"passt,model=virtio{mac_suffix}"
     libvirt_network = iface.get("network", "default")
     return (
-        f"network={libvirt_network},model=virtio,"
+        f"network={libvirt_network},model=virtio{mac_suffix},"
         "address.type=pci,address.domain=0,address.bus=1,"
         "address.slot=0,address.function=0"
     )
@@ -169,12 +179,20 @@ class Machine:
         config_defaults: dict[str, Any],
     ) -> None:
 
-        # Apply interface defaults
+        # Apply interface defaults, then pin a deterministic MAC per
+        # interface (unless the manifest supplied one). The same address
+        # feeds both the virt-install ``--network ...,mac=`` arg
+        # (_virt_install_network_arg) and the cloud-init network-config's
+        # ``match: macaddress`` (rendered in cloud_init()), so the guest
+        # config binds to the right NIC regardless of the distro-assigned
+        # device name — required for the NetworkManager renderer
+        # (Fedora/RHEL), which ignores match-by-driver.
         for index, iface in enumerate(machine.get("interfaces", [])):
             machine["interfaces"][index] = {
                 **config_defaults.get("interfaces", {}),
                 **iface,
             }
+            machine["interfaces"][index].setdefault("macaddress", generate_mac())
 
         # Validate interface network_type and the ip4-with-user-mode
         # combination at construction time so an operator sees a clear

@@ -51,6 +51,7 @@ from ..utils.images import CloudImage
 from ..utils.network import (
     LibvirtNetworkError,
     LibvirtNetworkInfo,
+    generate_mac,
     get_network_info,
     resolve_network_settings,
     validate_static_ip,
@@ -584,6 +585,10 @@ class _CreateVmContext:
     memory_mib: str
     password_plain: str
     password_hash: str
+    # Deterministic NIC MAC pinned up front so the same address feeds both
+    # ``virt-install --network ...,mac=`` and the cloud-init network-config's
+    # ``match: macaddress`` (the only renderer-agnostic NIC selector).
+    mac: str = ""
     authorized_keys: list[str] = field(default_factory=list)
 
 
@@ -676,6 +681,7 @@ def _build_createvm_context(
         memory_mib=memory_mib,
         password_plain=password_plain,
         password_hash=password_hash,
+        mac=generate_mac(),
         authorized_keys=authorized_keys,
     )
 
@@ -726,7 +732,7 @@ def _render_cloud_init(*, vm_dir: Path, vm_name: str, ctx: _CreateVmContext) -> 
         password_hash=ctx.password_hash,
     )
 
-    iface: dict[str, Any] = {"name": "eth0"}
+    iface: dict[str, Any] = {"name": "eth0", "macaddress": ctx.mac}
     nameservers: dict[str, Any] = {}
     if ctx.vm_ip is not None:
         iface["ip4"] = ctx.vm_ip
@@ -780,8 +786,14 @@ def _virt_install_argv(
     cidata_path: Path,
     os_variant: str,
     network_name: str,
+    mac: str,
 ) -> list[str]:
-    """Build the ``virt-install`` argument vector (managed network, spice)."""
+    """Build the ``virt-install`` argument vector (managed network, spice).
+
+    ``mac`` is pinned on the ``--network`` arg so it matches the
+    ``match: macaddress`` selector rendered into the guest's cloud-init
+    network-config; see :func:`tkc_lvlab.utils.network.generate_mac`.
+    """
     try:
         resolved_variant, fallback_reason = resolve_os_variant(os_variant)
     except OsInfoLookupError as exc:
@@ -806,7 +818,7 @@ def _virt_install_argv(
         f"--disk={cidata_path},device=cdrom",
         f"--os-variant={resolved_variant}",
         "--network",
-        f"network={network_name},model=virtio",
+        f"network={network_name},model=virtio,mac={mac}",
         "--graphics",
         "spice,listen=127.0.0.1",
         "--noautoconsole",
@@ -848,6 +860,7 @@ def _provision_vm(
             cidata_path=cidata_path,
             os_variant=ctx.entry.os_variant,
             network_name=ctx.network_name,
+            mac=ctx.mac,
         )
     )
 
@@ -958,35 +971,6 @@ def _extract_lease_ip(
     return _match_lease_by_hostname(_iter_parsed_leases(leases_output), vm_hostname)
 
 
-def _lookup_vm_mac(vm_name: str, network_name: str) -> str | None:
-    """Return the VM MAC for the selected libvirt network, when available."""
-    try:
-        result = run_virsh(_SYSTEM_URI, ["domiflist", vm_name], check=False)
-    except VirshError:
-        return None
-    if result.returncode != 0:
-        return None
-
-    target_network = network_name.lower()
-    for line in result.stdout.splitlines():
-        fields = line.split()
-        if len(fields) < 5:
-            continue
-        # domiflist row layout: Interface Type Source Model MAC
-        source = fields[2].lower()
-        mac = fields[4].lower()
-        if not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
-            continue
-        if source == target_network:
-            return mac
-
-    for line in result.stdout.splitlines():
-        match = re.search(r"((?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})", line)
-        if match is not None:
-            return match.group(1).lower()
-    return None
-
-
 def _wait_for_dhcp_lease(
     vm_hostname: str, network_name: str, *, vm_mac: str | None, timeout_seconds: int
 ) -> str | None:
@@ -1060,11 +1044,13 @@ def _print_completion_details(
         typer.echo()
         return
 
-    vm_mac = _lookup_vm_mac(vm_name, ctx.network_name)
+    # The MAC is pinned by createvm (ctx.mac) and passed verbatim to
+    # virt-install, so it's authoritative — no need to read it back from
+    # domiflist.
     lease_ip = _wait_for_dhcp_lease(
         vm_hostname,
         ctx.network_name,
-        vm_mac=vm_mac,
+        vm_mac=ctx.mac,
         timeout_seconds=NAT_DHCP_LEASE_WAIT_SECONDS,
     )
     if lease_ip is not None:

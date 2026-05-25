@@ -16,9 +16,12 @@ out the gotchas that bite first-time users.
     10, Fedora 44.
 - **Cross-distro interface matching.** Each interface is keyed `eth0` in
     the manifest (a netplan label). The v2 (netplan) network-config
-    template matches the NIC by `match.driver: virtio_net` and configures
+    template matches the NIC by its MAC address (`lvlab` pins one per
+    interface and passes the same address to `virt-install`) and configures
     it under its distro-assigned name — no rename — so the same manifest
-    works on every distro without guessing `enp1s0` vs `eth0`.
+    works on every distro without guessing `enp1s0` vs `eth0`. MAC matching
+    is the only selector cloud-init honours on both its netplan and
+    NetworkManager renderers.
 - **One user-mode-networking VM** (`rootless.local`) for use on
     `qemu:///session` where rootless libvirt can't manage a NAT
     network.

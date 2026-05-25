@@ -14,10 +14,12 @@ test file.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import shutil
 import subprocess
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from textwrap import dedent
 
@@ -226,3 +228,251 @@ def find_entry_point(name: str) -> str:
             f"'uv sync' before invoking integration tests"
         )
     return found
+
+
+# ---------------------------------------------------------------------------
+# IP-address resolution (DHCP lease + static pick) and SSH connectivity
+# ---------------------------------------------------------------------------
+
+DHCP_LEASE_POLL_SECONDS = 2.0
+"""Seconds between successive ``domifaddr`` polls in :func:`wait_for_dhcp_lease`."""
+
+DHCP_LEASE_TIMEOUT_SECONDS = 120
+"""Total seconds :func:`wait_for_dhcp_lease` waits for a NAT lease to appear."""
+
+SSH_POLL_SECONDS = 3.0
+"""Seconds between successive SSH attempts in :func:`wait_for_ssh`."""
+
+SSH_READY_TIMEOUT_SECONDS = 240
+"""Total seconds :func:`wait_for_ssh` waits for first-boot cloud-init + sshd."""
+
+
+def network_ipv4_info(uri: str, network: str = "default") -> tuple[str, str, str, str]:
+    """Return ``(gateway, netmask, dhcp_start, dhcp_end)`` for a libvirt network.
+
+    Parses ``virsh net-dumpxml <network>`` rather than assuming the stock
+    ``192.168.122.0/24`` so the static-IP pick adapts to whatever the host's
+    ``default`` network actually is.
+
+    Args:
+        uri: libvirt URI (the createvm path is ``qemu:///system`` only).
+        network: Network name to inspect.
+
+    Returns:
+        ``(gateway, netmask, dhcp_start, dhcp_end)``. ``dhcp_start`` /
+        ``dhcp_end`` are empty strings when the network defines no DHCP
+        range.
+
+    Raises:
+        AssertionError: ``net-dumpxml`` failed or declared no IPv4 block.
+    """
+    result = run_virsh(uri, "net-dumpxml", network)
+    assert (
+        result.returncode == 0
+    ), f"net-dumpxml {network} failed on {uri}:\n{result.stderr}"
+    root = ET.fromstring(result.stdout)
+    for ip_el in root.findall("ip"):
+        # The IPv4 block has either no family attr or family='ipv4'.
+        if ip_el.get("family", "ipv4") != "ipv4":
+            continue
+        gateway = ip_el.get("address", "")
+        netmask = ip_el.get("netmask", "")
+        if not gateway or not netmask:
+            continue
+        dhcp = ip_el.find("dhcp")
+        rng = dhcp.find("range") if dhcp is not None else None
+        start = rng.get("start", "") if rng is not None else ""
+        end = rng.get("end", "") if rng is not None else ""
+        return gateway, netmask, start, end
+    raise AssertionError(f"no IPv4 block in net-dumpxml for {network} on {uri}")
+
+
+def pick_static_ip(uri: str, network: str = "default") -> tuple[str, str] | None:
+    """Pick a static IPv4 + netmask **outside** the network's DHCP range.
+
+    ``createvm`` refuses a ``--ip4`` that falls inside the network's DHCP
+    range (it would risk a lease collision), so a valid static address must
+    sit between the gateway and the pool, or above the pool. This returns
+    the first such address, or ``None`` when the pool leaves no room.
+
+    The stock libvirt ``default`` network has a DHCP range spanning the
+    whole usable subnet (``.2``-``.254``), so on an unmodified host there is
+    no valid static address and this returns ``None`` — the caller should
+    skip rather than fail. To exercise static addressing, narrow the
+    network's DHCP range (e.g. ``.2``-``.199``, freeing ``.200``-``.254``)
+    or use a dedicated test network.
+
+    Tests run serially and tear each VM down before the next, so every
+    static-mode case can safely reuse the same returned address — only one
+    test VM is ever live at a time.
+
+    Args:
+        uri: libvirt URI.
+        network: Network name to derive the subnet + DHCP range from.
+
+    Returns:
+        ``(ip, netmask)`` as dotted-quad strings, or ``None`` when no
+        address exists outside the DHCP range.
+    """
+    gateway, netmask, start, end = network_ipv4_info(uri, network)
+    subnet = ipaddress.IPv4Network(f"{gateway}/{netmask}", strict=False)
+    gw = ipaddress.IPv4Address(gateway)
+    reserved = {subnet.network_address, subnet.broadcast_address, gw}
+
+    if start and end:
+        pool_lo, pool_hi = ipaddress.IPv4Address(start), ipaddress.IPv4Address(end)
+        # Prefer just above the pool, then just below it (above the gateway).
+        for candidate in (pool_hi + 1, pool_lo - 1):
+            if (
+                candidate not in reserved
+                and candidate in subnet.hosts()
+                and not (pool_lo <= candidate <= pool_hi)
+            ):
+                return str(candidate), netmask
+        return None
+
+    # No DHCP range declared: any host address is fine; pick a high one.
+    candidate = subnet.broadcast_address - 1
+    return (str(candidate), netmask) if candidate not in reserved else None
+
+
+def domain_lease_ipv4(uri: str, domain: str) -> str | None:
+    """Return the NAT DHCP-leased IPv4 for ``domain``, or ``None`` if none yet.
+
+    Reads ``virsh domifaddr <domain> --source lease`` — the same lease
+    table createvm waits on. Returns the bare address (the ``/prefix`` is
+    stripped).
+
+    Args:
+        uri: libvirt URI.
+        domain: Exact libvirt domain name.
+
+    Returns:
+        The dotted-quad IPv4 string, or ``None`` when no lease is present
+        yet or the lookup failed.
+    """
+    result = run_virsh(uri, "domifaddr", domain, "--source", "lease")
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        # Row shape: <iface> <mac> ipv4 <addr>/<prefix>
+        if "ipv4" in fields:
+            addr = fields[fields.index("ipv4") + 1]
+            return addr.split("/", 1)[0]
+    return None
+
+
+def wait_for_dhcp_lease(uri: str, domain: str) -> str:
+    """Poll until ``domain`` has a NAT DHCP lease; return its IPv4.
+
+    Args:
+        uri: libvirt URI.
+        domain: Exact libvirt domain name.
+
+    Returns:
+        The leased IPv4 address.
+
+    Raises:
+        AssertionError: No lease appeared within
+            :data:`DHCP_LEASE_TIMEOUT_SECONDS`.
+    """
+    deadline = time.monotonic() + DHCP_LEASE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        ip = domain_lease_ipv4(uri, domain)
+        if ip:
+            return ip
+        time.sleep(DHCP_LEASE_POLL_SECONDS)
+    raise AssertionError(
+        f"domain {domain!r} got no NAT DHCP lease within "
+        f"{DHCP_LEASE_TIMEOUT_SECONDS}s on {uri}"
+    )
+
+
+def _ssh_argv(ip: str, user: str, key_path: Path) -> list[str]:
+    """Build a non-interactive ``ssh`` argv for a throwaway test keypair.
+
+    Host-key checking is disabled and known-hosts routed to ``/dev/null``
+    because test guests are ephemeral and their host keys churn every run.
+    """
+    return [
+        "ssh",
+        "-i",
+        str(key_path),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "LogLevel=ERROR",
+        f"{user}@{ip}",
+    ]
+
+
+def wait_for_ssh(ip: str, user: str, key_path: Path) -> None:
+    """Poll until ``user@ip`` accepts the test key, or fail.
+
+    The guest may have a DHCP lease (or a configured static IP) well before
+    cloud-init has created the default user and installed the key, so this
+    retries rather than assuming sshd is immediately ready.
+
+    Args:
+        ip: Target IPv4 address.
+        user: Expected cloud-init default user.
+        key_path: Private key paired with the seeded public key.
+
+    Raises:
+        AssertionError: No successful login within
+            :data:`SSH_READY_TIMEOUT_SECONDS`.
+    """
+    deadline = time.monotonic() + SSH_READY_TIMEOUT_SECONDS
+    last = ""
+    while time.monotonic() < deadline:
+        proc = subprocess.run(
+            [*_ssh_argv(ip, user, key_path), "true"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        if proc.returncode == 0:
+            return
+        last = proc.stderr.strip()
+        time.sleep(SSH_POLL_SECONDS)
+    raise AssertionError(
+        f"ssh {user}@{ip} not ready within {SSH_READY_TIMEOUT_SECONDS}s; "
+        f"last stderr: {last!r}"
+    )
+
+
+def ssh_run(ip: str, user: str, key_path: Path, command: str) -> str:
+    """Run a single command over SSH and return its stripped stdout.
+
+    Args:
+        ip: Target IPv4 address.
+        user: SSH user.
+        key_path: Private key path.
+        command: Remote command to execute.
+
+    Returns:
+        The command's stdout, stripped.
+
+    Raises:
+        AssertionError: The remote command exited non-zero.
+    """
+    proc = subprocess.run(
+        [*_ssh_argv(ip, user, key_path), command],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert proc.returncode == 0, (
+        f"ssh {user}@{ip} {command!r} failed (exit {proc.returncode}):\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    return proc.stdout.strip()

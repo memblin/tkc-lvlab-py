@@ -184,8 +184,8 @@ def lvlab_test_basedir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def test_ssh_pubkey_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Provide a throwaway SSH ed25519 public-key path for integration tests.
+def _test_ssh_keydir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Generate a throwaway ed25519 keypair once per session; return its dir.
 
     The integration suite previously fell back on ``~/.ssh/id_ed25519.pub``
     (or, for the createvm-direct test, on createvm's own auto-discovery).
@@ -194,25 +194,26 @@ def test_ssh_pubkey_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
     ``claude-code`` user on freshly-provisioned VMs had only an
     ``authorized_keys`` file but no keypair of its own.
 
-    This fixture generates a fresh ed25519 keypair in a session-scoped
-    tmpdir (via the system ``ssh-keygen`` binary, no passphrase) and
-    returns the public-key path. Tests should pass it to ``createvm``
-    via ``--public-key`` and to ``render_manifest`` via the
-    ``pubkey_path=`` arg so the suite is self-contained regardless of
-    the runner user's environment.
+    This fixture generates a fresh ed25519 keypair (via the system
+    ``ssh-keygen`` binary, no passphrase) in a session-scoped tmpdir so
+    both the public key (seeded into the guest via ``createvm
+    --public-key``) and the private key (used by the test's SSH probe)
+    come from the same self-contained pair. Connectivity tests can then
+    verify default-user SSH login regardless of the runner user's
+    environment.
 
-    The keypair lives for the pytest session only; pytest cleans up
-    the tmpdir at session end.
+    The keypair lives for the pytest session only; pytest cleans up the
+    tmpdir at session end.
 
     Args:
         tmp_path_factory: pytest's built-in temp directory factory.
 
     Returns:
-        Absolute path to the generated ``id_ed25519.pub`` file.
+        Absolute path to the directory holding ``id_ed25519`` (private)
+        and ``id_ed25519.pub`` (public).
     """
     keydir = tmp_path_factory.mktemp("lvlab-test-ssh-keys")
     privkey = keydir / "id_ed25519"
-    pubkey = keydir / "id_ed25519.pub"
     subprocess.run(
         [
             "ssh-keygen",
@@ -229,8 +230,43 @@ def test_ssh_pubkey_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
         capture_output=True,
         text=True,
     )
-    assert pubkey.is_file(), f"ssh-keygen did not write {pubkey}"
-    return pubkey
+    assert privkey.is_file(), f"ssh-keygen did not write {privkey}"
+    assert (keydir / "id_ed25519.pub").is_file(), "ssh-keygen did not write pubkey"
+    return keydir
+
+
+@pytest.fixture(scope="session")
+def test_ssh_pubkey_path(_test_ssh_keydir: Path) -> Path:
+    """Return the throwaway ed25519 **public**-key path.
+
+    Pass to ``createvm`` via ``--public-key`` and to ``render_manifest``
+    via the ``pubkey_path=`` arg. Paired with
+    :func:`test_ssh_privkey_path`.
+
+    Args:
+        _test_ssh_keydir: Session keypair directory.
+
+    Returns:
+        Absolute path to ``id_ed25519.pub``.
+    """
+    return _test_ssh_keydir / "id_ed25519.pub"
+
+
+@pytest.fixture(scope="session")
+def test_ssh_privkey_path(_test_ssh_keydir: Path) -> Path:
+    """Return the throwaway ed25519 **private**-key path.
+
+    Connectivity tests use this with ``ssh -i`` to log into the guest
+    as the cloud-init default user, verifying that ``createvm`` seeded
+    the matching public key. Paired with :func:`test_ssh_pubkey_path`.
+
+    Args:
+        _test_ssh_keydir: Session keypair directory.
+
+    Returns:
+        Absolute path to ``id_ed25519`` (private key, no passphrase).
+    """
+    return _test_ssh_keydir / "id_ed25519"
 
 
 def _integration_enabled() -> bool:

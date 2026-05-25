@@ -179,6 +179,18 @@ BUILTIN_IMAGES: dict[str, dict[str, Any]] = {
         "checksum_url_gpg": "https://fedoraproject.org/fedora.gpg",
         "network_version": 2,
     },
+    "almalinux10": {
+        "image_url": (
+            "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/"
+            "AlmaLinux-10-GenericCloud-latest.x86_64.qcow2"
+        ),
+        "checksum_url": (
+            "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/CHECKSUM"
+        ),
+        "checksum_type": "sha256",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+    },
 }
 
 

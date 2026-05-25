@@ -1,13 +1,14 @@
 """Unit tests for :class:`tkc_lvlab.utils.cloud_init.NetworkConfig`
 render output — both v1 (ENI) and v2 (netplan) templates.
 
-The v2 template uses netplan's ``match.driver: virtio_net`` +
-``set-name: {{ iface.name }}`` shape so the same manifest works on
-hosts whose cloud images differ in default interface naming
-(predictable ``enp1s0`` on Debian / Fedora vs. unpredictable
-``eth0`` on AlmaLinux 10, whose cloud image disables predictable
-naming via the kernel cmdline). Regression guards here prevent
-either side of that decoupling from drifting silently.
+The v2 template selects each NIC by ``match.driver: virtio_net`` and
+configures it under whatever name the distro assigns (predictable
+``enp1s0`` on Debian / Fedora vs. ``eth0`` on AlmaLinux 10, whose cloud
+image disables predictable naming via the kernel cmdline). It
+deliberately does NOT ``set-name``/rename: netplan renaming leaves the
+NIC unconfigured under systemd-networkd (Debian/Ubuntu) and the guest
+never gets a DHCP lease. Regression guards here keep the rename from
+creeping back in and keep the match block from drifting.
 """
 
 from __future__ import annotations
@@ -32,13 +33,14 @@ def _empty_nameservers() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_v2_static_ip_renders_match_by_driver_and_set_name() -> None:
-    """A static-IP interface must carry a match-by-driver block and a
-    set-name renaming the matched NIC to the manifest's iface.name.
+def test_v2_static_ip_renders_match_by_driver_without_rename() -> None:
+    """A static-IP interface carries a match-by-driver block and NO
+    set-name.
 
-    Without these the netplan config pins to a kernel device name that
-    may not exist on the target distro — the root cause of the
-    "eth0 vs enp1s0" deploy failures across the supported host matrix.
+    Renaming via netplan breaks interface bring-up under
+    systemd-networkd (Debian/Ubuntu), so we match the virtio NIC and
+    configure it under whatever name the distro assigned rather than
+    pinning to a renamed device.
     """
     nc = NetworkConfig(
         network_version=NetworkVersion.V2,
@@ -51,17 +53,17 @@ def test_v2_static_ip_renders_match_by_driver_and_set_name() -> None:
 
     eth0 = parsed["network"]["ethernets"]["eth0"]
     assert eth0["match"] == {"driver": "virtio_net"}
-    assert eth0["set-name"] == "eth0"
+    assert "set-name" not in eth0
     assert eth0["addresses"] == ["192.168.122.50/24"]
     assert eth0["dhcp4"] is False
     assert eth0["dhcp6"] is False
     assert eth0["routes"] == [{"to": "0.0.0.0/0", "via": "192.168.122.1"}]
 
 
-def test_v2_dhcp_only_still_renders_match_and_set_name() -> None:
-    """DHCP-only (no ip4) interfaces also need match+set-name —
-    otherwise a manifest that omitted the IP for ergonomics would
-    silently regress the cross-distro decoupling.
+def test_v2_dhcp_only_renders_match_without_rename() -> None:
+    """DHCP-only (no ip4) interfaces also match-by-driver with no
+    set-name — a manifest that omits the IP must not regress into a
+    rename that breaks DHCP on Debian/Ubuntu.
     """
     nc = NetworkConfig(
         network_version=NetworkVersion.V2,
@@ -72,37 +74,39 @@ def test_v2_dhcp_only_still_renders_match_and_set_name() -> None:
 
     eth0 = parsed["network"]["ethernets"]["eth0"]
     assert eth0["match"] == {"driver": "virtio_net"}
-    assert eth0["set-name"] == "eth0"
+    assert "set-name" not in eth0
     assert eth0["dhcp4"] is True
     assert eth0["dhcp6"] is True
     assert "addresses" not in eth0
     assert "routes" not in eth0
 
 
-def test_v2_set_name_tracks_iface_name() -> None:
-    """An operator who picks a non-default iface.name (e.g. ``mgmt0``)
-    gets that exact name as the in-guest device. Backward-compatibility
-    for legacy manifests that used ``name: enp1s0`` rides on this too —
-    the NIC still ends up named enp1s0 in the guest.
+def test_v2_ethernet_key_is_iface_name_label_without_rename() -> None:
+    """``iface.name`` becomes the netplan ethernet *key* (a label) but is
+    NOT applied as a set-name rename.
+
+    The in-guest device keeps its distro-assigned name; the key only
+    identifies the stanza. Using a label that is clearly not a kernel
+    device name (``mgmt0``) makes the distinction explicit.
     """
     nc = NetworkConfig(
         network_version=NetworkVersion.V2,
-        interfaces=[{"name": "enp1s0", "ip4": "10.0.0.5/24", "ip4gw": "10.0.0.1"}],
+        interfaces=[{"name": "mgmt0", "ip4": "10.0.0.5/24", "ip4gw": "10.0.0.1"}],
         nameservers=_empty_nameservers(),
     )
     parsed = yaml.safe_load(nc.render_config())
 
-    enp = parsed["network"]["ethernets"]["enp1s0"]
-    assert enp["set-name"] == "enp1s0"
-    assert enp["match"] == {"driver": "virtio_net"}
+    ethernets = parsed["network"]["ethernets"]
+    assert set(ethernets.keys()) == {"mgmt0"}
+    assert ethernets["mgmt0"]["match"] == {"driver": "virtio_net"}
+    assert "set-name" not in ethernets["mgmt0"]
 
 
-def test_v2_multiple_interfaces_each_get_match_and_set_name() -> None:
-    """When the manifest declares multiple interfaces, every one needs
-    its own match-by-driver + set-name. Netplan won't reliably rename
-    >1 device per match group, but emitting the block for each is
-    still correct — the multi-NIC limitation is documented in the
-    template comment, not enforced by truncating the render.
+def test_v2_multiple_interfaces_each_get_match_without_rename() -> None:
+    """Each declared interface gets its own match-by-driver block and no
+    set-name. The multi-NIC limitation (driver match can't disambiguate
+    >1 virtio NIC) is documented in the template comment; the render
+    still emits one stanza per interface rather than truncating.
     """
     nc = NetworkConfig(
         network_version=NetworkVersion.V2,
@@ -118,7 +122,7 @@ def test_v2_multiple_interfaces_each_get_match_and_set_name() -> None:
     assert set(ethernets.keys()) == {"eth0", "eth1"}
     for name in ("eth0", "eth1"):
         assert ethernets[name]["match"] == {"driver": "virtio_net"}
-        assert ethernets[name]["set-name"] == name
+        assert "set-name" not in ethernets[name]
 
 
 def test_v2_nameservers_render_under_interface_block() -> None:

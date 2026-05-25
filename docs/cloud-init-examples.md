@@ -81,12 +81,14 @@ network:
 ## network-config (v2, netplan)
 
 The v2 template selects when an image entry sets
-`network_version: 2`. As of 0.3.0 it uses netplan's
-`match.driver: virtio_net` plus `set-name`, so the manifest's
-`iface.name` is the in-guest name regardless of what the cloud
-image's default naming convention would produce. Below, an operator
-chooses `eth0` and netplan renames the matched virtio NIC
-accordingly.
+`network_version: 2`. It matches each NIC by
+`match.driver: virtio_net` (every lvlab NIC is `model=virtio`) and
+configures it under whatever name the distro assigns — it does **not**
+rename the interface. (`set-name` was removed: netplan renaming breaks
+interface bring-up under systemd-networkd on Debian/Ubuntu, so the guest
+never gets a DHCP lease.) The manifest's `iface.name` is just the
+netplan stanza key (a label); the in-guest device keeps its kernel name
+(`enp1s0` / `ens3` / `eth0`).
 
 ```yaml
 network:
@@ -95,7 +97,6 @@ network:
     eth0:
       match:
         driver: virtio_net
-      set-name: eth0
       dhcp4: false
       dhcp6: false
       addresses:
@@ -109,10 +110,10 @@ network:
 ```
 
 `match.driver: virtio_net` is reliable for a single NIC per VM.
-Multi-NIC manifests are a documented limitation — netplan's
-`set-name` only renames cleanly when the match resolves to a single
-device. Multi-NIC needs per-interface MAC matching, which is not
-yet supported in `lvlab`.
+Multi-NIC manifests are a documented limitation — a driver match
+selects *every* virtio NIC, so it can't disambiguate more than one.
+Multi-NIC needs per-interface MAC matching, which is not yet
+supported in `lvlab`.
 
 ## See also
 

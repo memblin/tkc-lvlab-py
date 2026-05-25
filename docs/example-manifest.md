@@ -14,11 +14,11 @@ out the gotchas that bite first-time users.
 - **Five machines** spanning every supported guest OS in the
     validated matrix: Debian 12, Debian 13 (static + DHCP), AlmaLinux
     10, Fedora 44.
-- **Cross-distro interface naming.** Every NIC is named `eth0` in the
-    manifest. The v2 (netplan) network-config template uses
-    `match.driver: virtio_net` + `set-name`, so the in-guest name is
-    operator-chosen and works the same on every distro — no more
-    "`enp1s0` on Debian / `eth0` on AlmaLinux" footgun.
+- **Cross-distro interface matching.** Each interface is keyed `eth0` in
+    the manifest (a netplan label). The v2 (netplan) network-config
+    template matches the NIC by `match.driver: virtio_net` and configures
+    it under its distro-assigned name — no rename — so the same manifest
+    works on every distro without guessing `enp1s0` vs `eth0`.
 - **One user-mode-networking VM** (`rootless.local`) for use on
     `qemu:///session` where rootless libvirt can't manage a NAT
     network.

@@ -1,15 +1,14 @@
 ---
 # Example Lvlab.yml manifest covering each supported host OS.
 #
-# Every VM's NIC ends up named ``eth0`` in the guest regardless of
-# the cloud image's default naming convention. The v2 network-config
-# template uses netplan's match-by-driver (``virtio_net``) plus
-# ``set-name`` to decouple the manifest's ``iface.name`` from the
-# kernel-assigned device name — see
-# ``src/tkc_lvlab/templates/network-config.v2.j2``.
+# The v2 network-config template matches each NIC by driver
+# (``virtio_net``) and configures it under whatever name the distro
+# assigns (``enp1s0`` / ``ens3`` / ``eth0``); it does not rename the
+# interface — see ``src/tkc_lvlab/templates/network-config.v2.j2``.
 #
-# If you want a different in-guest name (``mgmt0``, ``primary``,
-# etc.), set ``iface.name`` to it; the rename follows.
+# ``iface.name`` below is just the netplan stanza key (a label), not
+# the in-guest device name. (``set-name`` renaming was removed because
+# it breaks DHCP under systemd-networkd on Debian/Ubuntu.)
 
 environment:
   - name: libvirt-salt-dev

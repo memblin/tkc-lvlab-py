@@ -26,6 +26,7 @@ All subprocess calls are intercepted; pytest never invokes a real binary.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -37,6 +38,7 @@ from tkc_lvlab.scripts import createvm as cv_mod
 from tkc_lvlab.scripts.createvm import (
     BUILTIN_IMAGES,
     ensure_cidr,
+    parse_disk_size_to_bytes,
     parse_ip4_option,
     parse_memory_to_mib,
     resolve_catalog,
@@ -46,6 +48,29 @@ from tkc_lvlab.scripts.createvm import (
 )
 from tkc_lvlab.utils.network import LibvirtNetworkError, LibvirtNetworkInfo
 from tkc_lvlab.utils.requirements import DependencyError
+
+
+_GIB = 1024**3
+
+# Virtual size that the mocked ``qemu-img info`` reports for the base image.
+# Mutable so a test can dial it up (e.g. to a 10 GiB base) before invoking.
+_FAKE_IMAGE_VIRTUAL_SIZE = {"bytes": 2 * _GIB}
+
+
+def _fake_subprocess_run(argv, *args, **kwargs):  # type: ignore[no-untyped-def]
+    """Stand-in for ``subprocess.run`` in createvm.
+
+    Returns a JSON ``virtual-size`` payload for ``qemu-img info`` so the
+    resize-skip logic has a real size to compare against; every other
+    command (``qemu-img resize``, ``virt-install``, ...) gets an empty
+    success result.
+    """
+    if argv[:2] == ["qemu-img", "info"]:
+        stdout = json.dumps({"virtual-size": _FAKE_IMAGE_VIRTUAL_SIZE["bytes"]})
+        return subprocess.CompletedProcess(
+            args=argv, returncode=0, stdout=stdout, stderr=""
+        )
+    return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +200,17 @@ def test_parse_memory_to_mib_units() -> None:
         parse_memory_to_mib("lots")
 
 
+def test_parse_disk_size_to_bytes_units() -> None:
+    """Suffixes are binary (1024-based), matching qemu-img; bare = bytes."""
+    assert parse_disk_size_to_bytes("1G") == 1024**3
+    assert parse_disk_size_to_bytes("512M") == 512 * 1024**2
+    assert parse_disk_size_to_bytes("35G") == 35 * 1024**3
+    # Bare number is a raw byte count, not a unit.
+    assert parse_disk_size_to_bytes("10737418240") == 10 * 1024**3
+    with pytest.raises(ValueError):
+        parse_disk_size_to_bytes("big")
+
+
 # ---------------------------------------------------------------------------
 # CLI orchestration
 # ---------------------------------------------------------------------------
@@ -216,11 +252,7 @@ def all_external_mocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict
         "ensure_image_available": mock.Mock(),
         "vm_exists": mock.Mock(return_value=False),
         "wait_for_dhcp_lease": mock.Mock(return_value=None),
-        "subprocess_run": mock.Mock(
-            return_value=subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-        ),
+        "subprocess_run": mock.Mock(side_effect=_fake_subprocess_run),
         "copyfile": mock.Mock(),
     }
 
@@ -315,7 +347,12 @@ def test_version_flag() -> None:
 
 
 def test_copies_disk_then_resizes(all_external_mocked: dict, tmp_path: Path) -> None:
-    """The cloud image is copied (standalone disk) then qemu-img resize'd."""
+    """The cloud image is copied (standalone disk) then qemu-img resize'd.
+
+    Default ``--disk-size`` (35G) exceeds the mocked 2 GiB base virtual size,
+    so the resize runs as before. The provision first probes the base size
+    via ``qemu-img info``.
+    """
     result = _invoke(["testvm.local", "debian12"], tmp_path)
     assert result.exit_code == 0, result.output
 
@@ -325,8 +362,55 @@ def test_copies_disk_then_resizes(all_external_mocked: dict, tmp_path: Path) -> 
         for c in all_external_mocked["subprocess_run"].call_args_list
         if c.args[0][0] == "qemu-img"
     ]
-    assert len(qemu_img_calls) == 1
-    assert qemu_img_calls[0].args[0][1] == "resize"
+    subcommands = [c.args[0][1] for c in qemu_img_calls]
+    assert subcommands == ["info", "resize"]
+
+
+def test_resize_skipped_when_disk_size_le_base(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A --disk-size at/below the base virtual size skips resize and warns.
+
+    qemu-img cannot shrink a qcow2, so requesting 5G against a 10 GiB base
+    must not call ``qemu-img resize`` (which would crash the provision);
+    instead it keeps the base size and prints a warning naming both sizes.
+    """
+    monkeypatch.setitem(_FAKE_IMAGE_VIRTUAL_SIZE, "bytes", 10 * _GIB)
+
+    result = _invoke(["testvm.local", "debian12", "--disk-size", "5G"], tmp_path)
+    assert result.exit_code == 0, result.output
+
+    qemu_img_calls = [
+        c
+        for c in all_external_mocked["subprocess_run"].call_args_list
+        if c.args[0][0] == "qemu-img"
+    ]
+    subcommands = [c.args[0][1] for c in qemu_img_calls]
+    # info ran (to learn the base size); resize did NOT.
+    assert "info" in subcommands
+    assert "resize" not in subcommands
+    assert "skipping resize" in result.output
+    # Both sizes are named in the warning.
+    assert "5G" in result.output
+    assert "10G" in result.output
+
+
+def test_resize_runs_when_disk_size_gt_base(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A --disk-size above the base virtual size still grows the disk."""
+    monkeypatch.setitem(_FAKE_IMAGE_VIRTUAL_SIZE, "bytes", 10 * _GIB)
+
+    result = _invoke(["testvm.local", "debian12", "--disk-size", "35G"], tmp_path)
+    assert result.exit_code == 0, result.output
+
+    resize_calls = [
+        c
+        for c in all_external_mocked["subprocess_run"].call_args_list
+        if c.args[0][0] == "qemu-img" and c.args[0][1] == "resize"
+    ]
+    assert len(resize_calls) == 1
+    assert resize_calls[0].args[0][-1] == "35G"
 
 
 def test_dependency_failure_exits_nonzero(
@@ -441,9 +525,8 @@ def test_virt_install_failure_cleans_up_vm_dir(
             raise subprocess.CalledProcessError(
                 returncode=1, cmd=argv, stderr="virt-install boom\n"
             )
-        return subprocess.CompletedProcess(
-            args=argv, returncode=0, stdout="", stderr=""
-        )
+        # Delegate so `qemu-img info` still returns a real virtual-size JSON.
+        return _fake_subprocess_run(argv, **kwargs)
 
     all_external_mocked["subprocess_run"].side_effect = fail_on_virt_install
     result = _invoke(["testvm.local", "debian12"], tmp_path)

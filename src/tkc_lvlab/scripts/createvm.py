@@ -31,6 +31,7 @@ and for test imports.
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import re
 import shutil
@@ -732,6 +733,95 @@ def _run_cmd(argv: list[str]) -> None:
     )
 
 
+# Binary (1024-based) unit multipliers, matching qemu-img's size conventions
+# (``qemu-img resize`` treats ``K``/``M``/``G``/``T`` as powers of 1024).
+_SIZE_UNIT_MULTIPLIERS: dict[str, int] = {
+    "k": 1024,
+    "m": 1024**2,
+    "g": 1024**3,
+    "t": 1024**4,
+}
+
+
+def parse_disk_size_to_bytes(value: str) -> int:
+    """Convert a qemu-img-style disk size string to a byte count.
+
+    Units are binary (1024-based), matching ``qemu-img resize`` — ``1G`` is
+    ``1024**3`` bytes, not ``10**9``. A bare number with no suffix is treated
+    as a byte count.
+
+    Args:
+        value: A disk size such as ``35G``, ``512M``, or ``10737418240``.
+
+    Returns:
+        The size in bytes.
+
+    Raises:
+        ValueError: ``value`` is not a non-negative integer with an optional
+            ``k/m/g/t`` suffix.
+    """
+    match = re.fullmatch(r"(\d+)([kKmMgGtT]?)", value.strip())
+    if not match:
+        raise ValueError(f"Invalid disk size '{value}'.")
+
+    amount = int(match.group(1))
+    unit = match.group(2).lower()
+    if not unit:
+        return amount
+    return amount * _SIZE_UNIT_MULTIPLIERS[unit]
+
+
+def _image_virtual_size_bytes(image_fpath: str) -> int:
+    """Return the virtual size (in bytes) of a qcow2/raw image via qemu-img.
+
+    Args:
+        image_fpath: Path to the base cloud image.
+
+    Returns:
+        The image's ``virtual-size`` in bytes.
+
+    Raises:
+        subprocess.CalledProcessError: ``qemu-img info`` exited nonzero.
+        OSError: The ``qemu-img`` binary was not found.
+        ValueError: The JSON output lacked an integer ``virtual-size``.
+    """
+    proc = subprocess.run(
+        ["qemu-img", "info", "--output=json", image_fpath],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=system_first_env(),
+    )
+    info = json.loads(proc.stdout)
+    virtual_size = info.get("virtual-size")
+    if not isinstance(virtual_size, int):
+        raise ValueError(
+            f"qemu-img info gave no integer virtual-size for '{image_fpath}'."
+        )
+    return virtual_size
+
+
+def _human_size(num_bytes: int) -> str:
+    """Format a byte count as a compact binary-unit string (for messages only).
+
+    Args:
+        num_bytes: A byte count.
+
+    Returns:
+        A short label such as ``10G`` or ``512M``; falls back to a raw byte
+        count for sizes that don't divide cleanly into a single unit.
+    """
+    for unit, multiplier in (
+        ("T", 1024**4),
+        ("G", 1024**3),
+        ("M", 1024**2),
+        ("K", 1024),
+    ):
+        if num_bytes >= multiplier and num_bytes % multiplier == 0:
+            return f"{num_bytes // multiplier}{unit}"
+    return f"{num_bytes}B"
+
+
 def _virt_install_argv(
     *,
     vm_name: str,
@@ -802,8 +892,23 @@ def _provision_vm(
     typer.secho("Copying base image...", fg=typer.colors.GREEN)
     shutil.copyfile(ctx.cloud_image.image_fpath, disk_path)
 
-    typer.secho(f"Resizing disk to {disk_size}...", fg=typer.colors.GREEN)
-    _run_cmd(["qemu-img", "resize", str(disk_path), disk_size])
+    # Deliberate divergence from lvscripts-py's unconditional `qemu-img resize`
+    # (ref #88): qemu-img cannot shrink a qcow2 (`resize` to a smaller size
+    # fails), so a `--disk-size` at or below the base image's virtual size
+    # would crash the whole provision. Skip the resize and keep the base size
+    # instead, warning loudly so the requested-vs-actual mismatch is visible.
+    base_virtual_size = _image_virtual_size_bytes(ctx.cloud_image.image_fpath)
+    requested_size = parse_disk_size_to_bytes(disk_size)
+    if requested_size <= base_virtual_size:
+        typer.secho(
+            f"Requested --disk-size {disk_size} is <= base image virtual size "
+            f"{_human_size(base_virtual_size)}; skipping resize, keeping "
+            f"{_human_size(base_virtual_size)}.",
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        typer.secho(f"Resizing disk to {disk_size}...", fg=typer.colors.GREEN)
+        _run_cmd(["qemu-img", "resize", str(disk_path), disk_size])
 
     typer.secho("Starting install...", fg=typer.colors.GREEN)
     _run_cmd(

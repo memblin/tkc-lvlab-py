@@ -63,6 +63,25 @@ def test_parse_checksum_file_debian_format(tmp_path: Path) -> None:
     assert parsed["debian-12-genericcloud-amd64-20240717-1811.qcow2"] == "0011223344ff"
 
 
+def test_parse_checksum_file_ubuntu_binary_marker_format(tmp_path: Path) -> None:
+    """Ubuntu's ``hex *filename`` (GNU coreutils binary marker) parses with
+    the ``*`` stripped, so the key matches the bare image filename a caller
+    looks up — without this, verification of an Ubuntu image silently
+    failed (key was ``*jammy-...img``, lookup was ``jammy-...img``)."""
+    sums = tmp_path / "SHA256SUMS"
+    sums.write_text(
+        "f6729b53d930d7f0 *jammy-server-cloudimg-amd64.img\n"
+        "53fdde898feed8b0 *noble-server-cloudimg-amd64.img\n"
+    )
+
+    parsed = CloudImage._parse_checksum_file(str(sums))
+
+    assert parsed["jammy-server-cloudimg-amd64.img"] == "f6729b53d930d7f0"
+    assert parsed["noble-server-cloudimg-amd64.img"] == "53fdde898feed8b0"
+    # The literal marker must not survive in the key.
+    assert not any(name.startswith("*") for name in parsed)
+
+
 def test_parse_checksum_file_prefers_verified_companion(tmp_path: Path) -> None:
     """When ``<path>.verified`` exists, it wins over the original file.
 

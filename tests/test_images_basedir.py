@@ -110,6 +110,42 @@ def test_cloud_image_resolves_os_variant_and_username_from_key() -> None:
     assert image.default_username == "fedora"
 
 
+def test_checksum_fpath_is_image_prefixed_to_avoid_collisions() -> None:
+    """Two images whose upstreams publish the SAME generic checksum
+    filename (AlmaLinux 9 + 10 both use ``CHECKSUM``) get DISTINCT local
+    checksum paths, so they can't clobber each other in a shared cache."""
+    common = {
+        "checksum_url": "https://repo.almalinux.org/.../CHECKSUM",
+        "checksum_type": "sha256",
+    }
+    alma9 = CloudImage(
+        name="almalinux9",
+        config={
+            "image_url": "https://x/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2",
+            **common,
+        },
+        environment={},
+        config_defaults={"cloud_image_basedir": "/var/lib/libvirt/images/lvlab"},
+    )
+    alma10 = CloudImage(
+        name="almalinux10",
+        config={
+            "image_url": "https://x/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2",
+            **common,
+        },
+        environment={},
+        config_defaults={"cloud_image_basedir": "/var/lib/libvirt/images/lvlab"},
+    )
+    assert alma9.checksum_fpath != alma10.checksum_fpath
+    # Each is prefixed with its own image filename.
+    assert alma9.checksum_fpath.endswith(
+        "AlmaLinux-9-GenericCloud-latest.x86_64.qcow2.CHECKSUM"
+    )
+    assert alma10.checksum_fpath.endswith(
+        "AlmaLinux-10-GenericCloud-latest.x86_64.qcow2.CHECKSUM"
+    )
+
+
 def test_cloud_image_honours_os_variant_and_username_overrides() -> None:
     """A config override wins — e.g. an ``ubuntu2204`` key pins the
     osinfo-valid ``ubuntu22.04`` and the ``ubuntu`` account."""

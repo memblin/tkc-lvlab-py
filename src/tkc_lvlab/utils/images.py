@@ -131,25 +131,21 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         )
 
         if self.checksum_url:
-            # Debian 10/11/12/13 all publish SHA512SUMS — same filename
-            # across releases. Without this prefix, switching between
-            # Debian versions would silently overwrite the checksum file
-            # belonging to the other release. Tested via the
-            # parse_checksum_file fixture suite.
-            match = re.search(r"debian-(\d+)", self.filename.lower())
-            if match:
-                checksum_filename = (
-                    f"{self.filename.replace('qcow2', '')}"
-                    + os.path.basename(urlparse(self.checksum_url).path)
-                )
-                self.checksum_fpath = os.path.join(
-                    os.path.expanduser(self.image_dir), checksum_filename
-                )
-            else:
-                self.checksum_fpath = os.path.join(
-                    os.path.expanduser(self.image_dir),
-                    os.path.basename(urlparse(self.checksum_url).path),
-                )
+            # Always prefix the local checksum filename with the image
+            # filename. Many distros publish a generic, release-agnostic
+            # checksum filename that is byte-for-byte the SAME name across
+            # releases — Debian/Ubuntu ``SHA512SUMS``/``SHA256SUMS``,
+            # AlmaLinux ``CHECKSUM`` — so two configured images of the same
+            # family (e.g. almalinux9 + almalinux10, or jammy + noble)
+            # would otherwise clobber each other's cached checksum file.
+            # The image-filename prefix makes every checksum file unique.
+            # (Fedora's name is already per-release, but prefixing it too
+            # keeps the rule uniform and future-proof.)
+            checksum_basename = os.path.basename(urlparse(self.checksum_url).path)
+            self.checksum_fpath = os.path.join(
+                os.path.expanduser(self.image_dir),
+                f"{self.filename}.{checksum_basename}",
+            )
         else:
             self.checksum_fpath = None
 
@@ -303,11 +299,15 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
     def _parse_checksum_file(checksum_fpath: str) -> dict[str, str]:
         """Parse a checksum manifest into ``{filename: hash}``.
 
-        Recognizes two upstream formats:
+        Recognizes the upstream formats lvlab's images use:
 
         - **Fedora**: ``SHA256 (filename) = hex``
         - **Debian**: ``hex  filename`` (two-space separator,
             tolerated as ``\\s+``)
+        - **Ubuntu**: ``hex *filename`` — same as Debian but with GNU
+            coreutils' binary-mode ``*`` marker prefixing the filename.
+            The marker is stripped so the key matches the bare image
+            filename the caller looks up.
 
         When a ``<checksum_fpath>.verified`` file exists (post-GPG),
         it is preferred over the raw path.
@@ -340,7 +340,10 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
             match = debian_pattern.match(line)
             if match:
                 checksum = match.group(1)
-                filename = match.group(2)
+                # Strip GNU coreutils' binary-mode marker (Ubuntu's
+                # SHA256SUMS uses ``hex *filename``); Debian/Fedora have
+                # no leading ``*`` so this is a no-op for them.
+                filename = match.group(2).removeprefix("*")
                 checksums[filename] = checksum
 
         return checksums

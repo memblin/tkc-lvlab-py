@@ -94,7 +94,81 @@ MACHINE_NOT_DEPLOYED_MSG = "Machine %s is not deployed to the configured in %s."
 MACHINE_NOT_IN_MANIFEST_MSG = "Machine not found in manifest: %s"
 
 
+# Global flags that live on the root callback (:func:`_root`) and are accepted
+# in *either* position — ``lvlab --no-color smoke`` and ``lvlab smoke
+# --no-color`` are equivalent (issue #133). These are the single source of
+# truth :class:`GlobalFlagGroup` hoists; keep them in sync with ``_root``'s
+# option names. All are boolean/count flags (no value-taking globals), which is
+# what makes the lexical hoist below safe — none consume a following token.
+GLOBAL_LONG_FLAGS = frozenset({"--no-color", "--verbose", "--quiet"})
+GLOBAL_SHORT_FLAG_CHARS = frozenset("vq")  # -v (count), -q; stack as -vv, -vq.
+
+
+def _is_global_flag(token: str) -> bool:
+    """Return ``True`` if ``token`` is one of the position-independent globals.
+
+    Matches a long flag verbatim (``--no-color``) or a short-flag cluster made
+    up only of global short chars (``-v``, ``-vv``, ``-vq``). A token that
+    merely *starts* with a global short char but carries other characters
+    (e.g. the value ``-q-thing``, or a mixed cluster ``-vx``) is **not** a
+    global — it stays with the subcommand.
+
+    Args:
+        token: A single ``argv`` token.
+
+    Returns:
+        ``True`` when the token should be hoisted to the root parser.
+    """
+    if token in GLOBAL_LONG_FLAGS:
+        return True
+    if len(token) >= 2 and token[0] == "-" and token[1] != "-":
+        return all(char in GLOBAL_SHORT_FLAG_CHARS for char in token[1:])
+    return False
+
+
+class GlobalFlagGroup(typer.core.TyperGroup):
+    """Root command group that accepts global flags in either position.
+
+    Click parses a group's options only up to the first non-option token (the
+    subcommand name); anything after is handed to the subcommand. That makes
+    ``lvlab smoke --no-color`` fail even though ``lvlab --no-color smoke``
+    works. This group reorders ``argv`` *before* dispatch so the root-owned
+    globals (:data:`GLOBAL_LONG_FLAGS` / :data:`GLOBAL_SHORT_FLAG_CHARS`) are
+    parsed by the root callback regardless of where they appear — the
+    cobra/kubectl-style "flags anywhere" feel (issue #133).
+
+    Set once on the top-level :data:`app`; nested sub-apps (``snapshot``,
+    ``global show``, ``images``) need no change, because the reorder runs on
+    the full ``argv`` before the group splits off the subcommand chain, so a
+    global buried in ``lvlab snapshot create --no-color`` is still hoisted to
+    the root. The hoist is purely lexical and only moves boolean/count globals,
+    so it never steals a value token; the end-of-options ``--`` separator is
+    honored (nothing past it is hoisted).
+    """
+
+    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:
+        """Hoist global flags to the front of ``args`` before normal parsing.
+
+        Args:
+            ctx: The Click context for this group invocation.
+            args: The raw argument tokens for the group.
+
+        Returns:
+            The remaining args after the superclass consumes the group options
+            (Click's :meth:`parse_args` contract).
+        """
+        try:
+            sep = args.index("--")
+        except ValueError:
+            sep = len(args)
+        head, tail = args[:sep], args[sep:]
+        hoisted = [token for token in head if _is_global_flag(token)]
+        rest = [token for token in head if not _is_global_flag(token)]
+        return super().parse_args(ctx, hoisted + rest + tail)
+
+
 app = typer.Typer(
+    cls=GlobalFlagGroup,
     help="A command-line tool for managing VMs.",
     context_settings={"help_option_names": ["-h", "--help"]},
     no_args_is_help=True,

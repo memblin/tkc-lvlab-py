@@ -84,7 +84,11 @@ def test_set_no_color_disables_console_color(monkeypatch) -> None:
     try:
         output.set_no_color(True)
         assert output.color_disabled() is True
-        assert get_console().no_color is True
+        console = get_console()
+        assert console.no_color is True
+        # Colour system fully disabled -> no bold/attribute escapes either, so
+        # output is genuinely plain even on a terminal (issue #131).
+        assert console.color_system is None
     finally:
         output.set_no_color(False)
     assert output.color_disabled() is False

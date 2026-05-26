@@ -79,8 +79,12 @@ def get_console(*, stderr: bool = False, max_width: int | None = None) -> Consol
     Returns:
         A configured :class:`rich.console.Console`.
     """
-    no_color = color_disabled()
-    base = Console(stderr=stderr, no_color=no_color)
+    # When colour is disabled, drop the colour system entirely rather than just
+    # ``no_color`` — the latter still emits bold/attribute escapes, which some
+    # terminals render as a bright/blue variant. ``color_system=None`` yields
+    # genuinely plain text (issue #131).
+    style_kwargs = {"no_color": True, "color_system": None} if color_disabled() else {}
+    base = Console(stderr=stderr, **style_kwargs)
     if not base.is_terminal and "COLUMNS" not in os.environ:
         width = NON_TTY_WIDTH
     else:
@@ -88,7 +92,7 @@ def get_console(*, stderr: bool = False, max_width: int | None = None) -> Consol
     if max_width is not None:
         width = min(width, max_width)
     if width != base.width:
-        return Console(stderr=stderr, no_color=no_color, width=width)
+        return Console(stderr=stderr, width=width, **style_kwargs)
     return base
 
 

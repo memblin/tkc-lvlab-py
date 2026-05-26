@@ -29,22 +29,20 @@ which uses its contents verbatim as the release body.
 
 ## Procedure for a new release
 
-1. Bump `version` in `pyproject.toml` (e.g. `0.3.0` → `0.3.1`).
-
-1. `uv lock` to pin the new version.
-
 1. Copy the template: `cp .github/release-notes/_template.md .github/release-notes/0.3.1.md`.
 
 1. Edit the new file. Replace the template sentinel and every
     `<placeholder>`. Keep sections relevant to the release; remove
     sections that don't apply.
 
-1. Commit `pyproject.toml`, `uv.lock`, and the notes file in one
-    commit (`chore: bump version to 0.3.1`).
+1. Commit the notes file — plus any release-time doc fixes, e.g. the
+    pinned install URL in `README.md` / `docs/index.md` — on `main`
+    and push. **There is no version bump:** the version is derived
+    from the git tag by `uv-dynamic-versioning`, so there is no
+    `version` field in `pyproject.toml` and nothing to `uv lock`.
 
-1. Push to `main`.
-
-1. Tag at the bump commit and push the tag:
+1. Tag at the notes commit and push the tag. The tag name *is* the
+    version (the semver decision is made here):
 
     ```bash
     git tag -m 'v0.3.1' 0.3.1

@@ -128,3 +128,9 @@ Commands:
 Verbosity flags go on the `lvlab` group, before the subcommand
 (e.g. `lvlab -vv up salt.local`). See the
 [Walkthrough](docs/walkthrough.md) for what each command does.
+
+## Contributing
+
+Pull requests and issue reports are welcome. See
+[CONTRIBUTING](docs-extra/CONTRIBUTING.md) for dev-environment setup, the test
+suites, and the fork-and-PR workflow.

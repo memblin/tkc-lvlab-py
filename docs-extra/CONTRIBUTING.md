@@ -6,9 +6,29 @@ We have a GitHub project to track planned work for this repo:
 
 Pull Requests and reports of issues welcome.
 
+## Contributor docs
+
+A topic map of the contributor/maintainer reference in this `docs-extra/`
+directory (none of it renders in the published user-docs site):
+
+- **Dev setup, tools, tests** — this file (below).
+- **Architecture / design rationale** — [Design.md](Design.md).
+- **Releasing** — [releases.md](releases.md).
+- **Host-distro validation matrix + per-host procedure** — [host-validation.md](host-validation.md).
+- **lvscripts-py port survey** (historical) — [lvscripts-survey.md](lvscripts-survey.md).
+
 ## Branch naming
 
-The branch naming approach I use when working on this repo is for reference. I won't enforce this same pattern for others interested in helping at this time. I make it available to help others who may be new to coding and perhaps a bit timid about jumping into an open project.
+**Workflow — today and later.** This is a solo-maintained project, so day to day
+I work **directly on `main`** with small, self-contained commits; at the current
+scale that's low-friction and fine. Contributions are welcome by **pull request**
+in the meantime. If the project picks up outside contributors I plan to move to a
+**fork-and-PR** model (fork the repo, open a PR, no push access to `origin`) —
+and will likely adopt fork-and-PR myself at that point. Branch naming inside your
+own branch or fork is entirely your call.
+
+The per-issue branch pattern below is offered only as a reference for anyone new
+to the workflow — it is not required.
 
 ```bash
 # Pull most recent on main branch

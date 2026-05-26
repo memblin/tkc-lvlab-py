@@ -74,19 +74,22 @@ lvlab ssh-config salt.local >> ~/.ssh/config
 ssh salt.local
 ```
 
-## User guide
+## Where to go next
 
-- [Why lvlab](why.md) — the rationale and the workflow it replaces.
-- [Walkthrough](walkthrough.md) — what each `lvlab` subcommand
-    actually does to your hypervisor.
-- [Example manifest](example-manifest.md) — a complete `Lvlab.yml`
+- **Understand →** [Why lvlab](why.md): the rationale and the workflow it
+    replaces.
+- **Learn the commands →** [Walkthrough](walkthrough.md): what each `lvlab`
+    subcommand actually does to your hypervisor.
+- **Configure →** [Example manifest](example-manifest.md): a complete `Lvlab.yml`
     covering every supported cloud image, with annotations.
-- [One-off VMs](one-off-vms.md) — `createvm` / `deletevm`, for a single
-    VM without a manifest.
-- [Cloud-init examples](cloud-init-examples.md) — the three files
-    `lvlab` renders per machine, in minimum-viable form.
-- [Libvirt notes](libvirt-notes.md) — short hypervisor-side
-    reference for `virt-install` flags and `qemu-guest-agent` setup.
+- **Run a one-off VM →** [createvm / deletevm](one-off-vms.md): a single VM
+    without a manifest.
+- **Customize cloud-init →** [Cloud-init examples](cloud-init-examples.md): the
+    three files `lvlab` renders per machine, in minimum-viable form.
+- **Troubleshoot the hypervisor →** [Libvirt notes](libvirt-notes.md):
+    `virt-install` flags and `qemu-guest-agent` setup.
+- **Contribute →** [CONTRIBUTING](https://github.com/memblin/tkc-lvlab-py/blob/main/docs-extra/CONTRIBUTING.md):
+    dev-environment setup, the test suites, and the fork-and-PR workflow.
 
 ## API reference
 

@@ -46,6 +46,18 @@ uses `#!/usr/bin/env python3` (every other distro hard-codes
 `/usr/bin/python3`), so without the override `import gi` fails
 because the venv's Python shadows system Python on PATH.
 
+### 0.4.0 release validation
+
+The 0.4.0 wheel is in hands-on production use by the maintainer —
+running on a development laptop plus two physical lab hosts, where it
+has replaced the archived `lvscripts-py` workflow. That real-world use
+is the acceptance signal behind the 0.4.0 release.
+
+The formal `scripts/run-validation.sh` matrix above is still recorded
+at SHA `d9f8ec3` (2026-05-23), which predates the 0.4.0 tag; a fresh
+matrix run against a post-0.4.0 `main` is a follow-up task, not a
+release blocker.
+
 The bootstrap script (`scripts/host-bootstrap.sh`) refuses to run on
 anything outside the supported list, so accidentally running it on a
 jammy box won't half-configure it.

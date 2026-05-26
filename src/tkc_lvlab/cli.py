@@ -32,6 +32,8 @@ from __future__ import annotations
 import os
 
 import typer
+from rich.console import Console
+from rich.table import Table
 
 from ._logging import configure_logging, get_logger
 from .config import (
@@ -50,9 +52,11 @@ from .utils.images import CloudImage
 from .utils.virsh import (
     DEAD_STATES,
     DOMSTATE_RUNNING,
+    DomInfo,
     VirshError,
     humanize_state,
     virsh_capabilities,
+    virsh_dominfo,
     virsh_domstate,
     virsh_list_all_names,
 )
@@ -78,6 +82,26 @@ snapshot_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(snapshot_app, name="snapshot")
+
+global_app = typer.Typer(
+    help="Hypervisor-wide commands not scoped to a single Lvlab.yml machine.",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    no_args_is_help=True,
+)
+global_show_app = typer.Typer(
+    help="Read-only cross-connection overviews (instances, and later networks/pools).",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    no_args_is_help=True,
+)
+global_app.add_typer(global_show_app, name="show")
+app.add_typer(global_app, name="global")
+
+
+# Connections every ``lvlab global show`` enumerates unless the user narrows or
+# extends the set with ``--uri``. Both common local libvirt sockets, so a
+# developer sees rootful (qemu:///system) and rootless (qemu:///session) VMs in
+# one table without naming either explicitly.
+DEFAULT_GLOBAL_URIS: tuple[str, ...] = ("qemu:///system", "qemu:///session")
 
 
 @app.callback()
@@ -818,6 +842,182 @@ def up(vm_name: str) -> None:
         _up_start_existing(machine, status_state, environment)
     else:
         _up_first_time_create(machine, environment, images, config_defaults)
+
+
+def _global_manifest_domain_names() -> set[str] | None:
+    """Return the manifest's ``<vm_name>_<env>`` domain names, or ``None``.
+
+    Used to populate the ``In manifest`` column of ``global show instances``.
+    Returns ``None`` when no ``Lvlab.yml`` is present in the CWD (or it cannot
+    be parsed), which signals the caller to omit the column entirely rather
+    than render an all-``no`` column for a directory with no manifest.
+
+    Returns:
+        The set of namespaced domain names the manifest would create, or
+        ``None`` when there is no usable manifest in the current directory.
+    """
+    try:
+        parsed = parse_config()
+    except (ConfigError, TypeError):
+        return None
+    if not parsed:
+        return None
+    environment, _, _, machines = parsed
+    env_name = environment.get("name", "")
+    return {f"{m['vm_name']}_{env_name}" for m in machines if m.get("vm_name")}
+
+
+def _global_collect_instances(
+    uris: list[str],
+) -> tuple[list[tuple[str, str, DomInfo]], list[tuple[str, str]]]:
+    """Enumerate every domain across ``uris`` with its cheap :class:`DomInfo`.
+
+    Each connection is probed independently: one ``virsh list --all --name``
+    plus one ``virsh dominfo`` per domain. A :class:`VirshError` anywhere in a
+    connection's enumeration aborts only that connection — the URI is recorded
+    as unreachable and the remaining connections are still processed.
+
+    Args:
+        uris: Ordered, de-duplicated connection URIs to enumerate.
+
+    Returns:
+        A ``(rows, skipped)`` pair. ``rows`` is a list of
+        ``(uri, domain_name, DomInfo)`` triples in connection-then-domain
+        order. ``skipped`` is a list of ``(uri, reason)`` pairs for the
+        connections that could not be reached.
+    """
+    rows: list[tuple[str, str, DomInfo]] = []
+    skipped: list[tuple[str, str]] = []
+    for uri in uris:
+        try:
+            names = virsh_list_all_names(uri)
+            for name in names:
+                rows.append((uri, name, virsh_dominfo(uri, name)))
+        except VirshError as exc:
+            skipped.append((uri, str(exc)))
+    return rows, skipped
+
+
+def _global_console() -> Console:
+    """Return a Console that does not truncate the instances table.
+
+    Rich defaults a non-interactive Console (piped output, the test runner) to
+    80 columns and *truncates* table cells that overflow — which would clip
+    long domain names and connection URIs. When attached to a terminal we honor
+    its width; otherwise we widen enough that the table renders in full. The
+    ``COLUMNS`` env var still wins if the user sets it.
+    """
+    console = Console()
+    if not console.is_terminal and "COLUMNS" not in os.environ:
+        # Wide enough for Name + URI + every metric column without clipping.
+        return Console(width=200)
+    return console
+
+
+def _global_format_memory(max_memory_kib: int | None) -> str:
+    """Render a ``Max memory`` KiB value as a compact human string.
+
+    Returns ``-`` when the value is missing. Whole-MiB values render as
+    ``<n> MiB`` (the common case for a libvirt domain); anything that is not a
+    clean MiB multiple falls back to the raw ``<n> KiB``.
+    """
+    if max_memory_kib is None:
+        return "-"
+    if max_memory_kib % 1024 == 0:
+        return f"{max_memory_kib // 1024} MiB"
+    return f"{max_memory_kib} KiB"
+
+
+def _global_build_table(
+    rows: list[tuple[str, str, DomInfo]],
+    manifest_names: set[str] | None,
+) -> Table:
+    """Build the Rich table for ``global show instances``.
+
+    Args:
+        rows: ``(uri, domain_name, DomInfo)`` triples from
+            :func:`_global_collect_instances`.
+        manifest_names: Namespaced manifest domain names, or ``None`` to omit
+            the ``In manifest`` column (no manifest in CWD).
+
+    Returns:
+        A populated :class:`rich.table.Table` ready to print.
+    """
+    table = Table(title="Libvirt Instances")
+    table.add_column("Name", style="bold")
+    table.add_column("Connection (URI)")
+    table.add_column("State")
+    table.add_column("vCPUs", justify="right")
+    table.add_column("Memory", justify="right")
+    table.add_column("Autostart")
+    table.add_column("Persistent")
+    if manifest_names is not None:
+        table.add_column("In manifest")
+
+    for uri, name, info in rows:
+        cells = [
+            name,
+            uri,
+            info.state or "unknown",
+            "-" if info.vcpus is None else str(info.vcpus),
+            _global_format_memory(info.max_memory_kib),
+            "yes" if info.autostart else "no",
+            "yes" if info.persistent else "no",
+        ]
+        if manifest_names is not None:
+            cells.append("yes" if name in manifest_names else "no")
+        table.add_row(*cells)
+
+    return table
+
+
+@global_show_app.command("instances")
+def global_show_instances(
+    uris: list[str] = typer.Option(
+        None,
+        "--uri",
+        "-u",
+        help=(
+            "Additional libvirt connection URI to include. Repeatable. "
+            "qemu:///system and qemu:///session are always included."
+        ),
+    ),
+) -> None:
+    """Show every libvirt domain across connections in one table.
+
+    Enumerates qemu:///system and qemu:///session (plus any --uri) and prints
+    a table of cheap per-domain facts: name, connection, state, vCPUs, memory,
+    autostart, and persistent. When an Lvlab.yml is present in the working
+    directory, an "In manifest" column flags which domains the manifest would
+    create.
+
+    Only cheap reads are issued (one "virsh list --all" plus one "virsh
+    dominfo" per domain). No running guest is stunned and no live CPU/disk/net
+    stats are sampled. A connection that is unreachable (missing socket,
+    permission denied, daemon down) is skipped with a dim note; the reachable
+    ones are still shown.
+    """
+    # Preserve order while de-duplicating: the fixed pair first, then any
+    # user-supplied URIs not already covered.
+    seen: set[str] = set()
+    ordered_uris: list[str] = []
+    for uri in (*DEFAULT_GLOBAL_URIS, *(uris or [])):
+        if uri not in seen:
+            seen.add(uri)
+            ordered_uris.append(uri)
+
+    rows, skipped = _global_collect_instances(ordered_uris)
+    manifest_names = _global_manifest_domain_names()
+
+    console = _global_console()
+    for uri, reason in skipped:
+        console.print(f"[dim]Skipping unreachable connection {uri}: {reason}[/dim]")
+
+    if not rows:
+        console.print("No instances found on the reachable connection(s).")
+        return
+
+    console.print(_global_build_table(rows, manifest_names))
 
 
 # Backwards-compatible aliases. ``pyproject.toml`` entry-point references

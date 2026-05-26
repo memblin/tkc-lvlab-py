@@ -15,6 +15,7 @@ import contextlib
 import os
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from typing import Iterator
 
 # Re-export so existing imports (``from tkc_lvlab.utils.virsh import
@@ -214,6 +215,91 @@ def virsh_domstate(uri: str, name: str) -> str:
     """Return the raw lowercase state string for ``name`` (e.g. ``running``)."""
     result = run_virsh(uri, ["domstate", name])
     return result.stdout.strip().lower()
+
+
+@dataclass(frozen=True)
+class DomInfo:
+    """Cheap per-domain facts parsed from a single ``virsh dominfo`` call.
+
+    Holds only the fields a ``virsh dominfo`` read returns without stunning a
+    running guest — no live CPU/disk/net sampling. ``vcpus`` and
+    ``max_memory_kib`` are ``None`` when the corresponding line is absent or
+    unparseable (e.g. a transient domain mid-define), so callers must tolerate
+    missing values rather than assume an int is always present.
+
+    Attributes:
+        state: Lowercase state string as ``virsh`` emits it (e.g. ``running``,
+            ``shut off``).
+        vcpus: Allocated vCPU count from the ``CPU(s):`` line, or ``None``.
+        max_memory_kib: Max memory in KiB from the ``Max memory:`` line, or
+            ``None``.
+        autostart: ``True`` when the ``Autostart:`` line reads ``enable``.
+        persistent: ``True`` when the ``Persistent:`` line reads ``yes``.
+    """
+
+    state: str
+    vcpus: int | None
+    max_memory_kib: int | None
+    autostart: bool
+    persistent: bool
+
+
+def virsh_dominfo(uri: str, name: str) -> DomInfo:
+    """Return parsed :class:`DomInfo` for domain ``name`` via one ``virsh`` call.
+
+    Runs ``virsh dominfo <name>`` once (the only sanctioned cheap read for the
+    cross-connection overview) and parses its colon-delimited ``Field: value``
+    lines. The locale is forced to ``C`` by :func:`run_virsh`, so the field
+    labels (``State``, ``CPU(s)``, ``Max memory``, ``Autostart``,
+    ``Persistent``) are stable across hosts.
+
+    The ``Max memory: <n> KiB`` value keeps only the leading integer (the unit
+    suffix is dropped). Unrecognized or absent numeric lines leave the matching
+    field ``None`` rather than raising.
+
+    Args:
+        uri: libvirt connection URI.
+        name: The exact domain name to inspect.
+
+    Returns:
+        A :class:`DomInfo` with the cheap facts for ``name``.
+
+    Raises:
+        VirshError: On nonzero exit (e.g. domain missing) or a connection-level
+            failure. The caller is expected to skip the whole connection when a
+            ``VirshError`` surfaces.
+    """
+    result = run_virsh(uri, ["dominfo", name])
+
+    fields: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            fields[key.strip()] = value.strip()
+
+    return DomInfo(
+        state=fields.get("State", "").lower(),
+        vcpus=_parse_leading_int(fields.get("CPU(s)")),
+        max_memory_kib=_parse_leading_int(fields.get("Max memory")),
+        autostart=fields.get("Autostart", "").lower() == "enable",
+        persistent=fields.get("Persistent", "").lower() == "yes",
+    )
+
+
+def _parse_leading_int(value: str | None) -> int | None:
+    """Return the leading integer token of ``value``, or ``None``.
+
+    ``CPU(s):`` is a bare integer while ``Max memory:`` is ``<n> KiB``; both
+    are handled by taking the first whitespace-delimited token. A missing line
+    (``None``) or a non-integer first token yields ``None``.
+    """
+    if not value:
+        return None
+    token = value.split()[0]
+    try:
+        return int(token)
+    except ValueError:
+        return None
 
 
 def vm_exists(uri: str, name: str) -> bool:

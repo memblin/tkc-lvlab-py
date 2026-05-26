@@ -20,11 +20,13 @@ from tkc_lvlab.utils.virsh import (
     DOMSTATE_HUMAN,
     RUNNING_STATES,
     SHUTDOWNABLE_STATES,
+    DomInfo,
     VirshError,
     _xml_tempfile,
     humanize_state,
     run_virsh,
     virsh_capabilities,
+    virsh_dominfo,
     virsh_domstate,
     virsh_domstate_reason,
     virsh_list_all_names,
@@ -424,6 +426,107 @@ def test_virsh_capabilities_returns_raw_stdout():
 
 
 # ---------------------------------------------------------------------------
+# virsh_dominfo — parse a real ``virsh dominfo`` capture.
+# ---------------------------------------------------------------------------
+
+# Captured from ``LC_ALL=C virsh dominfo <name>`` (libvirt 12.x). The field
+# labels and the ``<n> KiB`` / ``enable`` / ``disable`` / ``yes`` / ``no``
+# value vocabulary are what the parser keys off — do not hand-edit into a
+# fabricated round-trip shape.
+DOMINFO_RUNNING_SAMPLE = """\
+Id:             3
+Name:           web01_demo
+UUID:           4dea22b3-1d52-d8f3-2516-782e98ab3fa0
+OS Type:        hvm
+State:          running
+CPU(s):         2
+CPU time:       126.7s
+Max memory:     2097152 KiB
+Used memory:    2097152 KiB
+Persistent:     yes
+Autostart:      enable
+Managed save:   no
+Security model: none
+Security DOI:   0
+"""
+
+DOMINFO_SHUTOFF_SAMPLE = """\
+Id:             -
+Name:           build02_demo
+UUID:           9f1c8b2a-5e44-4c10-9a77-0b2d6f3e1c55
+OS Type:        hvm
+State:          shut off
+CPU(s):         1
+Max memory:     1048576 KiB
+Used memory:    1048576 KiB
+Persistent:     yes
+Autostart:      disable
+Managed save:   no
+Security model: none
+Security DOI:   0
+"""
+
+
+def test_virsh_dominfo_parses_running_sample():
+    """A running domain's dominfo parses into the cheap typed fields."""
+    with mock.patch(
+        "tkc_lvlab.utils.virsh.subprocess.run",
+        return_value=_completed(stdout=DOMINFO_RUNNING_SAMPLE),
+    ) as run:
+        info = virsh_dominfo(URI, "web01_demo")
+
+    assert isinstance(info, DomInfo)
+    assert info.state == "running"
+    assert info.vcpus == 2
+    assert info.max_memory_kib == 2097152
+    assert info.autostart is True
+    assert info.persistent is True
+    # Exactly one virsh call, and it is a plain dominfo (cheap-read contract).
+    call_args, _ = run.call_args
+    assert call_args[0] == ["virsh", "-c", URI, "dominfo", "web01_demo"]
+    assert run.call_count == 1
+
+
+def test_virsh_dominfo_parses_shutoff_sample():
+    """A shut-off, non-autostart domain parses autostart=False, state preserved."""
+    with mock.patch(
+        "tkc_lvlab.utils.virsh.subprocess.run",
+        return_value=_completed(stdout=DOMINFO_SHUTOFF_SAMPLE),
+    ):
+        info = virsh_dominfo(URI, "build02_demo")
+
+    assert info.state == "shut off"
+    assert info.vcpus == 1
+    assert info.max_memory_kib == 1048576
+    assert info.autostart is False
+    assert info.persistent is True
+
+
+def test_virsh_dominfo_propagates_virsh_error_for_missing_domain():
+    """A nonzero exit (domain not found) surfaces as VirshError for the caller to skip."""
+    err = VirshError(1, "error: failed to get domain 'nope'", ["dominfo", "nope"])
+    with mock.patch("tkc_lvlab.utils.virsh.run_virsh", side_effect=err):
+        with pytest.raises(VirshError):
+            virsh_dominfo(URI, "nope")
+
+
+def test_virsh_dominfo_missing_numeric_lines_yield_none():
+    """If CPU(s)/Max memory lines are absent, the int fields are None, not 0/crash."""
+    sparse = "Name:           x\nState:          paused\nPersistent:     no\n"
+    with mock.patch(
+        "tkc_lvlab.utils.virsh.subprocess.run",
+        return_value=_completed(stdout=sparse),
+    ):
+        info = virsh_dominfo(URI, "x")
+
+    assert info.state == "paused"
+    assert info.vcpus is None
+    assert info.max_memory_kib is None
+    assert info.autostart is False
+    assert info.persistent is False
+
+
+# ---------------------------------------------------------------------------
 # Module-level re-exports — smoke check so future refactors don't quietly
 # rename the public constants used by callers.
 # ---------------------------------------------------------------------------
@@ -442,6 +545,8 @@ def test_module_exports_public_names():
         "virsh_list_all_names",
         "virsh_domstate",
         "virsh_domstate_reason",
+        "virsh_dominfo",
+        "DomInfo",
         "virsh_snapshot_names",
         "virsh_capabilities",
     ]:

@@ -54,8 +54,10 @@ from enum import Enum
 from typing import Any, Sequence
 
 import yaml
+from rich.console import Console
 from rich.live import Live
 from rich.table import Table
+from rich.text import Text
 
 from ._logging import get_logger
 from .config import parse_config
@@ -80,6 +82,10 @@ DEFAULT_RESERVE_MIB = 2048
 # Prompt for confirmation before booting when the peak batch would use at least
 # this fraction of available host memory (issue #130). `--yes` bypasses it.
 MEMORY_CONFIRM_FRACTION = 0.5
+
+# Cap the human-facing TEXT/TTY tables at this width so a wide plan wraps
+# instead of sprawling, and a small window still fits (issue #126).
+SMOKE_DISPLAY_WIDTH = 80
 
 # Conservative fallbacks if `free`/`nproc` cannot be read on an unusual host —
 # enough to still produce a (small) one-or-two-at-a-time plan.
@@ -717,21 +723,57 @@ def format_plan(plan: SmokePlan) -> str:
     return "\n".join(lines)
 
 
-def _plan_concurrency_label(plan: SmokePlan) -> str:
-    """Short label for how concurrency was chosen (for the plan title)."""
-    if plan.batch_size_override is not None:
-        return f"fixed --batch-size={plan.batch_size_override}"
-    return f"pack <= {plan.budget_mib} MiB"
+def _gib(mib: int) -> str:
+    """Format a MiB value as a human GiB string, e.g. ``11264`` -> ``"11.0 GiB"``."""
+    return f"{mib / 1024:.1f} GiB"
+
+
+def format_preflight(checks: Sequence[PreflightCheck]) -> str:
+    """Plain-text preflight lines for the non-terminal / structured path.
+
+    The classic ``[preflight ok  ] name: message`` form, kept for piped /
+    ``--json`` / ``--yaml`` runs where it lands on the diagnostic stream.
+    The terminal path uses :func:`render_preflight` for the colour version.
+    """
+    lines = []
+    for check in checks:
+        mark = "ok  " if check.ok else "FAIL"
+        lines.append(f"[preflight {mark}] {check.name}: {check.message}")
+    return "\n".join(lines)
+
+
+def render_preflight(console: Console, checks: Sequence[PreflightCheck]) -> None:
+    """Render the preflight checks to a terminal with colour + glyphs (#126).
+
+    Each check is a green ``✓`` (or red ``✗`` on failure) under a bold
+    "Preflight" header, so the gate's status pops instead of reading as flat
+    text. Messages are appended as plain text (never parsed as Rich markup, so
+    bracketed content like an IP range renders verbatim).
+
+    Args:
+        console: The console to print to.
+        checks: The preflight outcomes.
+    """
+    console.print(Text("Preflight", style="bold"))
+    for check in checks:
+        line = Text("  ")
+        if check.ok:
+            line.append("✓ ", style="bold green")
+            line.append(check.name)
+            line.append(f"  {check.message}", style="dim")
+        else:
+            line.append("✗ ", style="bold red")
+            line.append(check.name, style="bold red")
+            line.append(f"  {check.message}", style="red")
+        console.print(line)
 
 
 def render_plan_table(plan: SmokePlan) -> Table:
-    """Render the concurrency plan as a Rich table (TEXT on a terminal).
+    """Render the per-batch concurrency table (TEXT on a terminal).
 
-    The same information as :func:`format_plan` (which stays the plain-text
-    form for non-terminal / structured output), in the same box style as the
-    live phase table so the plan and the run read as one UI (issue #126). Host
-    capacity and the packing budget go in the title; one row per batch carries
-    its memory cost and members.
+    One row per batch — memory cost (GiB) and members — in the same box style
+    as the live phase table. The host/packing summary is printed above it by
+    :func:`render_plan`; this is just the grid (issue #126).
 
     Args:
         plan: The computed plan to render.
@@ -739,23 +781,62 @@ def render_plan_table(plan: SmokePlan) -> Table:
     Returns:
         A Rich :class:`~rich.table.Table` ready to print to the console.
     """
-    res = plan.resources
-    total = sum(len(b.cases) for b in plan.batches)
-    table = styled_table(
-        title=(
-            f"smoke plan · {total} VM(s) · {len(plan.batches)} batch(es) · "
-            f"{res.vcpus} vCPU / {res.available_memory_mib} MiB avail · "
-            f"{_plan_concurrency_label(plan)}"
-        )
-    )
+    table = styled_table()
     table.add_column("batch", justify="right")
     table.add_column("memory", justify="right")
     table.add_column("cases")
     for i, batch in enumerate(plan.batches, start=1):
         over = " [OVER]" if batch.memory_mib > plan.budget_mib else ""
         members = ", ".join(c.vm_name for c in batch.cases)
-        table.add_row(str(i), f"{batch.memory_mib} MiB{over}", members)
+        table.add_row(str(i), f"{_gib(batch.memory_mib)}{over}", members)
     return table
+
+
+def render_plan(console: Console, plan: SmokePlan) -> None:
+    """Render the full plan: a styled host/packing header + the batch table.
+
+    Reframes the old dense one-line title into a "Smoke plan" header with the
+    host capacity and packing budget in GiB (and the budget as a percentage of
+    available), with the numbers emphasized so they're easy to parse (#126).
+
+    Args:
+        console: The console to print to.
+        plan: The computed plan.
+    """
+    res = plan.resources
+    total_vms = sum(len(b.cases) for b in plan.batches)
+    console.print(
+        Text(
+            f"Smoke plan — {total_vms} VMs in {len(plan.batches)} batch(es)",
+            style="bold",
+        )
+    )
+
+    host = Text("  host      ")
+    host.append(
+        f"{res.vcpus} vCPU · {_gib(res.available_memory_mib)} available "
+        f"of {_gib(res.total_memory_mib)}",
+        style="bold cyan",
+    )
+    console.print(host)
+
+    packing = Text("  packing   ")
+    if plan.batch_size_override is not None:
+        packing.append(
+            f"fixed --batch-size={plan.batch_size_override}", style="bold cyan"
+        )
+        packing.append(f"  (budget {_gib(plan.budget_mib)})")
+    else:
+        pct = (
+            round(100 * plan.budget_mib / res.available_memory_mib)
+            if res.available_memory_mib
+            else 0
+        )
+        packing.append(f"each batch <= {_gib(plan.budget_mib)}", style="bold cyan")
+        packing.append(f"  ({pct}% of available; {_gib(plan.reserve_mib)} reserved)")
+    console.print(packing)
+    console.print()
+    console.print(render_plan_table(plan))
 
 
 def should_confirm_memory(
@@ -787,8 +868,8 @@ def memory_confirm_message(plan: SmokePlan) -> str:
     peak = max((b.memory_mib for b in plan.batches), default=0)
     res = plan.resources
     return (
-        f"This run will use up to {peak} MiB of {res.available_memory_mib} MiB "
-        f"available (host total {res.total_memory_mib} MiB)."
+        f"This run will use up to {_gib(peak)} of {_gib(res.available_memory_mib)} "
+        f"available (host total {_gib(res.total_memory_mib)})."
     )
 
 
@@ -1261,7 +1342,14 @@ def _run_batches(
     """
     pool_size = max((len(b.cases) for b in plan.batches), default=1)
     results: list[CaseResult] = []
-    live_view = Live(console=get_console(), refresh_per_second=8) if live else None
+    live_view = (
+        Live(
+            console=get_console(max_width=SMOKE_DISPLAY_WIDTH),
+            refresh_per_second=8,
+        )
+        if live
+        else None
+    )
     if live_view is not None:
         live_view.start()
     try:
@@ -1405,14 +1493,19 @@ def run_smoke(
     # final render_results(json|yaml) is written to stdout in those modes
     # (issue #126).
     diag = sys.stdout if fmt is OutputFormat.TEXT else sys.stderr
+    tty_text = fmt is OutputFormat.TEXT and is_tty()
+    # Terminal output renders through a colour-gated, width-capped console so
+    # the tables wrap at ~80 cols instead of sprawling (issues #126, #131).
+    console = get_console(max_width=SMOKE_DISPLAY_WIDTH) if tty_text else None
 
     if not skip_preflight:
         checks = run_preflight(
             images, cases, environment, config_defaults, network_info
         )
-        for check in checks:
-            mark = "ok  " if check.ok else "FAIL"
-            print(f"[preflight {mark}] {check.name}: {check.message}", file=diag)
+        if tty_text:
+            render_preflight(console, checks)
+        else:
+            print(format_preflight(checks), file=diag)
         if any(not c.ok for c in checks):
             raise SmokeError("Preflight failed; refusing to boot VMs.")
 
@@ -1424,26 +1517,33 @@ def run_smoke(
         max_memory_mib=max_memory_mib,
         reserve_mib=reserve_mib,
     )
-    # On a terminal with TEXT output, render the plan as a Rich table in the
-    # phase-table style (issue #126); otherwise emit the plain-text plan on the
-    # diagnostic stream (stderr for the machine formats).
-    if fmt is OutputFormat.TEXT and is_tty():
-        get_console().print(render_plan_table(plan))
+    # On a terminal, render the styled plan (host/packing header + batch table,
+    # issue #126); otherwise the plain-text plan on the diagnostic stream
+    # (stderr for the machine formats).
+    if tty_text:
+        console.print()
+        render_plan(console, plan)
     else:
         print(format_plan(plan), file=diag)
         print(file=diag)
 
     # Confirm before committing a memory-heavy run, unless --yes (issue #130).
-    # Interactive: prompt; non-interactive stdin: refuse and point at --yes so
-    # the run never blocks on input that won't come (and CI must opt in).
+    # Interactive: prompt (separated + highlighted on a terminal). Non-interactive
+    # stdin: refuse and point at --yes so the run never blocks on input that
+    # won't come (and CI must opt in).
     if not assume_yes and should_confirm_memory(plan):
         notice = memory_confirm_message(plan)
-        if sys.stdin.isatty():
-            print(f"{notice} Proceed? [y/N] ", end="", file=diag, flush=True)
-            if input().strip().lower() not in ("y", "yes"):
-                raise SmokeError("Aborted: memory-heavy run declined.")
-        else:
+        if not sys.stdin.isatty():
             raise SmokeError(f"{notice} Non-interactive; pass --yes to proceed.")
+        if tty_text:
+            console.print()
+            console.print(Text(f"⚠  {notice}", style="bold yellow"))
+            answer = input("Proceed? [y/N] ")
+        else:
+            print(f"\n{notice} Proceed? [y/N] ", end="", file=diag, flush=True)
+            answer = input()
+        if answer.strip().lower() not in ("y", "yes"):
+            raise SmokeError("Aborted: memory-heavy run declined.")
 
     lvlab = _lvlab_bin()
     key_path = _ssh_private_key(config_defaults)

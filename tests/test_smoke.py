@@ -203,13 +203,31 @@ def test_should_confirm_memory_false_when_available_unknown():
     assert smoke.should_confirm_memory(plan) is False
 
 
-def test_memory_confirm_message_states_peak_and_available():
+def test_memory_confirm_message_states_peak_and_available_in_gib():
+    # 20736 MiB -> 20.2 GiB, 23352 MiB -> 22.8 GiB (issue #126 GiB display).
     msg = smoke.memory_confirm_message(_plan((20736, ["a"]), available=23352))
-    assert "20736 MiB" in msg
-    assert "23352 MiB" in msg
+    assert "20.2 GiB" in msg
+    assert "22.8 GiB" in msg
 
 
-def test_render_plan_table_titles_host_and_lists_members():
+def test_gib_formats_mib_as_one_decimal_gib():
+    assert smoke._gib(1024) == "1.0 GiB"
+    assert smoke._gib(11264) == "11.0 GiB"
+    assert smoke._gib(768) == "0.8 GiB"
+
+
+def _render(renderable_fn, *args, width=120) -> str:
+    import io
+
+    from rich.console import Console
+
+    buf = io.StringIO()
+    console = Console(file=buf, width=width)
+    renderable_fn(console, *args)
+    return buf.getvalue()
+
+
+def test_render_plan_table_lists_batches_in_gib():
     import io
 
     from rich.console import Console
@@ -220,13 +238,53 @@ def test_render_plan_table_titles_host_and_lists_members():
         available=20000,
     )
     buf = io.StringIO()
-    Console(file=buf, width=200).print(smoke.render_plan_table(plan))
+    Console(file=buf, width=120).print(smoke.render_plan_table(plan))
     out = buf.getvalue()
-    assert "smoke plan" in out
-    assert "2 batch(es)" in out
-    assert "8 vCPU" in out  # _host default vcpus
+    assert "1.5 GiB" in out  # 1536 MiB
+    assert "0.8 GiB" in out  # 768 MiB
     assert "deb12-static" in out  # batch members rendered
-    assert "768 MiB" in out
+
+
+def test_render_plan_header_states_host_and_packing_in_gib():
+    plan = _plan(
+        (1536, ["deb12-static", "deb12-dhcp"]),
+        (768, ["deb13-dhcp"]),
+        available=20000,
+    )
+    out = _render(smoke.render_plan, plan)
+    assert "Smoke plan" in out
+    assert "3 VMs in 2 batch(es)" in out
+    assert "8 vCPU" in out
+    assert "19.5 GiB" in out  # 20000 MiB available
+    assert "90%" in out  # budget (17952) as % of available
+    assert "deb12-static" in out
+
+
+def test_format_preflight_keeps_classic_plain_lines():
+    checks = [
+        smoke.PreflightCheck(name="images-cached", ok=True, message="all good"),
+        smoke.PreflightCheck(name="static-ips-free", ok=False, message="overlap [a-b]"),
+    ]
+    out = smoke.format_preflight(checks)
+    assert "[preflight ok  ] images-cached: all good" in out
+    assert "[preflight FAIL] static-ips-free: overlap [a-b]" in out
+
+
+def test_render_preflight_uses_glyphs_and_renders_bracketed_messages_verbatim():
+    checks = [
+        smoke.PreflightCheck(
+            name="static-ips-free",
+            ok=True,
+            message="outside DHCP range [192.168.122.200-192.168.122.254]",
+        ),
+        smoke.PreflightCheck(name="ssh-key-present", ok=False, message="missing"),
+    ]
+    out = _render(smoke.render_preflight, checks)
+    assert "Preflight" in out
+    assert "✓" in out and "✗" in out
+    # Bracketed content must render verbatim, not be parsed as Rich markup.
+    assert "192.168.122.200" in out
+    assert "static-ips-free" in out
 
 
 def test_parse_free_m_reads_available_column():

@@ -102,6 +102,49 @@ def test_color_disabled_honors_no_color_env(monkeypatch) -> None:
     assert get_console().no_color is True
 
 
+def test_secho_forces_color_false_when_disabled(monkeypatch) -> None:
+    """With colour disabled, ``secho`` pins ``color=False`` so click/typer strip
+    ANSI even on a TTY — Click ignores ``NO_COLOR`` on its own (issue #131)."""
+    captured: dict = {}
+    monkeypatch.setattr(
+        output.typer, "secho", lambda msg=None, **kw: captured.update(msg=msg, kw=kw)
+    )
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output.set_no_color(True)
+    try:
+        output.secho("boom", fg="red", err=True)
+    finally:
+        output.set_no_color(False)
+    assert captured["kw"]["color"] is False
+    # Forwards the caller's own styling/stream kwargs untouched.
+    assert captured["kw"]["fg"] == "red" and captured["kw"]["err"] is True
+
+
+def test_secho_leaves_color_to_click_when_enabled(monkeypatch) -> None:
+    """With colour enabled, ``secho`` does not pin ``color`` — Click auto-detects
+    (ANSI on a TTY, plain when piped), so default behaviour is unchanged."""
+    captured: dict = {}
+    monkeypatch.setattr(
+        output.typer, "secho", lambda msg=None, **kw: captured.update(msg=msg, kw=kw)
+    )
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output.set_no_color(False)
+    output.secho("ok", fg="green")
+    assert "color" not in captured["kw"]
+
+
+def test_secho_honors_no_color_env(monkeypatch) -> None:
+    """The ``NO_COLOR`` env var alone (no ``--no-color`` flag) also strips."""
+    captured: dict = {}
+    monkeypatch.setattr(
+        output.typer, "secho", lambda msg=None, **kw: captured.update(msg=msg, kw=kw)
+    )
+    output.set_no_color(False)
+    monkeypatch.setenv("NO_COLOR", "1")
+    output.secho("x")
+    assert captured["kw"]["color"] is False
+
+
 def test_is_tty_reflects_stdout(monkeypatch) -> None:
     """is_tty mirrors sys.stdout.isatty so live views can degrade off a TTY."""
 

@@ -44,6 +44,7 @@ from pathlib import Path
 import typer
 
 from .. import __version__
+from ..utils.output import secho, set_no_color
 from ..utils.snapshot_cleanup import undefine_with_snapshot_cleanup
 from ..utils.virsh import VirshError, run_virsh, virsh_snapshot_names, vm_exists
 from .createvm import storage_dir_for
@@ -62,7 +63,7 @@ def _fail(message: str) -> None:
     Raises:
         typer.Exit: Always, with code 1.
     """
-    typer.secho(message, fg=typer.colors.RED)
+    secho(message, fg=typer.colors.RED)
     raise typer.Exit(code=1)
 
 
@@ -134,6 +135,11 @@ def deletevm(
         file_okay=False,
         help="Override the per-VM storage root (test seam).",
     ),
+    no_color: bool = typer.Option(
+        False,
+        "--no-color",
+        help="Disable colored output (also honors the NO_COLOR env var).",
+    ),
     version: bool = typer.Option(  # pylint: disable=unused-argument
         False,
         "--version",
@@ -155,6 +161,8 @@ def deletevm(
       and ``--force`` by itself does not consent to it).
     - ``--force --snapshots-too``: fully non-interactive (both tiers skipped).
     """
+    if no_color:
+        set_no_color(True)
     domain_name = vm_name
     vm_dir = storage_dir_for(vm_name, root=storage_root)
 
@@ -165,18 +173,18 @@ def deletevm(
 
     # Tier 1: the always-irreversible warning. --force skips it.
     if not force:
-        typer.secho(
+        secho(
             f"This will destroy, undefine, and remove all data for VM '{domain_name}'.",
             fg=typer.colors.RED,
         )
         if not typer.confirm("Are you sure?"):
-            typer.secho("Aborted.", fg=typer.colors.YELLOW)
+            secho("Aborted.", fg=typer.colors.YELLOW)
             raise typer.Exit(code=0)
 
     # Tier 2: snapshot consent. Fires whenever snapshots exist UNLESS the
     # operator opted in non-interactively with --force --snapshots-too.
     if has_snapshots and not (force and snapshots_too):
-        typer.secho(
+        secho(
             f"VM '{domain_name}' has snapshots and cannot be undefined until they "
             "are removed.",
             fg=typer.colors.YELLOW,
@@ -184,7 +192,7 @@ def deletevm(
         if not typer.confirm("Delete all VM snapshots and continue? (irreversible)"):
             _fail("Aborted: snapshots were not deleted, so VM removal cannot continue.")
 
-    typer.secho(f"Destroying VM '{domain_name}'...", fg=typer.colors.RED)
+    secho(f"Destroying VM '{domain_name}'...", fg=typer.colors.RED)
     # The domain may already be shut off; ignore a nonzero destroy.
     run_virsh(_SYSTEM_URI, ["destroy", domain_name], check=False)
 
@@ -193,22 +201,22 @@ def deletevm(
     # snapshot metadata in one shot (issue #96), so there's no separate
     # snapshot-delete pass.
     if has_snapshots:
-        typer.secho(
+        secho(
             f"Removing snapshots and undefining VM '{domain_name}'...",
             fg=typer.colors.RED,
         )
     else:
-        typer.secho(f"Undefining VM '{domain_name}'...", fg=typer.colors.RED)
+        secho(f"Undefining VM '{domain_name}'...", fg=typer.colors.RED)
     _undefine_or_fail(domain_name)
 
     # Storage cleanup is best-effort: a one-off VM's dir lives here, but a
     # manifest VM removed by its raw domain name keeps its disks elsewhere,
     # so a missing dir is expected, not an error.
     if vm_dir.exists():
-        typer.secho(f"Removing storage directory '{vm_dir}'...", fg=typer.colors.RED)
+        secho(f"Removing storage directory '{vm_dir}'...", fg=typer.colors.RED)
         shutil.rmtree(vm_dir)
 
-    typer.secho(f"VM '{domain_name}' successfully removed.", fg=typer.colors.GREEN)
+    secho(f"VM '{domain_name}' successfully removed.", fg=typer.colors.GREEN)
 
 
 # Backwards-compat alias for the entry point and external imports.

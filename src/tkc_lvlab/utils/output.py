@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Any
 
+import typer
 from rich.box import Box, SQUARE
 from rich.console import Console
 from rich.table import Table
@@ -94,6 +96,32 @@ def get_console(*, stderr: bool = False, max_width: int | None = None) -> Consol
     if width != base.width:
         return Console(stderr=stderr, width=width, **style_kwargs)
     return base
+
+
+def secho(message: str | None = None, **kwargs: Any) -> None:
+    """``typer.secho`` that honours ``--no-color`` / ``NO_COLOR``.
+
+    ``typer.secho`` is Click's ``secho`` (Typer re-exports the identical
+    object), and Click does **not** consult ``NO_COLOR`` on its own (verified
+    against Click 8.x): on a terminal a plain ``secho(..., fg=...)`` still emits
+    ANSI even when the operator asked for no colour. This wrapper forces
+    ``color=False`` — which strips the escapes — whenever :func:`color_disabled`
+    is set, and otherwise leaves ``color`` to Click's auto-detection (ANSI on a
+    TTY, plain when piped/redirected), so the default behaviour is unchanged.
+
+    Use this in place of :func:`typer.secho` for any human-facing styled line so
+    the global colour switch reaches the ``click``/``typer`` echo path too, not
+    just the Rich consoles.
+
+    Args:
+        message: The text to print (styled via ``fg=`` / ``bold=`` exactly like
+            :func:`typer.secho`).
+        **kwargs: Forwarded verbatim to :func:`typer.secho` (e.g. ``fg``,
+            ``err``, ``nl``).
+    """
+    if color_disabled():
+        kwargs["color"] = False
+    typer.secho(message, **kwargs)
 
 
 def is_tty() -> bool:

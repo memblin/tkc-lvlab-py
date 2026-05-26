@@ -47,6 +47,7 @@ from .utils.output import (
     is_tty,
     render_one_time_password,
     render_ssh_hint,
+    secho,
     set_no_color,
     styled_table,
 )
@@ -239,7 +240,10 @@ def _root(
     configure_logging(verbosity=verbose, quiet=quiet)
     if no_color:
         set_no_color(True)
-        # Make Click/typer.secho honor it too, alongside the Rich consoles.
+        # Belt-and-suspenders: export NO_COLOR so any child process and Rich's
+        # own detection see it too. Our click/typer echo path does NOT rely on
+        # this — Click ignores NO_COLOR (see utils.output.secho, which forces
+        # color=False); the Rich consoles key off set_no_color / color_disabled.
         os.environ["NO_COLOR"] = "1"
 
 
@@ -1376,7 +1380,7 @@ def smoke(
             assume_yes=assume_yes,
         )
     except SmokeError as exc:
-        typer.secho(f"smoke: {exc}", fg=typer.colors.RED, err=True)
+        secho(f"smoke: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
     raise typer.Exit(code=code)
 

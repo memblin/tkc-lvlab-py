@@ -73,6 +73,7 @@ and must be given together.
 | `--public-key`           | Optional extra SSH public key file (appended after discovered defaults).                                                                                                                                                                                              |
 | `--init-cloud-images`    | **Deprecated** — prefer `lvlab init` (the single image-init path; it initializes the built-in defaults with no `Lvlab.yml`). Still works: downloads every catalog image that isn't cached. With no positional args, exits after; with them, pre-fetches then creates. |
 | `--config`               | Path to a specific `Lvlab.yml` whose `images:` are merged into the catalog, instead of the cwd lookup.                                                                                                                                                                |
+| `--no-color`             | Disable colored output. Also honors the `NO_COLOR` environment variable. Useful on terminals that render ANSI poorly, or to keep captured logs clean.                                                                                                                 |
 | `--version` / `-V`       | Print the installed `tkc-lvlab` version and exit.                                                                                                                                                                                                                     |
 
 `createvm` attaches the guest to a managed libvirt network
@@ -149,3 +150,7 @@ confirmation — for example in a scripted teardown.
 
 Storage cleanup runs only on a successful undefine; a failed undefine
 leaves the VM directory in place so you can inspect what went wrong.
+
+`deletevm` also accepts `--no-color` (and honors the `NO_COLOR`
+environment variable) to disable styled output, matching `createvm` and
+`lvlab`.

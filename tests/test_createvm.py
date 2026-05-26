@@ -710,3 +710,20 @@ def test_passes_system_first_env_to_virt_install(
     assert env["PATH"].startswith(
         "/usr/bin:/usr/sbin"
     ), f"createvm must pass system bin paths first; got PATH={env['PATH']!r}"
+
+
+def test_no_color_flag_disables_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``createvm --no-color`` flips the global colour switch as the first thing
+    the command body does — before argument validation, so even an early
+    ``_fail`` prints plain (the shared ``secho`` wrapper honours it). Issue #131."""
+    from tkc_lvlab.utils import output
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output.set_no_color(False)
+    try:
+        # No VM args -> the command exits 1 on "missing required arguments",
+        # but --no-color is applied before that check runs.
+        CliRunner().invoke(cv_mod.app, ["--no-color"])
+        assert output.color_disabled() is True
+    finally:
+        output.set_no_color(False)

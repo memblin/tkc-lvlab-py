@@ -66,7 +66,12 @@ from ..utils.network import (
     validate_static_ip,
 )
 from ..utils.osinfo import OsInfoLookupError, resolve_os_variant
-from ..utils.output import render_one_time_password, render_ssh_hint
+from ..utils.output import (
+    render_one_time_password,
+    render_ssh_hint,
+    secho,
+    set_no_color,
+)
 from ..utils.passwords import (
     PasswordHashError,
     generate_password_phrase,
@@ -271,7 +276,7 @@ def _fail(message: str) -> None:
     Raises:
         typer.Exit: Always, with code 1.
     """
-    typer.secho(message, fg=typer.colors.RED)
+    secho(message, fg=typer.colors.RED)
     raise typer.Exit(code=1)
 
 
@@ -380,7 +385,7 @@ def _initialize_cloud_images(catalog: dict[str, dict[str, Any]]) -> None:
     Raises:
         typer.Exit: Any image fails to download or verify.
     """
-    typer.secho("Initializing cloud images...", fg=typer.colors.GREEN)
+    secho("Initializing cloud images...", fg=typer.colors.GREEN)
     for name in sorted(catalog):
         entry = resolve_image_entry(name, catalog)
         cloud_image = _build_cloud_image(name, entry, _CLOUD_IMAGE_BASEDIR)
@@ -725,7 +730,7 @@ def _virt_install_argv(
     try:
         resolved_variant, fallback_reason = resolve_os_variant(os_variant)
     except OsInfoLookupError as exc:
-        typer.secho(
+        secho(
             f"warning: could not resolve --os-variant against osinfo-db ({exc}); "
             f"using requested {os_variant!r} as-is",
             fg=typer.colors.YELLOW,
@@ -733,7 +738,7 @@ def _virt_install_argv(
         resolved_variant = os_variant
     else:
         if fallback_reason:
-            typer.secho(f"warning: {fallback_reason}", fg=typer.colors.YELLOW)
+            secho(f"warning: {fallback_reason}", fg=typer.colors.YELLOW)
 
     return [
         "virt-install",
@@ -766,13 +771,13 @@ def _provision_vm(
             exited nonzero.
         OSError: Disk copy or ISO build failed.
     """
-    typer.secho(f"Using image: {ctx.cloud_image.image_fpath}", fg=typer.colors.GREEN)
-    typer.secho(f"Using os-variant: {ctx.entry.os_variant}", fg=typer.colors.GREEN)
+    secho(f"Using image: {ctx.cloud_image.image_fpath}", fg=typer.colors.GREEN)
+    secho(f"Using os-variant: {ctx.entry.os_variant}", fg=typer.colors.GREEN)
 
     cidata_path = _render_cloud_init(vm_dir=vm_dir, vm_name=vm_name, ctx=ctx)
     disk_path = vm_dir / "disk0.qcow2"
 
-    typer.secho("Copying base image...", fg=typer.colors.GREEN)
+    secho("Copying base image...", fg=typer.colors.GREEN)
     shutil.copyfile(ctx.cloud_image.image_fpath, disk_path)
 
     # Deliberate divergence from lvscripts-py's unconditional `qemu-img resize`
@@ -783,17 +788,17 @@ def _provision_vm(
     base_virtual_size = _image_virtual_size_bytes(ctx.cloud_image.image_fpath)
     requested_size = parse_disk_size_to_bytes(disk_size)
     if requested_size <= base_virtual_size:
-        typer.secho(
+        secho(
             f"Requested --disk-size {disk_size} is <= base image virtual size "
             f"{_human_size(base_virtual_size)}; skipping resize, keeping "
             f"{_human_size(base_virtual_size)}.",
             fg=typer.colors.YELLOW,
         )
     else:
-        typer.secho(f"Resizing disk to {disk_size}...", fg=typer.colors.GREEN)
+        secho(f"Resizing disk to {disk_size}...", fg=typer.colors.GREEN)
         _run_cmd(["qemu-img", "resize", str(disk_path), disk_size])
 
-    typer.secho("Starting install...", fg=typer.colors.GREEN)
+    secho("Starting install...", fg=typer.colors.GREEN)
     _run_cmd(
         _virt_install_argv(
             vm_name=vm_name,
@@ -828,7 +833,7 @@ def _cleanup_failed_vm_dir(vm_dir: Path) -> None:
     try:
         shutil.rmtree(vm_dir)
     except OSError as exc:
-        typer.secho(
+        secho(
             f"VM provisioning failed and cleanup of '{vm_dir}' also failed: {exc}",
             fg=typer.colors.RED,
         )
@@ -951,9 +956,9 @@ def _print_completion_details(
     username = ctx.entry.default_username
 
     if manifest_path is not None:
-        typer.secho(f"Using config: {manifest_path}", fg=typer.colors.BLUE)
+        secho(f"Using config: {manifest_path}", fg=typer.colors.BLUE)
 
-    typer.secho("VM creation completed.", fg=typer.colors.GREEN)
+    secho("VM creation completed.", fg=typer.colors.GREEN)
     typer.echo()
     # Shared one-time-password + SSH-hint output (issue #106): lvlab up uses
     # the same helpers so both read consistently.
@@ -965,17 +970,17 @@ def _print_completion_details(
         return
 
     if ctx.forward_mode.lower() != "nat":
-        typer.secho(
+        secho(
             f"Skipping libvirt DHCP lease wait for network '{ctx.network_name}' "
             f"(forward mode: {ctx.forward_mode}).",
             fg=typer.colors.BLUE,
         )
-        typer.secho(
+        secho(
             "This network relies on external DHCP, so virsh lease queries may not "
             "show the VM address.",
             fg=typer.colors.YELLOW,
         )
-        typer.secho(
+        secho(
             "Check your upstream DHCP service or DNS to find the assigned IP.",
             fg=typer.colors.YELLOW,
         )
@@ -992,19 +997,19 @@ def _print_completion_details(
         timeout_seconds=NAT_DHCP_LEASE_WAIT_SECONDS,
     )
     if lease_ip is not None:
-        typer.secho(
+        secho(
             f"DHCP lease detected for {vm_hostname}: {lease_ip}", fg=typer.colors.GREEN
         )
         typer.echo()
         render_ssh_hint(username, lease_ip.split("/", maxsplit=1)[0])
         return
 
-    typer.secho(
+    secho(
         f"No DHCP lease was found for '{vm_hostname}' on network "
         f"'{ctx.network_name}' within {NAT_DHCP_LEASE_WAIT_SECONDS} seconds.",
         fg=typer.colors.YELLOW,
     )
-    typer.secho(
+    secho(
         f"You can check manually with: sudo virsh net-dhcp-leases {ctx.network_name}",
         fg=typer.colors.YELLOW,
     )
@@ -1072,6 +1077,11 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         file_okay=False,
         help="Override the per-VM storage root (test seam).",
     ),
+    no_color: bool = typer.Option(
+        False,
+        "--no-color",
+        help="Disable colored output (also honors the NO_COLOR env var).",
+    ),
     version: bool = typer.Option(  # pylint: disable=unused-argument
         False,
         "--version",
@@ -1082,6 +1092,8 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     ),
 ) -> None:
     """Create a libvirt VM using configured cloud images and cloud-init."""
+    if no_color:
+        set_no_color(True)
     has_vm_args = vm_name is not None or vm_distro is not None
     has_all_vm_args = vm_name is not None and vm_distro is not None
 
@@ -1099,7 +1111,7 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         # Deprecated in favour of `lvlab init`, which is now the single
         # image-init path and also initializes the built-in defaults when no
         # Lvlab.yml is present (issue #97). Kept working for compatibility.
-        typer.secho(
+        secho(
             "Note: 'createvm --init-cloud-images' is deprecated; use 'lvlab init' "
             "instead (it initializes the built-in defaults with no Lvlab.yml). "
             "This flag still works for now.",
@@ -1107,7 +1119,7 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         )
         _initialize_cloud_images(catalog)
         if not has_all_vm_args:
-            typer.secho("Cloud images initialized.", fg=typer.colors.GREEN)
+            secho("Cloud images initialized.", fg=typer.colors.GREEN)
             return
 
     # vm_name / vm_distro guaranteed by the validation above.

@@ -91,6 +91,26 @@ def test_happy_path_force_removes_domain_and_dir(stub: dict, tmp_path: Path) -> 
     assert not vm_dir.exists()
 
 
+def test_no_color_flag_disables_color(
+    stub: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``deletevm --no-color`` flips the global colour switch before any output,
+    so the shared ``secho`` wrapper strips ANSI even on a TTY (issue #131)."""
+    from tkc_lvlab.utils import output
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output.set_no_color(False)
+    try:
+        result = CliRunner().invoke(
+            run,
+            ["--no-color", "testvm.local", "--force", "--storage-root", str(tmp_path)],
+        )
+        assert result.exit_code == 0, result.output
+        assert output.color_disabled() is True
+    finally:
+        output.set_no_color(False)
+
+
 def test_removes_domain_by_raw_name_without_storage_dir(
     stub: dict, tmp_path: Path
 ) -> None:

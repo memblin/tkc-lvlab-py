@@ -7,6 +7,10 @@ on:
         description: 'Tag to build'
         required: true
   push:
+    # Tags only — never on branch pushes. A `branches: [main]` trigger here
+    # fired this workflow on every push to main only for the auto-build job
+    # to skip the `if` guard below, leaving a "skipped" run in the Actions
+    # tab each time. Tag pushes (and workflow_dispatch) are the only releases.
     tags:
       # Stable: X.Y.Z
       - '[0-9]+.[0-9]+.[0-9]+'
@@ -14,8 +18,6 @@ on:
       - '[0-9]+.[0-9]+.[0-9]+rc[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+a[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+b[0-9]+'
-    branches:
-      - 'main'
 
 jobs:
   auto-build-release:

@@ -467,3 +467,66 @@ def test_cleanup_empty_env_dir_missing_dir_is_noop(tmp_path) -> None:
     config_defaults = {"disk_image_basedir": str(tmp_path)}
     environment = {"name": "never-created"}
     assert cleanup_empty_env_dir(config_defaults, environment) is False
+
+
+# ---------------------------------------------------------------------------
+# Live status table (issue #101)
+# ---------------------------------------------------------------------------
+
+
+def test_smoke_progress_tracks_phases_and_ip() -> None:
+    """SmokeProgress setters update per-case phase/ip; snapshot is consistent."""
+    from tkc_lvlab.smoke import SmokePhase, SmokeProgress
+
+    cases = [
+        _case("deb12-static", mode="static", static_ip="192.168.122.10"),
+        _case("fed44-dhcp", mode="dhcp"),
+    ]
+    progress = SmokeProgress(cases)
+
+    # Initial: pending, static ip prefilled, dhcp ip unknown.
+    snap = {s.vm_name: s for s in progress.snapshot()}
+    assert snap["deb12-static"].phase == SmokePhase.PENDING
+    assert snap["deb12-static"].ip == "192.168.122.10"
+    assert snap["fed44-dhcp"].ip is None
+
+    progress.set_phase("fed44-dhcp", SmokePhase.BOOTING)
+    progress.set_ip("fed44-dhcp", "192.168.122.55")
+    progress.set_phase("deb12-static", SmokePhase.PASS)
+
+    snap = {s.vm_name: s for s in progress.snapshot()}
+    assert snap["fed44-dhcp"].phase == SmokePhase.BOOTING
+    assert snap["fed44-dhcp"].ip == "192.168.122.55"
+    assert snap["deb12-static"].phase == SmokePhase.PASS
+
+
+def test_render_smoke_table_tally_and_cells() -> None:
+    """The live table shows each case and a running/pending/passed/failed tally."""
+    import io
+
+    from rich.console import Console
+
+    from tkc_lvlab.smoke import SmokePhase, SmokeProgress, render_smoke_table
+
+    cases = [
+        _case("a", mode="static", static_ip="10.0.0.1"),
+        _case("b", mode="dhcp"),
+        _case("c", mode="dhcp"),
+    ]
+    progress = SmokeProgress(cases)
+    progress.set_phase("a", SmokePhase.PASS)
+    progress.set_phase("b", SmokePhase.VERIFYING)
+    # 'c' stays pending.
+
+    table = render_smoke_table(progress.snapshot(), pool_size=2)
+    assert "passed 1" in table.caption
+    assert "pending 1" in table.caption
+    assert "running 1" in table.caption  # 'b' verifying counts as running
+    assert "failed 0" in table.caption
+
+    out = io.StringIO()
+    Console(file=out, width=120).print(table)
+    rendered = out.getvalue()
+    for name in ("a", "b", "c"):
+        assert name in rendered
+    assert "10.0.0.1" in rendered  # static ip shown

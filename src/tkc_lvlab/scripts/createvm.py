@@ -182,11 +182,15 @@ def parse_ip4_option(value: str, default_network: str) -> tuple[str, str | None]
     """Split a ``--ip4`` argument into ``(network_name, raw_ip_or_None)``.
 
     Accepts a bare ``"IP"`` (uses ``default_network``), a ``"NETWORK,IP"``
-    pair, or a DHCP sentinel (``dhcp`` / ``default`` / ``auto``,
-    case-insensitive) in the IP slot of either form. A sentinel resolves
-    the raw IP to ``None`` — i.e. DHCP, the same as omitting ``--ip4`` —
-    so ``--ip4 default`` launches a DHCP VM instead of being mangled into
-    the invalid address ``default/<netmask>`` (issue #105).
+    pair, a bare ``"NETWORK"`` name (→ that network with DHCP, e.g.
+    ``--ip4 vlan10``; issue #136), or a DHCP sentinel (``dhcp`` / ``default``
+    / ``auto``, case-insensitive) in the IP slot of either form. A sentinel
+    resolves the raw IP to ``None`` — i.e. DHCP, the same as omitting
+    ``--ip4`` — so ``--ip4 default`` launches a DHCP VM instead of being
+    mangled into the invalid address ``default/<netmask>`` (issue #105). A
+    bare token is treated as a network name (DHCP) unless it is IP-ish
+    (digits/dots, optional ``/CIDR``), which keeps the #105 clean error for a
+    numeric typo.
 
     Args:
         value: The raw value from ``--ip4``.
@@ -212,6 +216,13 @@ def parse_ip4_option(value: str, default_network: str) -> tuple[str, str | None]
     raw_ip = value.strip()
     if raw_ip.lower() in _DHCP_SENTINELS:
         return default_network, None
+    # A bare token that isn't IP-ish (only digits/dots, optional /CIDR) is a
+    # network name → use that network with DHCP (e.g. ``--ip4 vlan10``). IP-ish
+    # tokens stay on the static path so a numeric typo still gets the clean
+    # "not a valid IPv4 address" error rather than a confusing network lookup
+    # (issue #105 / #136).
+    if not re.fullmatch(r"[0-9.]+(/[0-9]+)?", raw_ip):
+        return raw_ip, None
     return default_network, raw_ip
 
 
@@ -481,13 +492,22 @@ def _build_createvm_context(
     netmask: str,
     memory: str,
     public_key: Path | None,
+    default_dns: list[str] | None = None,
+    default_gateway: str | None = None,
+    default_search: list[str] | None = None,
 ) -> _CreateVmContext:
     """Resolve image, network, addressing, and credentials.
 
+    ``default_dns`` / ``default_gateway`` / ``default_search`` come from the
+    ``--dns`` / ``--gateway`` / ``--search-domain`` flags and are forwarded to
+    :func:`resolve_network_settings`: required for a static address on a bridge
+    network (a bridge has no libvirt-managed DNS/gateway), ignored for NAT.
+
     Every failure mode raises a typed exception the command body maps to a
     clean ``_fail``: :class:`DependencyError`, :class:`ValueError` (unknown
-    distro / bad IP / bad memory), :class:`LibvirtNetworkError`,
-    :class:`PasswordHashError`, :class:`PublicKeyError`.
+    distro / bad IP / bad memory / bridge static IP missing --gateway/--dns),
+    :class:`LibvirtNetworkError`, :class:`PasswordHashError`,
+    :class:`PublicKeyError`.
     """
     check_createvm_tooling()
     entry = resolve_image_entry(vm_distro, catalog)
@@ -496,7 +516,25 @@ def _build_createvm_context(
         ip4=ip4, network_name=network_name, default_network=DEFAULT_NETWORK
     )
     network_info = get_network_info(_SYSTEM_URI, resolved_network)
-    dns_servers, gateway, search_domains = resolve_network_settings(network_info)
+    # A static address on a bridge needs DNS + gateway the operator supplies;
+    # fail with the flag names before the generic resolve_network_settings
+    # error (which is phrased for the manifest path's default_dns/gateway).
+    if (
+        raw_ip is not None
+        and network_info.forward_mode.lower() == "bridge"
+        and not (default_gateway and default_dns)
+    ):
+        raise ValueError(
+            f"Network '{resolved_network}' is a bridge; a static --ip4 needs "
+            "--gateway <ip> and --dns <ip[,ip]>. (Or use '--ip4 "
+            f"{resolved_network}' for DHCP on it, or a NAT network.)"
+        )
+    dns_servers, gateway, search_domains = resolve_network_settings(
+        network_info,
+        default_dns=default_dns,
+        default_gateway=default_gateway,
+        default_search=default_search,
+    )
     vm_ip = _resolve_static_vm_ip(
         raw_ip=raw_ip, netmask=netmask, network_info=network_info
     )
@@ -1052,6 +1090,27 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         "--network",
         help="Libvirt network name (defaults to 'default').",
     ),
+    gateway: str | None = typer.Option(
+        None,
+        "--gateway",
+        help=(
+            "Gateway IP for a static --ip4 on a bridge network. Required with "
+            "--dns for a bridge; ignored for NAT (self-derived)."
+        ),
+    ),
+    dns: str | None = typer.Option(
+        None,
+        "--dns",
+        help=(
+            "Comma-separated DNS server(s) for a static --ip4 on a bridge "
+            "network. Required with --gateway for a bridge; ignored for NAT."
+        ),
+    ),
+    search_domain: str | None = typer.Option(
+        None,
+        "--search-domain",
+        help="Comma-separated DNS search domain(s) (honored on NAT and bridge).",
+    ),
     public_key: Path | None = typer.Option(
         None,
         "--public-key",
@@ -1128,6 +1187,13 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     typer.echo()
     _ensure_storage_root_writable(storage_root)
 
+    dns_servers = [s.strip() for s in dns.split(",") if s.strip()] if dns else None
+    search_domains = (
+        [s.strip() for s in search_domain.split(",") if s.strip()]
+        if search_domain
+        else None
+    )
+
     try:
         ctx = _build_createvm_context(
             catalog=catalog,
@@ -1137,6 +1203,9 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
             netmask=netmask,
             memory=memory,
             public_key=public_key,
+            default_dns=dns_servers,
+            default_gateway=gateway,
+            default_search=search_domains,
         )
     except (
         LibvirtNetworkError,

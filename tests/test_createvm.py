@@ -197,6 +197,20 @@ def test_parse_ip4_network_comma_dhcp_sentinel_keeps_network(sentinel: str) -> N
     assert parse_ip4_option(f"vlan10,{sentinel}", "default") == ("vlan10", None)
 
 
+def test_parse_ip4_bare_network_name_means_dhcp_on_that_network() -> None:
+    """A bare non-IP-ish token is a network name → DHCP on it (#136), e.g.
+    ``--ip4 vlan10``. The default network is *not* used."""
+    assert parse_ip4_option("vlan10", "default") == ("vlan10", None)
+
+
+def test_parse_ip4_bare_ip_ish_value_stays_on_static_path() -> None:
+    """A bare IP-ish token (digits/dots, optional CIDR) stays a static IP on the
+    default network — even when out of range, so a numeric typo reaches the
+    #105 'not a valid IPv4 address' validation rather than a network lookup."""
+    assert parse_ip4_option("192.168.1.300", "default") == ("default", "192.168.1.300")
+    assert parse_ip4_option("10.0.0.0/24", "default") == ("default", "10.0.0.0/24")
+
+
 def test_ensure_cidr_appends_and_preserves() -> None:
     """ensure_cidr appends the netmask only when the IP lacks one."""
     assert ensure_cidr("192.168.122.50", "24") == "192.168.122.50/24"
@@ -237,6 +251,18 @@ def _nat_network_info() -> LibvirtNetworkInfo:
         netmask="255.255.255.0",
         dhcp_start="192.168.122.2",
         dhcp_end="192.168.122.254",
+    )
+
+
+def _bridge_network_info() -> LibvirtNetworkInfo:
+    """Build a bridge LibvirtNetworkInfo (no libvirt-managed DNS/gateway)."""
+    return LibvirtNetworkInfo(
+        name="vlan10",
+        forward_mode="bridge",
+        gateway_ip=None,
+        netmask=None,
+        dhcp_start=None,
+        dhcp_end=None,
     )
 
 
@@ -554,8 +580,13 @@ def test_ip4_dhcp_sentinel_launches_dhcp_vm(
 def test_ip4_invalid_address_gives_clean_actionable_error(
     all_external_mocked: dict, tmp_path: Path
 ) -> None:
-    """A genuinely invalid --ip4 yields an actionable message, not the stdlib one."""
-    result = _invoke(["testvm.local", "debian12", "--ip4", "not-an-ip"], tmp_path)
+    """A genuinely invalid --ip4 yields an actionable message, not the stdlib one.
+
+    Uses an IP-ish value (digits/dots, out of range) — a bare token with
+    letters is now read as a network name + DHCP (#136), so the "invalid IP"
+    path is reserved for numeric typos.
+    """
+    result = _invoke(["testvm.local", "debian12", "--ip4", "192.168.1.300"], tmp_path)
     assert result.exit_code != 0
     out = result.output
     # Actionable: names the bad value, suggests an example + the DHCP path.
@@ -563,7 +594,60 @@ def test_ip4_invalid_address_gives_clean_actionable_error(
     assert "--ip4 dhcp" in out
     # Must NOT leak the stdlib message nor echo the netmask-mangled form.
     assert "does not appear to be an" not in out
-    assert "not-an-ip/24" not in out
+    assert "192.168.1.300/24" not in out
+
+
+def test_bridge_static_ip_without_dns_gateway_errors(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """A static --ip4 on a bridge network without --gateway/--dns fails fast
+    with a message naming the missing flags (#136)."""
+    all_external_mocked["get_network_info"].return_value = _bridge_network_info()
+    result = _invoke(
+        ["testvm.local", "debian12", "--ip4", "vlan10,100.64.100.107"], tmp_path
+    )
+    assert result.exit_code != 0
+    assert "bridge" in result.output
+    assert "--gateway" in result.output and "--dns" in result.output
+
+
+def test_bridge_static_ip_with_dns_gateway_passes_them_through(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """--gateway/--dns/--search-domain reach resolve_network_settings so a
+    static --ip4 on a bridge network is accepted (#136)."""
+    all_external_mocked["get_network_info"].return_value = _bridge_network_info()
+    result = _invoke(
+        [
+            "testvm.local",
+            "debian12",
+            "--ip4",
+            "vlan10,100.64.100.107",
+            "--gateway",
+            "100.64.0.1",
+            "--dns",
+            "1.1.1.1,8.8.8.8",
+            "--search-domain",
+            "lab.example",
+        ],
+        tmp_path,
+    )
+    assert result.exit_code == 0, result.output
+    kwargs = all_external_mocked["resolve_network_settings"].call_args.kwargs
+    assert kwargs["default_gateway"] == "100.64.0.1"
+    assert kwargs["default_dns"] == ["1.1.1.1", "8.8.8.8"]
+    assert kwargs["default_search"] == ["lab.example"]
+
+
+def test_bare_network_name_boots_dhcp_on_that_network(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """``--ip4 vlan10`` (no IP) resolves that network and takes the DHCP path —
+    no static IP validated, and the named network is the one looked up (#136)."""
+    result = _invoke(["testvm.local", "debian12", "--ip4", "vlan10"], tmp_path)
+    assert result.exit_code == 0, result.output
+    all_external_mocked["validate_static_ip"].assert_not_called()
+    assert all_external_mocked["get_network_info"].call_args.args[-1] == "vlan10"
 
 
 def test_virt_install_failure_cleans_up_vm_dir(

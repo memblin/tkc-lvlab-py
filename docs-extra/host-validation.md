@@ -62,6 +62,41 @@ The bootstrap script (`scripts/host-bootstrap.sh`) refuses to run on
 anything outside the supported list, so accidentally running it on a
 jammy box won't half-configure it.
 
+### 0.5.0 release validation
+
+Fresh single-host run against git SHA `d491483` (the `0.5.0` tag is at
+`14bea75`; `d491483` adds only the CLAUDE.md PAT-scope note on top, no
+runtime change) on 2026-05-26. **Only the Fedora 44 host row was re-run**
+for 0.5.0 — the Debian 12/13 and AlmaLinux 10 rows still stand at the
+`d9f8ec3` matrix above; a full post-0.5.0 four-host matrix is tracked in
+[#123](https://github.com/memblin/tkc-lvlab-py/issues/123).
+
+| Host      | Distro    | Kernel         | System Python | Unit                | Integration                |
+| --------- | --------- | -------------- | ------------- | ------------------- | -------------------------- |
+| Fedora 44 | Fedora 44 | 7.0.9-205.fc44 | 3.14.4        | 587 passed, 39 skip | 21 passed, 17 skip, 0 fail |
+
+- **Unit:** `587 passed, 39 skipped`.
+- **Integration (`LVLAB_INTEGRATION=1`):** the `createvm`/`deletevm`
+    connectivity matrix is green on **`qemu:///system` for all 8 guest
+    images × {static, dhcp} = 16/16**; the `qemu:///session` cases skip
+    (no rootless user-mode networking on this host). The `lvlab` manifest
+    roundtrip, snapshot lifecycle, and cross-surface isolation tests pass.
+- **Manifest path:** `lvlab smoke` against `docs-extra/smoke/` passed
+    **16/16** (8 images × {static, dhcp}, bin-packed into 2 batches on a
+    13.7 GiB host), with the bounded teardown (#132) keeping the Ubuntu
+    cases from stalling.
+
+**Setup caveat (procedure friction, tracked in
+[#134](https://github.com/memblin/tkc-lvlab-py/issues/134)):**
+the `lvlab`-path integration manifest sets `cloud_image_basedir: /var/lib/libvirt/images`, so it looks for cached images under the **bare**
+`/var/lib/libvirt/images/cloud-images/`. But `lvlab init` and `createvm`
+cache under `/var/lib/libvirt/images/**lvlab**/cloud-images/`. On a host
+seeded only via `lvlab init`, the `lvlab`/snapshot/regression integration
+tests fail with "image not found" until the bare path is populated (the
+`createvm` matrix is unaffected — it uses the `lvlab/` path). This run
+seeded the bare path with a symlink to the `lvlab/` cache before the
+suite went green.
+
 ## Procedure for one host
 
 The whole loop on a fresh VM of any supported distro:

@@ -72,7 +72,9 @@ def test_init_downloads_all_artefacts_when_nothing_local() -> None:
     img.gpg_verify_checksum_file.assert_not_called()
     img.checksum_verify_image.assert_not_called()
     assert "Initializing Libvirt Lab Environment: test-env" in result.output
-    assert "CloudImage downloaded to /tmp/fedora44/image.qcow2" in result.output
+    # Compact concurrent output (issue #104): a per-image completion line.
+    assert "fedora44" in result.output
+    assert "done" in result.output
 
 
 def test_init_verifies_when_all_artefacts_already_local() -> None:
@@ -87,11 +89,10 @@ def test_init_verifies_when_all_artefacts_already_local() -> None:
     img.download_checksum_gpg.assert_not_called()
     img.gpg_verify_checksum_file.assert_called_once()
     img.checksum_verify_image.assert_called_once()
-    assert "CloudImage fedora44 exists locally" in result.output
-    assert "CloudImage fedora44 checksum file exists locally" in result.output
-    assert "CloudImage fedora44 checksum GPG file exists locally" in result.output
-    assert "CloudImage fedora44 checksum file GPG validation OK" in result.output
-    assert "CloudImage fedora44 checksum verification OK" in result.output
+    # The verifiers fired (the behavioural contract); the compact #104 output
+    # reports the image's completion rather than per-step status lines.
+    assert "fedora44" in result.output
+    assert "done" in result.output
 
 
 def test_init_skips_gpg_branch_when_image_has_no_gpg_url() -> None:
@@ -211,3 +212,52 @@ def test_init_with_no_manifest_still_fails_on_bad_manifest() -> None:
 
     assert result.exit_code == 1
     cloud_image_cls.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Concurrent init: progress state, cell rendering, failure isolation (#104)
+# ---------------------------------------------------------------------------
+
+
+def test_init_progress_state_snapshot_reflects_updates() -> None:
+    """_InitProgress setters update state; snapshot returns a consistent copy."""
+    progress = cli._InitProgress(["a", "b"])
+    progress.set_bytes("a", 50, 100)  # set_bytes implies the downloading phase
+    progress.set_phase("b", "verifying")
+
+    snap = {s.name: s for s in progress.snapshot()}
+    assert snap["a"].phase == "downloading"
+    assert snap["a"].bytes_done == 50 and snap["a"].bytes_total == 100
+    assert snap["b"].phase == "verifying"
+
+
+def test_init_progress_cell_renders_bar_done_and_failed() -> None:
+    """The compact cell shows a % bar while downloading, ✓ done, ✗ failed."""
+    downloading = cli._ImageInitState(
+        "x", phase="downloading", bytes_done=61, bytes_total=100
+    )
+    assert "%" in cli._init_progress_cell(downloading)
+    assert "61%" in cli._init_progress_cell(downloading)
+
+    done = cli._ImageInitState("x", phase="done")
+    assert "✓" in cli._init_progress_cell(done)
+
+    failed = cli._ImageInitState("x", phase="failed", error="HTTP 404")
+    cell = cli._init_progress_cell(failed)
+    assert "✗" in cell and "HTTP 404" in cell
+
+
+def test_init_one_image_failure_exits_1_others_still_processed() -> None:
+    """A fatal ImageError on one image fails init (exit 1) but doesn't wedge the rest."""
+    from tkc_lvlab.exceptions import ImageError
+
+    good = _mock_image("debian12", has_gpg=False, has_checksum=False)
+    bad = _mock_image("fedora44", has_gpg=False, has_checksum=False)
+    bad.download_image.side_effect = ImageError("could not download")
+
+    result = _run_init([good, bad])
+
+    assert result.exit_code == 1
+    # The healthy image was still processed despite the other's failure.
+    good.download_image.assert_called_once()
+    bad.download_image.assert_called_once()

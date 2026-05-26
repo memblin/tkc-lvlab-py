@@ -310,3 +310,33 @@ def test_download_or_raise_wraps_http_error_with_workaround(tmp_path: Path) -> N
     assert "HTTP 404" in message
     assert str(destination) in message
     assert "place the file manually" in message
+
+
+def test_download_file_progress_callback_reports_monotonic_bytes(
+    tmp_path: Path,
+) -> None:
+    """With a progress_callback, bytes are reported monotonically up to the total.
+
+    The callback decouples progress from the display (issue #104) so callers
+    like `lvlab init` can drive their own rendering instead of the tqdm bar.
+    """
+    destination = tmp_path / "image.qcow2"
+    payload = b"z" * 4500  # several 1024-byte chunks
+    resp = _FakeResponse(body=payload)
+
+    seen: list[tuple[int, int]] = []
+
+    with patch("tkc_lvlab.utils.images.requests.get", return_value=resp):
+        with patch("tkc_lvlab.utils.images.time.sleep"):
+            result = CloudImage._download_file(
+                "https://mirror.example/image.qcow2",
+                str(destination),
+                progress_callback=lambda done, total: seen.append((done, total)),
+            )
+
+    assert result is True
+    assert seen, "callback was never invoked"
+    done_values = [d for d, _ in seen]
+    assert done_values == sorted(done_values)  # monotonic non-decreasing
+    assert done_values[-1] == len(payload)  # ends at the full size
+    assert all(total == len(payload) for _, total in seen)

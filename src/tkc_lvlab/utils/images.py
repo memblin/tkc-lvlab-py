@@ -24,9 +24,12 @@ to prevent a Debian 11 ``SHA512SUMS`` from clobbering Debian 12's.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import subprocess
 import time
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
@@ -561,3 +564,252 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
                 return True
 
         return False
+
+
+@dataclass
+class CleanupCandidate:
+    """One unreferenced cache entry slated for removal by ``lvlab images clean``.
+
+    A candidate is the primary cache file (an image qcow2 that no manifest
+    ``images:`` entry claims) plus any sidecar files that share its
+    image-filename prefix (the checksum manifest, its ``.verified``
+    companion, and the GPG keyring). They are grouped so the cleanup
+    command removes an image and its verification artefacts atomically —
+    leaving a dangling ``.verified`` behind would be confusing.
+
+    Attributes:
+        image_fpath: Absolute path to the primary unreferenced file.
+        sidecar_fpaths: Absolute paths to sidecar files removed alongside
+            it (checksum / ``.verified`` / GPG). May be empty.
+    """
+
+    image_fpath: str
+    sidecar_fpaths: list[str] = field(default_factory=list)
+
+    @property
+    def all_fpaths(self) -> list[str]:
+        """Every path this candidate would remove (primary + sidecars).
+
+        Returns:
+            ``[image_fpath, *sidecar_fpaths]`` — the primary file first.
+        """
+        return [self.image_fpath, *self.sidecar_fpaths]
+
+
+def resolve_cloud_image_dir(config_defaults: dict[str, Any]) -> str:
+    """Resolve the cloud-image cache directory the same way ``CloudImage`` does.
+
+    Mirrors :meth:`CloudImage.__init__`'s tail-aware ``/cloud-images``
+    append so the cleanup command operates on exactly the directory
+    ``lvlab up`` / ``init`` populate — including the shared-cache case
+    where ``cloud_image_basedir`` already ends in ``cloud-images``.
+
+    Args:
+        config_defaults: The manifest's ``config_defaults`` dict. Honors
+            ``cloud_image_basedir`` (defaults to
+            ``/var/lib/libvirt/images/lvlab``).
+
+    Returns:
+        The absolute (``~``-expanded) cache directory path.
+    """
+    configured_basedir = config_defaults.get(
+        "cloud_image_basedir", "/var/lib/libvirt/images/lvlab"
+    )
+    if os.path.basename(configured_basedir.rstrip(os.sep)) == "cloud-images":
+        image_dir = configured_basedir
+    else:
+        image_dir = os.path.join(configured_basedir, "cloud-images")
+    return os.path.expanduser(image_dir)
+
+
+def enumerate_protected_files(
+    images: dict[str, Any],
+    environment: dict[str, Any],
+    config_defaults: dict[str, Any],
+) -> set[str]:
+    """Build the set of cache paths that must never be removed.
+
+    For EVERY entry in the manifest's ``images:`` section — whether or not
+    a machine references it — this constructs the on-disk filenames via the
+    canonical :class:`CloudImage` derivation (so the Debian/AlmaLinux
+    per-image-prefix checksum naming and the shared-cache directory logic
+    are honoured automatically) and collects, for each image:
+
+    - the image qcow2 (:attr:`CloudImage.image_fpath`),
+    - the checksum manifest (:attr:`CloudImage.checksum_fpath`),
+    - the GPG-verified ``.verified`` companion of that manifest,
+    - the GPG keyring (:attr:`CloudImage.checksum_gpg_fpath`).
+
+    Missing/``None`` artefacts (an image with no checksum, etc.) are simply
+    not added — protection is per existing-derivation, not speculative.
+
+    Args:
+        images: The manifest's ``images`` dict from ``parse_config()``.
+        environment: The manifest's ``environment[0]`` dict (passed
+            through to ``CloudImage`` unchanged).
+        config_defaults: The manifest's ``config_defaults`` dict.
+
+    Returns:
+        A set of absolute, ``~``-expanded paths that are off-limits to
+        removal.
+    """
+    protected: set[str] = set()
+    for image_name, image_config in images.items():
+        image = CloudImage(image_name, image_config, environment, config_defaults)
+        if image.image_fpath:
+            protected.add(os.path.expanduser(image.image_fpath))
+        if image.checksum_fpath:
+            checksum = os.path.expanduser(image.checksum_fpath)
+            protected.add(checksum)
+            protected.add(checksum + VERIFIED_SUFFIX)
+        if image.checksum_gpg_fpath:
+            protected.add(os.path.expanduser(image.checksum_gpg_fpath))
+    return protected
+
+
+def backing_files_in_use(
+    environment: dict[str, Any],
+    config_defaults: dict[str, Any],
+) -> set[str]:
+    """Best-effort: cache images currently used as a qcow2 backing file.
+
+    Defense-in-depth on top of the manifest protected set. Walks the
+    per-VM disk tree under ``disk_image_basedir`` and asks ``qemu-img
+    info`` for each ``*.qcow2`` disk's ``full-backing-filename``. Any
+    backing path that resolves into the cloud-image cache dir is returned
+    so the cleanup command will never pull a backing file out from under a
+    live disk.
+
+    This is intentionally tolerant: a missing ``qemu-img`` binary, an
+    unreadable disk, or a malformed JSON response is logged and skipped
+    rather than aborting the cleanup. The manifest-images set remains the
+    primary guarantee.
+
+    Args:
+        environment: The manifest's ``environment[0]`` dict. Its ``name``
+            is part of the per-environment disk subdirectory layout, but
+            the walk is environment-agnostic (it scans the whole basedir).
+        config_defaults: The manifest's ``config_defaults`` dict. Honors
+            ``disk_image_basedir`` (defaults to
+            ``/var/lib/libvirt/images/lvlab``).
+
+    Returns:
+        A set of absolute backing-file paths that live inside the cache
+        directory. Empty when nothing on-disk references the cache.
+    """
+    disk_basedir = os.path.expanduser(
+        config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images/lvlab")
+    )
+    cache_dir = resolve_cloud_image_dir(config_defaults)
+
+    in_use: set[str] = set()
+    if not os.path.isdir(disk_basedir):
+        return in_use
+
+    for root, _dirs, files in os.walk(disk_basedir):
+        for fname in files:
+            if not fname.endswith(".qcow2"):
+                continue
+            disk_path = os.path.join(root, fname)
+            backing = _qemu_img_backing_file(disk_path)
+            if not backing:
+                continue
+            backing = os.path.abspath(os.path.expanduser(backing))
+            if os.path.dirname(backing) == os.path.abspath(cache_dir):
+                in_use.add(backing)
+    return in_use
+
+
+def _qemu_img_backing_file(disk_path: str) -> str | None:
+    """Return a qcow2 disk's backing-file path via ``qemu-img info``.
+
+    Args:
+        disk_path: Absolute path to a qcow2 disk image.
+
+    Returns:
+        The disk's ``full-backing-filename`` (preferred) or
+        ``backing-filename``, or ``None`` when the disk has no backing
+        file or ``qemu-img`` could not be consulted.
+    """
+    try:
+        result = subprocess.run(
+            ["qemu-img", "info", "--output=json", disk_path],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        logger.debug("qemu-img info failed for %s: %s", disk_path, exc)
+        return None
+
+    try:
+        info = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.debug("qemu-img info gave non-JSON for %s: %s", disk_path, exc)
+        return None
+
+    return info.get("full-backing-filename") or info.get("backing-filename")
+
+
+def find_cleanup_candidates(
+    image_dir: str, protected: set[str]
+) -> list[CleanupCandidate]:
+    """Group unprotected cache files into removal candidates with sidecars.
+
+    Scans ``image_dir`` (non-recursively) and partitions its files into
+    protected (skipped) and unprotected. Unprotected files are grouped so
+    a candidate's checksum / ``.verified`` / GPG sidecars travel with it:
+    the primary file is the unprotected entry whose name is the longest
+    prefix of the others (the bare image filename), and every other
+    unprotected file beginning with ``<primary>.`` is attached as a
+    sidecar. An unprotected file that is nobody's sidecar becomes its own
+    standalone candidate.
+
+    Args:
+        image_dir: The cloud-image cache directory (already
+            ``~``-expanded).
+        protected: Absolute paths that must never be removed (from
+            :func:`enumerate_protected_files`, optionally unioned with
+            :func:`backing_files_in_use`).
+
+    Returns:
+        A list of :class:`CleanupCandidate`, sorted by primary path. Empty
+        when the directory is absent or everything in it is protected.
+    """
+    if not os.path.isdir(image_dir):
+        return []
+
+    unprotected: list[str] = []
+    for fname in os.listdir(image_dir):
+        fpath = os.path.join(image_dir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        if os.path.abspath(fpath) in {os.path.abspath(p) for p in protected}:
+            continue
+        unprotected.append(fpath)
+
+    # Group sidecars under their primary. A sidecar shares the primary's
+    # full filename as a prefix followed by a dot (matching the
+    # ``<image>.<checksum>`` / ``<image>.<checksum>.verified`` naming this
+    # module produces). Pick the shortest-named file in each prefix family
+    # as the primary; the rest are its sidecars.
+    remaining = sorted(unprotected, key=lambda p: (len(os.path.basename(p)), p))
+    consumed: set[str] = set()
+    candidates: list[CleanupCandidate] = []
+    for primary in remaining:
+        if primary in consumed:
+            continue
+        primary_base = os.path.basename(primary)
+        sidecars: list[str] = []
+        for other in remaining:
+            if other is primary or other in consumed:
+                continue
+            if os.path.basename(other).startswith(primary_base + "."):
+                sidecars.append(other)
+                consumed.add(other)
+        consumed.add(primary)
+        candidates.append(
+            CleanupCandidate(image_fpath=primary, sidecar_fpaths=sorted(sidecars))
+        )
+
+    return sorted(candidates, key=lambda c: c.image_fpath)

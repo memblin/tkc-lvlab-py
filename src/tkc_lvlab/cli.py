@@ -48,7 +48,14 @@ from .utils.libvirt import (
     get_machine_by_vm_name,
     Machine,
 )
-from .utils.images import CloudImage
+from .utils.images import (
+    CleanupCandidate,
+    CloudImage,
+    backing_files_in_use,
+    enumerate_protected_files,
+    find_cleanup_candidates,
+    resolve_cloud_image_dir,
+)
 from .utils.virsh import (
     DEAD_STATES,
     DOMSTATE_RUNNING,
@@ -95,6 +102,19 @@ global_show_app = typer.Typer(
 )
 global_app.add_typer(global_show_app, name="show")
 app.add_typer(global_app, name="global")
+
+images_app = typer.Typer(
+    help="Cloud-image cache management commands.",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    no_args_is_help=True,
+)
+app.add_typer(images_app, name="images")
+
+
+# config_defaults flag that hard-refuses cloud-image cleanup. Read the same
+# way other config_defaults flags are (``.get`` with a default), so an
+# operator can pin a cache against accidental deletion from the manifest.
+PREVENT_CLEANUP_FLAG = "prevent_cloud_image_cleanup"
 
 
 # Connections every ``lvlab global show`` enumerates unless the user narrows or
@@ -596,6 +616,115 @@ def init() -> None:
         image = CloudImage(image_name, image_config, environment, config_defaults)
         _init_process_image(image)
         typer.echo()
+
+
+def _echo_clean_plan(candidates: list[CleanupCandidate], force: bool) -> None:
+    """Print the per-candidate removal plan (dry-run preview or live action)."""
+    verb = "Removing" if force else "Would remove"
+    for candidate in candidates:
+        typer.echo(f"{verb}: {candidate.image_fpath}")
+        for sidecar in candidate.sidecar_fpaths:
+            typer.echo(f"  - sidecar: {sidecar}")
+
+
+@images_app.command("clean")
+def images_clean(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "--yes",
+        "--delete",
+        help="Actually delete the unreferenced files. Without this, the "
+        "command is a dry run that only lists what WOULD be removed.",
+    ),
+) -> None:
+    """Remove cloud-image cache files no manifest image claims (dry-run by default).
+
+    Builds a protected set from EVERY entry in the manifest's images section
+    (image qcow2 + checksum + .verified + GPG sidecar, via the canonical
+    CloudImage derivation) and, as defense-in-depth, any cache image currently
+    used as a qcow2 backing file by an on-disk disk. Every other file in the
+    cloud-image cache directory is a removal candidate; its sidecars are
+    removed together with it.
+
+    Safety model: dry-run by default (without --force/--yes/--delete nothing
+    is deleted, only listed); the config_defaults.prevent_cloud_image_cleanup
+    lock refuses all deletion even with --force; and a missing or unparseable
+    Lvlab.yml aborts rather than guessing what is protected.
+
+    Raises:
+        typer.Exit: Code 1 on a missing/unparseable manifest, or when the
+            lock parameter is set and ``--force`` was requested.
+    """
+    try:
+        parsed = parse_config()
+    except (ConfigError, TypeError) as exc:
+        logger.error("%s (%s)", CONFIG_PARSE_ERROR_MSG, exc)
+        raise typer.Exit(code=1)
+
+    if parsed is None:
+        # A missing Lvlab.yml: refuse rather than guess what is protected.
+        logger.error(
+            "No Lvlab.yml found in the current directory; refusing to clean "
+            "the cloud-image cache without a manifest to protect against."
+        )
+        raise typer.Exit(code=1)
+
+    environment, images, config_defaults, _ = parsed
+
+    locked = bool(config_defaults.get(PREVENT_CLEANUP_FLAG, False))
+
+    image_dir = resolve_cloud_image_dir(config_defaults)
+    typer.echo(f"Cloud-image cache: {image_dir}")
+
+    protected = enumerate_protected_files(images, environment, config_defaults)
+    backing = backing_files_in_use(environment, config_defaults)
+    protected |= backing
+
+    candidates = find_cleanup_candidates(image_dir, protected)
+
+    # Report what survives and why — manifest-protected vs. in-use backing.
+    if os.path.isdir(image_dir):
+        for fname in sorted(os.listdir(image_dir)):
+            fpath = os.path.join(image_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            abspath = os.path.abspath(fpath)
+            if abspath in {os.path.abspath(p) for p in backing}:
+                typer.echo(f"Protected (in use as backing file): {fpath}")
+            elif abspath in {os.path.abspath(p) for p in protected}:
+                typer.echo(f"Protected (defined in manifest): {fpath}")
+
+    if not candidates:
+        typer.echo("No unreferenced cloud-image files to remove.")
+        return
+
+    if locked:
+        # Lock parameter: refuse all deletion regardless of --force.
+        typer.echo(
+            f"Cleanup is disabled by config_defaults.{PREVENT_CLEANUP_FLAG}; "
+            f"{len(candidates)} candidate(s) left untouched."
+        )
+        _echo_clean_plan(candidates, force=False)
+        if force:
+            raise typer.Exit(code=1)
+        return
+
+    _echo_clean_plan(candidates, force=force)
+
+    if not force:
+        typer.echo("Dry run: nothing deleted. Re-run with --force to remove the above.")
+        return
+
+    removed = 0
+    for candidate in candidates:
+        for fpath in candidate.all_fpaths:
+            try:
+                os.remove(fpath)
+                removed += 1
+            except OSError as exc:
+                logger.error("Failed to remove %s: %s", fpath, exc)
+    typer.echo(f"Removed {removed} file(s) across {len(candidates)} candidate(s).")
 
 
 @snapshot_app.command("list")

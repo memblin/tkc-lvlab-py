@@ -143,6 +143,17 @@ def test_global_flag_hoisted_through_nested_subcommand():
     assert output.color_disabled() is True
 
 
+@pytest.mark.parametrize("argv", [["--no-color"], ["-v"], ["-q", "-v"]])
+def test_only_global_flags_shows_help_like_bare_invocation(argv):
+    """A lone global flag with no subcommand behaves like a bare ``lvlab`` —
+    the full help (``no_args_is_help``), not a terse "Missing command" error.
+    Click's ``no_args_is_help`` only fires on truly empty args, so the group
+    routes a globals-only command line through the same help path."""
+    res = runner.invoke(app, argv)
+    assert "Missing command" not in res.output
+    assert "Commands" in res.output and "Options" in res.output
+
+
 def test_unknown_post_subcommand_flag_still_errors():
     """Hoisting is scoped to the known globals — an unrecognized flag after the
     subcommand remains a hard parse error rather than being silently swallowed."""

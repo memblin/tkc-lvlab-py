@@ -165,6 +165,12 @@ class GlobalFlagGroup(typer.core.TyperGroup):
         head, tail = args[:sep], args[sep:]
         hoisted = [token for token in head if _is_global_flag(token)]
         rest = [token for token in head if not _is_global_flag(token)]
+        # Only global flags and no subcommand (e.g. ``lvlab --no-color``): there
+        # is nothing to run, so behave like a bare ``lvlab`` and show the full
+        # help via ``no_args_is_help`` rather than erroring "Missing command".
+        # Delegating with empty args reuses Click's own help path verbatim.
+        if self.no_args_is_help and hoisted and not rest and not tail:
+            return super().parse_args(ctx, [])
         return super().parse_args(ctx, hoisted + rest + tail)
 
 

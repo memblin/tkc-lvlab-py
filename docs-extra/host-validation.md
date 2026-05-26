@@ -64,12 +64,16 @@ jammy box won't half-configure it.
 
 ### 0.5.0 release validation
 
-Fresh single-host run against git SHA `d491483` (the `0.5.0` tag is at
-`14bea75`; `d491483` adds only the CLAUDE.md PAT-scope note on top, no
-runtime change) on 2026-05-26. **Only the Fedora 44 host row was re-run**
-for 0.5.0 — the Debian 12/13 and AlmaLinux 10 rows still stand at the
-`d9f8ec3` matrix above; a full post-0.5.0 four-host matrix is tracked in
-[#123](https://github.com/memblin/tkc-lvlab-py/issues/123).
+Two complementary checks were run for 0.5.0: the heavy pytest suite on one
+host, and a released-wheel application smoke on **all four** supported hosts
+(b). Together they close [#123](https://github.com/memblin/tkc-lvlab-py/issues/123).
+
+#### (a) Full `scripts/run-validation.sh` (unit + integration) — Fedora 44
+
+Fresh run against git SHA `d491483` (the `0.5.0` tag is at `14bea75`;
+`d491483` adds only the CLAUDE.md PAT-scope note on top, no runtime change)
+on 2026-05-26, on the Fedora 44 host only. Rerunning this heavy pytest matrix
+on every host is optional — the application smoke in (b) covers the others.
 
 | Host      | Distro    | Kernel         | System Python | Unit                | Integration                |
 | --------- | --------- | -------------- | ------------- | ------------------- | -------------------------- |
@@ -86,16 +90,37 @@ for 0.5.0 — the Debian 12/13 and AlmaLinux 10 rows still stand at the
     13.7 GiB host), with the bounded teardown (#132) keeping the Ubuntu
     cases from stalling.
 
-**Setup caveat (procedure friction, tracked in
-[#134](https://github.com/memblin/tkc-lvlab-py/issues/134)):**
-the `lvlab`-path integration manifest sets `cloud_image_basedir: /var/lib/libvirt/images`, so it looks for cached images under the **bare**
-`/var/lib/libvirt/images/cloud-images/`. But `lvlab init` and `createvm`
-cache under `/var/lib/libvirt/images/**lvlab**/cloud-images/`. On a host
-seeded only via `lvlab init`, the `lvlab`/snapshot/regression integration
-tests fail with "image not found" until the bare path is populated (the
-`createvm` matrix is unaffected — it uses the `lvlab/` path). This run
-seeded the bare path with a symlink to the `lvlab/` cache before the
-suite went green.
+Setup caveat hit during this run (now **fixed** in
+[#134](https://github.com/memblin/tkc-lvlab-py/issues/134), commit
+`5a7e88b`): the `lvlab`-path integration manifest used to set
+`cloud_image_basedir: /var/lib/libvirt/images`, so it looked for cached
+images under the **bare** `/var/lib/libvirt/images/cloud-images/` while
+`lvlab init` / `createvm` cache under `/var/lib/libvirt/images/lvlab/cloud-images/`.
+On a host seeded only via `lvlab init` the `lvlab`/snapshot/regression tests
+failed with "image not found"; this run worked around it with a symlink. The
+manifest now points at the `lvlab/` basedir, so a normally-seeded host runs
+the integration suite clean.
+
+#### (b) Released-wheel application smoke — all four hosts
+
+The acceptance check for "does 0.5.0 work on each supported host distro": on
+each host, install the released **0.5.0 wheel** into a fresh venv and run
+`lvlab smoke` for a single guest of **that host's own distro** over
+`qemu:///system` — the full lifecycle (`init` → `up` → DHCP-lease →
+SSH-verify → `down` → `destroy`). Driven by
+[`scripts/hostcheck.sh`](../scripts/hostcheck.sh) (2026-05-26):
+
+| Host         | System Python | Guest booted       | Result |
+| ------------ | ------------- | ------------------ | ------ |
+| Debian 12    | 3.11          | debian12 / DHCP    | PASS   |
+| Debian 13    | 3.13          | debian13 / DHCP    | PASS   |
+| AlmaLinux 10 | 3.12          | almalinux10 / DHCP | PASS   |
+| Fedora 44    | 3.14          | fedora44 / DHCP    | PASS   |
+
+All four green — the released wheel installs cleanly and drives libvirt to
+boot, SSH-verify, and tear down a native-distro guest on every supported host
+(the Fedora case also exercises the GPG-verified-image path). Hosts had ~8 GiB
+RAM; smoke ran with `--reserve 512`.
 
 ## Procedure for one host
 

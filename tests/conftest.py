@@ -64,6 +64,16 @@ parallel runs on the same machine.
 
 _INTEGRATION_ENV_VAR = "LVLAB_INTEGRATION"
 
+_NARROW_DHCP_ENV_VAR = "LVLAB_TEST_NARROW_DEFAULT_DHCP"
+"""Opt-in env var enabling transient narrowing of the ``default`` DHCP range.
+
+UNSET (default): the static-IP integration cases skip with an actionable
+message and the operator's ``default`` network is never touched. SET to
+``"1"``: the :func:`narrow_default_dhcp_range` fixture transiently narrows
+the range LIVE (auto-reverted) so :func:`pick_static_ip` finds headroom and
+the static cases RUN. See ``CLAUDE.md`` and issue #86.
+"""
+
 
 def make_test_name(base: str) -> str:
     """Return a test-owned resource name carrying :data:`LVLAB_TEST_PREFIX`.
@@ -274,6 +284,11 @@ def _integration_enabled() -> bool:
     return os.environ.get(_INTEGRATION_ENV_VAR) == "1"
 
 
+def _narrow_dhcp_enabled() -> bool:
+    """Return True iff the opt-in DHCP-narrowing env var is set to ``"1"``."""
+    return os.environ.get(_NARROW_DHCP_ENV_VAR) == "1"
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Register the ``integration`` marker.
 
@@ -383,6 +398,11 @@ def _session_reaper() -> Iterator[None]:
     for uri in ("qemu:///session", "qemu:///system"):
         _reap_test_prefixed_domains(uri)
     _reap_test_prefixed_storage()
+    # Last-line safety net for the opt-in DHCP-narrowing fixture: if it
+    # narrowed 'default' but its own teardown was interrupted, re-assert
+    # the captured original range so the session never exits leaving the
+    # operator's shared network narrowed.
+    _reassert_narrowed_dhcp_range()
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +411,18 @@ def _session_reaper() -> Iterator[None]:
 
 
 _INTEGRATION_URIS: tuple[str, ...] = ("qemu:///session", "qemu:///system")
+
+# The libvirt URI and network the DHCP-narrowing fixture operates on.
+# createvm (and thus the static-IP matrix) is qemu:///system + managed
+# 'default' network only, so the narrowing target is fixed.
+_NARROW_DHCP_URI = "qemu:///system"
+_NARROW_DHCP_NETWORK = "default"
+
+# Crash-recovery holder for the narrowing fixture. When narrowing succeeds
+# the original (start, end) is stashed here so the session reaper can
+# re-assert it even if the fixture's own teardown was interrupted. Cleared
+# back to None once a clean restore completes.
+_narrow_dhcp_original_range: tuple[str, str] | None = None
 
 # Dedicated test-only storage root, kept distinct from the production
 # ``/var/lib/libvirt/images/oneoff/`` directory that ``createvm`` uses
@@ -546,6 +578,152 @@ def lvlab_integration_storage_root() -> Path:
         Path to ``/var/lib/libvirt/images/lvlab-test/``.
     """
     return _LVLAB_TEST_STORAGE_ROOT
+
+
+@pytest.fixture(scope="session", autouse=True)
+def narrow_default_dhcp_range() -> Iterator[None]:
+    """Opt-in: transiently narrow the ``default`` network's DHCP range.
+
+    No-op unless BOTH integration is enabled (``LVLAB_INTEGRATION=1``) AND
+    the opt-in is set (``LVLAB_TEST_NARROW_DEFAULT_DHCP=1``). With the
+    opt-in UNSET the operator's ``default`` network is never touched and the
+    static-IP cases keep skipping with their actionable message — behavior
+    is byte-for-byte unchanged.
+
+    With the opt-in set, on a host whose ``qemu:///system`` ``default``
+    network has a DHCP range spanning the top of the subnet (so
+    :func:`tests.integration_helpers.pick_static_ip` would otherwise find no
+    headroom), this fixture:
+
+    1. Captures the current ``ip-dhcp-range`` via ``net-dumpxml``.
+    2. Narrows it LIVE ONLY (``virsh net-update default ... --live``, never
+       ``--config``): deletes the captured range and adds a narrowed one
+       that frees high addresses (see
+       :func:`tests.integration_helpers.compute_narrowed_range`). A
+       ``--live`` range change does not require ``net-destroy``, so existing
+       leases and connectivity for unrelated VMs on ``default`` are
+       preserved.
+    3. Restores the ORIGINAL range byte-for-byte in a ``finally``.
+
+    If the network already leaves headroom (or declares no DHCP range, or is
+    too small to narrow safely), no change is made and the fixture is a
+    transparent no-op — :func:`pick_static_ip` already succeeds (or the
+    static cases skip as before).
+
+    Crash recovery: the narrowing is LIVE ONLY, so a crash mid-run (between
+    narrow and restore) leaves only the running network changed; the
+    persistent definition is untouched. Restore it with
+    ``virsh net-destroy default && virsh net-start default`` (or a host
+    reboot). The session reaper (:func:`_session_reaper`) re-asserts the
+    captured original range as a best-effort safety net if this fixture's
+    own teardown was interrupted.
+
+    Yields:
+        ``None`` — used purely for its setup/teardown side effects.
+    """
+    global _narrow_dhcp_original_range
+
+    if not (_integration_enabled() and _narrow_dhcp_enabled()):
+        yield
+        return
+
+    # Imported lazily so the helpers module (which imports pytest at module
+    # level) isn't pulled in for the no-op path on non-integration runs.
+    from tests.integration_helpers import (
+        compute_narrowed_range,
+        network_ipv4_info,
+        set_dhcp_range_live,
+    )
+
+    try:
+        gateway, netmask, start, end = network_ipv4_info(
+            _NARROW_DHCP_URI, _NARROW_DHCP_NETWORK
+        )
+    except (AssertionError, FileNotFoundError):
+        # default network not reachable / no IPv4 block — let the per-test
+        # readiness skip handle it; nothing to narrow.
+        yield
+        return
+
+    narrowed = compute_narrowed_range(gateway, netmask, start, end)
+    if narrowed is None:
+        # Already has headroom, no DHCP range, or too small to narrow.
+        # pick_static_ip will succeed on its own or the cases will skip.
+        yield
+        return
+
+    new_start, new_end = narrowed
+    set_dhcp_range_live(
+        _NARROW_DHCP_URI,
+        _NARROW_DHCP_NETWORK,
+        start,
+        end,
+        new_start,
+        new_end,
+    )
+    # Stash the captured original so the session reaper can re-assert it if
+    # our finally never runs (e.g. a teardown-time interpreter crash).
+    _narrow_dhcp_original_range = (start, end)
+    try:
+        yield
+    finally:
+        # Restore the ORIGINAL range byte-for-byte: delete the narrowed
+        # range we installed, re-add the captured original.
+        set_dhcp_range_live(
+            _NARROW_DHCP_URI,
+            _NARROW_DHCP_NETWORK,
+            new_start,
+            new_end,
+            start,
+            end,
+        )
+        _narrow_dhcp_original_range = None
+
+
+def _reassert_narrowed_dhcp_range() -> None:
+    """Best-effort re-assert the captured original DHCP range at session end.
+
+    Companion safety net to :func:`narrow_default_dhcp_range`. If that
+    fixture narrowed the ``default`` network but its ``finally`` never
+    completed (a teardown-time crash), :data:`_narrow_dhcp_original_range`
+    still holds the captured original. This re-installs it on whatever range
+    is currently live, so the session does not exit with the operator's
+    network left narrowed.
+
+    No-op when the fixture restored cleanly (holder is ``None``) or never
+    narrowed. Errors are swallowed — this runs from teardown and must not
+    mask a test result. As a last resort the live-only change is also
+    recoverable with ``virsh net-destroy default && virsh net-start
+    default``.
+    """
+    original = _narrow_dhcp_original_range
+    if original is None:
+        return
+    from tests.integration_helpers import network_ipv4_info, set_dhcp_range_live
+
+    orig_start, orig_end = original
+    try:
+        _gw, _nm, cur_start, cur_end = network_ipv4_info(
+            _NARROW_DHCP_URI, _NARROW_DHCP_NETWORK
+        )
+    except (AssertionError, FileNotFoundError):
+        return
+    if (cur_start, cur_end) == (orig_start, orig_end):
+        # Already restored; nothing to do.
+        return
+    if not cur_start or not cur_end:
+        return
+    try:
+        set_dhcp_range_live(
+            _NARROW_DHCP_URI,
+            _NARROW_DHCP_NETWORK,
+            cur_start,
+            cur_end,
+            orig_start,
+            orig_end,
+        )
+    except AssertionError:
+        pass
 
 
 def _reap_test_prefixed_storage() -> None:

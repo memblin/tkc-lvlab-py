@@ -345,6 +345,169 @@ def pick_static_ip(uri: str, network: str = "default") -> tuple[str, str] | None
     return (str(candidate), prefix) if candidate not in reserved else None
 
 
+# ---------------------------------------------------------------------------
+# Transient DHCP-range narrowing (opt-in; see conftest.py and CLAUDE.md)
+# ---------------------------------------------------------------------------
+
+# How many high host addresses the narrowed range frees for static-IP tests.
+# pick_static_ip only needs ONE address above the pool, but freeing a small
+# block (so the high end lands on a round number like .199, freeing
+# .200-.254) keeps the narrowed range human-legible in net-dumpxml and
+# leaves headroom for future multi-static cases.
+NARROW_FREE_HIGH_ADDRESSES = 55
+"""Default count of top-of-subnet host addresses freed by :func:`compute_narrowed_range`."""
+
+
+def compute_narrowed_range(
+    gateway: str,
+    netmask: str,
+    start: str,
+    end: str,
+    free_high: int = NARROW_FREE_HIGH_ADDRESSES,
+) -> tuple[str, str] | None:
+    """Compute a narrowed DHCP range that frees high addresses for static IPs.
+
+    Pure function (no libvirt): given a network's current ``(start, end)``
+    DHCP range, return a narrowed ``(start, new_end)`` whose high end is
+    pulled down by ``free_high`` addresses so :func:`pick_static_ip` finds
+    a usable address just above the pool. ``start`` is left untouched so
+    existing low-address leases keep working.
+
+    Returns ``None`` (no narrowing needed/possible) when:
+
+    - The network declares no DHCP range (``start`` or ``end`` empty) —
+      :func:`pick_static_ip` already finds a high address with no pool.
+    - :func:`pick_static_ip`'s logic would already succeed (the pool does
+      not reach the top of the usable subnet), so narrowing is unnecessary.
+    - Narrowing by ``free_high`` would leave the pool empty or invert it
+      (``new_end < start``) — the range is too small to narrow safely, so
+      the caller must skip rather than narrow.
+
+    Args:
+        gateway: The network's IPv4 gateway address (from net-dumpxml).
+        netmask: The network's dotted-quad netmask.
+        start: Current DHCP range start (dotted-quad).
+        end: Current DHCP range end (dotted-quad).
+        free_high: How many top-of-subnet host addresses to free. The new
+            end is ``end - free_high``.
+
+    Returns:
+        ``(start, new_end)`` dotted-quad tuple to install, or ``None`` when
+        no narrowing is needed or it cannot be done safely.
+    """
+    if not start or not end:
+        return None
+
+    subnet = ipaddress.IPv4Network(f"{gateway}/{netmask}", strict=False)
+    pool_lo = ipaddress.IPv4Address(start)
+    pool_hi = ipaddress.IPv4Address(end)
+    last_host = subnet.broadcast_address - 1  # highest usable host address
+
+    # If the pool already stops short of the top usable host, pick_static_ip
+    # can place an address above it without any change — don't narrow.
+    if pool_hi < last_host:
+        return None
+
+    new_hi = pool_hi - free_high
+    # Refuse to narrow into an empty or inverted range, or below the subnet.
+    if new_hi < pool_lo or new_hi <= subnet.network_address:
+        return None
+
+    return start, str(new_hi)
+
+
+def _dhcp_range_xml(start: str, end: str) -> str:
+    """Render the ``<range>`` element net-update expects for ``ip-dhcp-range``.
+
+    The XML is emitted as a literal element string (leading ``<``) so
+    ``virsh net-update`` treats it as inline XML rather than a filename.
+    Single-quoted attributes match libvirt's own serialization style;
+    libvirt's net-update matcher keys on the ``start``/``end`` attribute
+    values for the ``delete`` command, so the values must match the
+    captured range exactly.
+
+    Args:
+        start: DHCP range start (dotted-quad).
+        end: DHCP range end (dotted-quad).
+
+    Returns:
+        e.g. ``"<range start='192.168.122.2' end='192.168.122.254'/>"``.
+    """
+    return f"<range start='{start}' end='{end}'/>"
+
+
+def set_dhcp_range_live(
+    uri: str,
+    network: str,
+    old_start: str,
+    old_end: str,
+    new_start: str,
+    new_end: str,
+) -> None:
+    """Replace a network's DHCP range LIVE (never ``--config``).
+
+    Deletes the ``ip-dhcp-range`` matching ``(old_start, old_end)`` and
+    adds ``(new_start, new_end)``, both with ``--live`` only so the
+    persistent network definition is untouched. A ``--live`` range change
+    does not require ``net-destroy``, so existing leases and connectivity
+    for unrelated VMs on the network are preserved.
+
+    Crash recovery: because only the live state is changed, a crash between
+    delete and add (or between narrow and restore) is undone by
+    ``virsh net-destroy <network> && virsh net-start <network>`` (or a host
+    reboot), which reloads the untouched persistent definition.
+
+    Args:
+        uri: libvirt URI (system URI for the createvm path).
+        network: Network name (``"default"`` for the createvm path).
+        old_start: Current range start to delete (must match exactly).
+        old_end: Current range end to delete (must match exactly).
+        new_start: Range start to add.
+        new_end: Range end to add.
+
+    Raises:
+        AssertionError: Either net-update step exited non-zero.
+    """
+    delete = run_virsh(
+        uri,
+        "net-update",
+        network,
+        "delete",
+        "ip-dhcp-range",
+        _dhcp_range_xml(old_start, old_end),
+        "--live",
+    )
+    assert delete.returncode == 0, (
+        f"net-update delete ip-dhcp-range failed on {network}@{uri} "
+        f"(range {old_start}-{old_end}):\n{delete.stderr}"
+    )
+    add = run_virsh(
+        uri,
+        "net-update",
+        network,
+        "add-last",
+        "ip-dhcp-range",
+        _dhcp_range_xml(new_start, new_end),
+        "--live",
+    )
+    if add.returncode != 0:
+        # Best-effort: re-add the original so a failed narrow leaves the
+        # network as we found it before surfacing the error.
+        run_virsh(
+            uri,
+            "net-update",
+            network,
+            "add-last",
+            "ip-dhcp-range",
+            _dhcp_range_xml(old_start, old_end),
+            "--live",
+        )
+        raise AssertionError(
+            f"net-update add-last ip-dhcp-range failed on {network}@{uri} "
+            f"(range {new_start}-{new_end}); restored original:\n{add.stderr}"
+        )
+
+
 def domain_lease_ipv4(uri: str, domain: str) -> str | None:
     """Return the NAT DHCP-leased IPv4 for ``domain``, or ``None`` if none yet.
 

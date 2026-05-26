@@ -137,6 +137,7 @@ def test_createvm_connectivity_and_deletevm(
     lvlab_integration_storage_root: Path,
     test_ssh_pubkey_path: Path,
     test_ssh_privkey_path: Path,
+    narrow_default_dhcp_range: None,
 ) -> None:
     """``createvm`` boots a reachable VM; ``deletevm --force`` removes it.
 
@@ -156,6 +157,12 @@ def test_createvm_connectivity_and_deletevm(
         lvlab_integration_storage_root: libvirt-readable test storage root.
         test_ssh_pubkey_path: Public key seeded via ``--public-key``.
         test_ssh_privkey_path: Private key used for the SSH probe.
+        narrow_default_dhcp_range: Opt-in DHCP-narrowing fixture. A no-op
+            unless ``LVLAB_TEST_NARROW_DEFAULT_DHCP=1``; when set it
+            transiently frees high addresses on ``default`` (auto-reverted)
+            so the ``static`` cases find headroom via ``pick_static_ip`` and
+            RUN instead of skipping. Depended on here only to order the
+            narrowing before the ``pick_static_ip`` call below.
     """
     if "session" in integration_uri:
         pytest.skip("createvm targets qemu:///system only")
@@ -195,11 +202,11 @@ def test_createvm_connectivity_and_deletevm(
             pytest.skip(
                 "static-IP test skipped: createvm rejects an --ip4 inside the "
                 "DHCP range, and the default network's range spans the whole "
-                "subnet. The suite will NOT modify your 'default' network. To "
-                "test static addressing, narrow its DHCP range yourself (e.g. "
-                ".2-.199, freeing .200-.254) and re-run, or use a dedicated "
-                "test network. Opt-in transient auto-narrow is a tracked "
-                "future enhancement."
+                "subnet. By default the suite will NOT modify your 'default' "
+                "network. Set LVLAB_TEST_NARROW_DEFAULT_DHCP=1 to let the "
+                "suite transiently narrow the range (live-only, auto-reverted) "
+                "so static cases run; or narrow it yourself (e.g. .2-.199, "
+                "freeing .200-.254) / use a dedicated test network."
             )
         static_ip, netmask = picked
         argv += ["--ip4", static_ip, "--netmask", netmask]

@@ -24,7 +24,9 @@ def _user_data(**cloud_init_extra: object) -> str:
         "shell": "/bin/bash",
         **cloud_init_extra,
     }
-    return UserData(cloud_init, "web01", "test.local", "web01.test.local").render_config()
+    return UserData(
+        cloud_init, "web01", "test.local", "web01.test.local"
+    ).render_config()
 
 
 def test_user_data_renders_passwd_and_unlocks_when_present() -> None:

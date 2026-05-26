@@ -78,6 +78,11 @@ no need to duplicate images for multiple environments. Unreferenced
 images can be removed with [`lvlab images clean`](#images-clean) (dry-run
 by default).
 
+Images are fetched a few at a time (`--jobs`, default 2). On a terminal
+`init` shows a compact live progress table (image / phase / a segmented
+download bar); when output is piped or redirected it degrades to plain
+per-image completion lines (no ANSI), so logs stay readable.
+
 Downloads tolerate flaky mirrors (connect/read timeouts, retry, and
 resume via a `.partial` file). If a download still fails — a 404, a
 refused connection, or a mirror that simply won't serve a file — `init`

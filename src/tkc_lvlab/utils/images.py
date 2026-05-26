@@ -30,7 +30,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import gnupg
@@ -43,6 +43,12 @@ from .catalog import derive_os_variant, derive_username
 
 
 logger = get_logger(__name__)
+
+#: ``callback(bytes_done, total)`` for download progress reporting. ``total``
+#: is ``0`` when the server advertised no usable content length. Lets callers
+#: (``lvlab init``, issue #104) drive their own display instead of the
+#: built-in tqdm bar.
+ProgressCallback = Callable[[int, int], None]
 
 VERIFIED_SUFFIX = ".verified"
 
@@ -214,7 +220,13 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         return isinstance(exc, _TRANSIENT_EXCEPTIONS)
 
     @classmethod
-    def _stream_to_partial(cls, url: str, partial_path: str) -> bool:
+    def _stream_to_partial(
+        cls,
+        url: str,
+        partial_path: str,
+        *,
+        progress_callback: "ProgressCallback | None" = None,
+    ) -> bool:
         """Stream ``url`` into ``<destination>.partial``, resuming when possible.
 
         Performs a single attempt. If a ``.partial`` file already exists from a
@@ -227,6 +239,12 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         Args:
             url: HTTP(S) URL to download.
             partial_path: Path to the ``.partial`` scratch file.
+            progress_callback: Optional ``callback(bytes_done, total)`` invoked
+                as bytes arrive (``total`` is ``0`` when the server advertised
+                no usable length, e.g. a content-encoded body). When supplied,
+                it replaces the built-in ``tqdm`` bar so callers (``lvlab
+                init``) can drive their own display; when ``None`` the ``tqdm``
+                bar is used (issue #104).
 
         Returns:
             ``True`` when the partial is complete (advertised length matched the
@@ -303,16 +321,26 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
 
         block_size = 1024
         mode = "ab" if resuming else "wb"
-        with tqdm(
-            total=total_size,
-            initial=already,
-            unit="B",
-            unit_scale=True,
-        ) as progress_bar:
+        if progress_callback is not None:
+            # Caller drives its own display (issue #104) — report monotonic
+            # byte progress instead of owning a tqdm bar.
+            done = already
             with open(partial_path, mode) as file:
                 for data in response.iter_content(block_size):
-                    progress_bar.update(len(data))
                     file.write(data)
+                    done += len(data)
+                    progress_callback(done, total_size)
+        else:
+            with tqdm(
+                total=total_size,
+                initial=already,
+                unit="B",
+                unit_scale=True,
+            ) as progress_bar:
+                with open(partial_path, mode) as file:
+                    for data in response.iter_content(block_size):
+                        progress_bar.update(len(data))
+                        file.write(data)
 
         if total_size and os.path.getsize(partial_path) != total_size:
             return False
@@ -320,7 +348,13 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         return True
 
     @classmethod
-    def _download_file(cls, url: str, destination: str) -> bool:
+    def _download_file(
+        cls,
+        url: str,
+        destination: str,
+        *,
+        progress_callback: "ProgressCallback | None" = None,
+    ) -> bool:
         """Download a URL to a local file, tolerant of transient mirror failures.
 
         Streams into ``<destination>.partial`` with a connect/read timeout
@@ -340,6 +374,8 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         Args:
             url: HTTP(S) URL to download.
             destination: Local filesystem path to write to on success.
+            progress_callback: Optional ``callback(bytes_done, total)`` passed
+                through to :meth:`_stream_to_partial` (issue #104).
 
         Returns:
             ``True`` on a complete, verified-length write. ``False`` if every
@@ -369,7 +405,9 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
                 time.sleep(backoff)
 
             try:
-                if cls._stream_to_partial(url, partial_path):
+                if cls._stream_to_partial(
+                    url, partial_path, progress_callback=progress_callback
+                ):
                     os.replace(partial_path, destination)
                     return True
                 # Incomplete transfer (content-length mismatch). Treat like a
@@ -401,7 +439,13 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         return False
 
     @classmethod
-    def _download_or_raise(cls, url: str, destination: str) -> bool:
+    def _download_or_raise(
+        cls,
+        url: str,
+        destination: str,
+        *,
+        progress_callback: "ProgressCallback | None" = None,
+    ) -> bool:
         """Download ``url`` to ``destination``, raising a clean ImageError on failure.
 
         Thin wrapper over :meth:`_download_file` that translates the raw
@@ -424,7 +468,9 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
             ImageError: The download failed with a transport or HTTP error.
         """
         try:
-            return cls._download_file(url, destination)
+            return cls._download_file(
+                url, destination, progress_callback=progress_callback
+            )
         except requests.RequestException as exc:
             response = getattr(exc, "response", None)
             status = getattr(response, "status_code", None)
@@ -445,17 +491,25 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
             logger.info("CloudImage creating image directory: %s", image_dir)
             os.makedirs(image_dir, exist_ok=True)
 
-    def download_image(self) -> bool:
+    def download_image(
+        self, *, progress_callback: "ProgressCallback | None" = None
+    ) -> bool:
         """Download the cloud image to :attr:`image_fpath`.
 
         Creates the cache directory if needed. Returns ``True`` on
         successful download, ``False`` on content-length mismatch.
 
+        Args:
+            progress_callback: Optional ``callback(bytes_done, total)`` for
+                progress reporting (issue #104).
+
         Raises:
             ImageError: The download failed with a transport or HTTP error.
         """
         self._manage_image_dir()
-        return self._download_or_raise(self.image_url, self.image_fpath)
+        return self._download_or_raise(
+            self.image_url, self.image_fpath, progress_callback=progress_callback
+        )
 
     def download_checksum(self) -> bool:
         """Download the checksum manifest to :attr:`checksum_fpath`.

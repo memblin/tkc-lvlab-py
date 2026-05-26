@@ -29,17 +29,22 @@ module does not flow through them.
 
 from __future__ import annotations
 
+import concurrent.futures
+import dataclasses
 import os
+import threading
 from typing import Any
 
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.table import Table
 
 from ._logging import configure_logging, get_logger
 from .utils.catalog import BUILTIN_IMAGES, resolve_catalog
 from .utils.output import (
     get_console,
+    is_tty,
     render_one_time_password,
     render_ssh_hint,
     styled_table,
@@ -627,109 +632,240 @@ def ssh_config(vm_name: str = typer.Argument(None)) -> None:
     typer.echo("\n\n".join(snippets))
 
 
-def _init_ensure_image(image: CloudImage) -> None:
-    """Ensure the cloud image qcow2 is on disk; emit status."""
-    if image.exists_locally("image"):
-        typer.echo(f"CloudImage {image.name} exists locally: {image.image_fpath}")
-        return
-    logger.info("Attempting to download image: %s", image.image_url)
-    if image.download_image():
-        typer.echo(f"CloudImage downloaded to {image.image_fpath}")
-    else:
-        logger.error("CloudImage download failed")
+# ---------------------------------------------------------------------------
+# init: concurrent per-image download + verify with a compact progress view
+# (issue #104)
+# ---------------------------------------------------------------------------
 
 
-def _init_ensure_checksum_gpg(image: CloudImage) -> None:
-    """Ensure the checksum-file GPG keyring is on disk; emit status."""
-    if image.exists_locally(file_type="checksum_gpg"):
-        typer.echo(
-            f"CloudImage {image.name} checksum GPG file exists locally: "
-            f"{image.checksum_gpg_fpath}"
-        )
-        return
-    if image.download_checksum_gpg():
-        typer.echo(
-            f"CloudImage checksum GPG file downloaded to {image.checksum_gpg_fpath}"
-        )
-    else:
-        logger.error("CloudImage checksum GPG file download failed")
+@dataclasses.dataclass
+class _ImageInitState:
+    """Mutable per-image progress for the ``lvlab init`` display (issue #104)."""
+
+    name: str
+    phase: str = "pending"
+    bytes_done: int = 0
+    bytes_total: int = 0
+    error: str = ""
 
 
-def _init_ensure_checksum(image: CloudImage) -> None:
-    """Ensure the checksum manifest is on disk; emit status."""
-    if image.exists_locally(file_type="checksum"):
-        typer.echo(
-            f"CloudImage {image.name} checksum file exists locally: "
-            f"{image.checksum_fpath}"
-        )
-        return
-    logger.info("Attempting to download checksum file URL: %s", image.checksum_url)
-    if image.download_checksum():
-        typer.echo(
-            f"CloudImage {image.name} checksum file downloaded to "
-            f"{image.checksum_fpath}"
-        )
-    else:
-        logger.error("CloudImage %s checksum file download failed", image.name)
+class _InitProgress:
+    """Thread-safe per-image progress shared by init workers and the renderer.
+
+    Worker threads mutate state through the setters (guarded by a lock); the
+    main thread reads consistent snapshots to render, so every Rich call stays
+    on the main thread and the workers never render.
+    """
+
+    def __init__(self, names: list[str]) -> None:
+        self._lock = threading.Lock()
+        self._order = list(names)
+        self._states = {n: _ImageInitState(n) for n in names}
+
+    def set_phase(self, name: str, phase: str) -> None:
+        """Set an image's phase (e.g. ``downloading`` / ``verifying`` / ``done``)."""
+        with self._lock:
+            self._states[name].phase = phase
+
+    def set_bytes(self, name: str, done: int, total: int) -> None:
+        """Record download byte progress for an image (the download callback)."""
+        with self._lock:
+            state = self._states[name]
+            state.phase = "downloading"
+            state.bytes_done = done
+            state.bytes_total = total
+
+    def set_error(self, name: str, message: str) -> None:
+        """Mark an image failed with a message (a fatal download/verify error)."""
+        with self._lock:
+            state = self._states[name]
+            state.phase = "failed"
+            state.error = message
+
+    def snapshot(self) -> list["_ImageInitState"]:
+        """Return a consistent copy of every image's state, in declared order."""
+        with self._lock:
+            return [dataclasses.replace(self._states[n]) for n in self._order]
 
 
-def _init_verify_gpg(image: CloudImage) -> None:
-    """Run GPG verification on the checksum file; emit OK/BAD status."""
-    if image.gpg_verify_checksum_file():
-        typer.echo(f"CloudImage {image.name} checksum file GPG validation OK")
-    else:
-        logger.error("CloudImage %s checksum file GPG validation BAD", image.name)
+def _format_bytes(num: int) -> str:
+    """Compact binary-unit byte string for the progress cell."""
+    value = float(num)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if value < 1024 or unit == "GiB":
+            return f"{value:.0f}{unit}" if unit == "B" else f"{value:.1f}{unit}"
+        value /= 1024
+    return f"{num}B"
 
 
-def _init_verify_checksum(image: CloudImage) -> None:
-    """Hash-verify the image against the manifest; emit OK/BAD status."""
-    if image.checksum_verify_image():
-        typer.echo(f"CloudImage {image.name} checksum verification OK")
-    else:
-        logger.error("CloudImage %s checksum verification BAD", image.name)
+def _init_progress_cell(state: "_ImageInitState") -> str:
+    """Render the compact progress cell for one image row.
+
+    A segmented block bar with a percentage when the total is known; the raw
+    byte count for a content-encoded body (unknown total); a check / cross for
+    done / failed.
+    """
+    if state.phase == "done":
+        return "[green]✓[/green]"
+    if state.phase == "failed":
+        return f"[red]✗ {state.error}[/red]"
+    if state.phase == "downloading" and state.bytes_total > 0:
+        pct = int(state.bytes_done * 100 / state.bytes_total)
+        filled = max(0, min(10, pct // 10))
+        return f"{'█' * filled}{'░' * (10 - filled)} {pct:3d}%"
+    if state.phase == "downloading" and state.bytes_done:
+        return _format_bytes(state.bytes_done)
+    return ""
 
 
-def _init_process_image(image: CloudImage) -> None:
-    """Download and verify one CloudImage's artefacts in order."""
-    _init_ensure_image(image)
-    if image.checksum_url_gpg:
-        _init_ensure_checksum_gpg(image)
-    if image.checksum_url:
-        _init_ensure_checksum(image)
-    if image.checksum_url_gpg and image.exists_locally(file_type="checksum_gpg"):
-        _init_verify_gpg(image)
-    if image.checksum_url and image.exists_locally(file_type="checksum"):
-        _init_verify_checksum(image)
+def _render_init_table(
+    states: list["_ImageInitState"], *, env_name: str, jobs: int
+) -> Table:
+    """Build the init progress table from a state snapshot."""
+    table = styled_table(
+        title=f"lvlab init — {env_name} · {len(states)} images · {jobs} concurrent"
+    )
+    table.add_column("image", style="bold")
+    table.add_column("phase")
+    table.add_column("progress")
+    for state in states:
+        table.add_row(state.name, state.phase, _init_progress_cell(state))
+    return table
+
+
+def _init_image_worker(image: CloudImage, progress: "_InitProgress") -> bool:
+    """Download + verify one image, updating ``progress``. Returns False on a fatal error.
+
+    Mirrors the previous sequential pipeline's control flow: a transport/HTTP
+    failure (``ImageError`` / ``LvlabError``) is fatal (returns False, so init
+    exits 1); a content-length mismatch or a verify failure is logged but
+    non-fatal (returns True), preserving the prior exit-0 behaviour.
+    """
+    name = image.name
+    try:
+        if not image.exists_locally("image"):
+            progress.set_phase(name, "downloading")
+            if not image.download_image(
+                progress_callback=lambda done, total: progress.set_bytes(
+                    name, done, total
+                )
+            ):
+                logger.error("CloudImage download failed")
+        if image.checksum_url_gpg and not image.exists_locally("checksum_gpg"):
+            progress.set_phase(name, "gpg")
+            if not image.download_checksum_gpg():
+                logger.error("CloudImage %s checksum GPG file download failed", name)
+        if image.checksum_url and not image.exists_locally("checksum"):
+            progress.set_phase(name, "checksum")
+            if not image.download_checksum():
+                logger.error("CloudImage %s checksum file download failed", name)
+        progress.set_phase(name, "verifying")
+        if image.checksum_url_gpg and image.exists_locally("checksum_gpg"):
+            if not image.gpg_verify_checksum_file():
+                logger.error("CloudImage %s checksum file GPG validation BAD", name)
+        if image.checksum_url and image.exists_locally("checksum"):
+            if not image.checksum_verify_image():
+                logger.error("CloudImage %s checksum verification BAD", name)
+        progress.set_phase(name, "done")
+        return True
+    except LvlabError as exc:
+        # Clean boundary (issue #98): a transport/HTTP failure surfaces the
+        # ImageError's actionable message + workaround, not a traceback.
+        logger.error("%s", exc)
+        progress.set_error(name, str(exc))
+        return False
+
+
+def _run_init_concurrent(
+    built: list[CloudImage], progress: "_InitProgress", *, jobs: int, env_name: str
+) -> list[bool]:
+    """Run the per-image workers concurrently, rendering progress.
+
+    On a terminal, a Rich ``Live`` table is refreshed from the main thread off
+    the shared (locked) progress state; piped/redirected output degrades to
+    plain per-image completion lines (no ANSI / no Live), so logs stay clean.
+
+    Returns:
+        A list of per-image booleans (``False`` = a fatal error occurred).
+    """
+    if is_tty():
+        console = get_console()
+        with Live(console=console, refresh_per_second=8) as live:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+                futures = [
+                    pool.submit(_init_image_worker, img, progress) for img in built
+                ]
+                pending = set(futures)
+                while pending:
+                    _done, pending = concurrent.futures.wait(pending, timeout=0.2)
+                    live.update(
+                        _render_init_table(
+                            progress.snapshot(), env_name=env_name, jobs=jobs
+                        )
+                    )
+            live.update(
+                _render_init_table(progress.snapshot(), env_name=env_name, jobs=jobs)
+            )
+        return [f.result() for f in futures]
+
+    # Non-TTY: plain incremental lines, no ANSI / no Live.
+    results: list[bool] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = {
+            pool.submit(_init_image_worker, img, progress): img.name for img in built
+        }
+        for fut in concurrent.futures.as_completed(futures):
+            name = futures[fut]
+            ok = fut.result()
+            state = next(s for s in progress.snapshot() if s.name == name)
+            status = (
+                "done"
+                if ok and state.phase != "failed"
+                else f"FAILED ({state.error or 'see log'})"
+            )
+            typer.echo(f"  {name}: {status}")
+            results.append(ok)
+    return results
 
 
 @app.command()
-def init() -> None:
+def init(
+    jobs: int = typer.Option(
+        2,
+        "--jobs",
+        "-j",
+        min=1,
+        help="Number of images to download/verify concurrently (default 2).",
+    ),
+) -> None:
     """Initialize cloud images: the manifest's, or the built-in defaults.
 
-    With an ``Lvlab.yml`` in the current directory, downloads and verifies
-    the images its ``images:`` section names. **With no manifest, it
-    initializes the built-in default catalog** (issue #97) — so a bare
-    ``lvlab init`` works without writing a manifest first, and is the single
-    image-init path (`createvm --init-cloud-images` is deprecated in favour
-    of it).
+    With an ``Lvlab.yml`` in the current directory, downloads and verifies the
+    images its ``images:`` section names. **With no manifest, it initializes
+    the built-in default catalog** (issue #97). Images are fetched a few at a
+    time (``--jobs``), with a compact live progress table on a terminal that
+    degrades to plain per-image lines when output is piped (issue #104).
     """
     environment, images, config_defaults = _init_image_source()
+    env_name = environment.get("name", "default")
+
+    if not images:
+        typer.echo("No images to initialize.")
+        return
+
+    built = [
+        CloudImage(name, cfg, environment, config_defaults)
+        for name, cfg in images.items()
+    ]
+    progress = _InitProgress([img.name for img in built])
 
     typer.echo()
-    typer.echo(f'Initializing Libvirt Lab Environment: {environment["name"]}\n')
+    typer.echo(f"Initializing Libvirt Lab Environment: {env_name}\n")
 
-    for image_name, image_config in images.items():
-        image = CloudImage(image_name, image_config, environment, config_defaults)
-        try:
-            _init_process_image(image)
-        except LvlabError as exc:
-            # Clean boundary (issue #98): a download/verify failure (e.g. a
-            # gzip-served sidecar that 416s, a 404, connection refused) surfaces
-            # as the ImageError's actionable message + workaround, not a
-            # traceback.
-            logger.error("%s", exc)
-            raise typer.Exit(code=1)
-        typer.echo()
+    results = _run_init_concurrent(built, progress, jobs=jobs, env_name=env_name)
+
+    if not all(results):
+        raise typer.Exit(code=1)
 
 
 def _init_image_source() -> tuple[dict, dict, dict]:

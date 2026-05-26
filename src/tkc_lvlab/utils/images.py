@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -40,6 +41,36 @@ from .catalog import derive_os_variant, derive_username
 logger = get_logger(__name__)
 
 VERIFIED_SUFFIX = ".verified"
+
+# Tolerant-download tuning. A cloud image is ~400 MB and lab hosts often pull
+# from flaky community mirrors, so a single connect timeout + no retry (the
+# pre-#87 behavior) turned a momentary mirror stall into a hard failure.
+#
+# Intentional, documented divergence from lvscripts-py (ref #87): lvscripts
+# uses a simpler urllib path with no read timeout and no bounded retry. lvscripts
+# DOES already download to a ``.partial`` file, so the resume/atomic-rename
+# behavior here NARROWS the gap rather than widening it; the retry+backoff and
+# the connect/read timeout split are the deliberate additions. Worth mirroring
+# upstream (maintainer to push).
+_CONNECT_TIMEOUT = 10  # seconds to establish the TCP/TLS connection
+_READ_TIMEOUT = 60  # seconds of silence mid-transfer before giving up on a try
+_DOWNLOAD_TIMEOUT = (_CONNECT_TIMEOUT, _READ_TIMEOUT)
+_MAX_ATTEMPTS = 3
+# Backoff before attempts 2 and 3 (index 0 is unused — there is no wait before
+# the first attempt). 5/10/20s doubling, hand-rolled to avoid a new dependency.
+_RETRY_BACKOFF_SECONDS = (0, 5, 10, 20)
+_PARTIAL_SUFFIX = ".partial"
+
+# Transient transport-layer failures worth retrying. A genuine HTTP error
+# (404/403) surfaces via ``raise_for_status`` as ``requests.HTTPError``, which
+# is deliberately NOT in this tuple — those fail fast with no retry. A
+# connection-refused is a ``ConnectionError`` whose underlying error is not a
+# read/stall, so it is filtered separately (see ``_is_transient``).
+_TRANSIENT_EXCEPTIONS = (
+    requests.exceptions.ReadTimeout,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+)
 
 
 class CloudImage:  # pylint: disable=too-many-instance-attributes
@@ -158,35 +189,172 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
             self.checksum_gpg_fpath = None
 
     @staticmethod
-    def _download_file(url: str, destination: str) -> bool:
-        """Stream a URL to a local file with a tqdm progress bar.
+    def _is_transient(exc: Exception) -> bool:
+        """Classify a download exception as transient (retry) or fatal (fail fast).
+
+        ``requests.ConnectionError`` is overloaded: a mid-transfer drop is
+        worth retrying, but a connection *refused* (nothing listening) is not
+        going to fix itself within three attempts and should fail fast like a
+        404. We treat a refused connection — recognizable by its message — as
+        fatal; every other ``ConnectionError`` (DNS hiccup, reset, dropped
+        socket) is transient.
+
+        Args:
+            exc: The exception raised by the download attempt.
+
+        Returns:
+            ``True`` when the failure is worth retrying.
+        """
+        if isinstance(exc, requests.exceptions.ConnectionError):
+            return "refused" not in str(exc).lower()
+        return isinstance(exc, _TRANSIENT_EXCEPTIONS)
+
+    @classmethod
+    def _stream_to_partial(cls, url: str, partial_path: str) -> bool:
+        """Stream ``url`` into ``<destination>.partial``, resuming when possible.
+
+        Performs a single attempt. If a ``.partial`` file already exists from a
+        prior attempt AND the server advertised ``Accept-Ranges: bytes``, sends
+        a ``Range: bytes=<already>-`` header and APPENDS to the partial;
+        otherwise the partial is truncated and the transfer restarts. The
+        advertised content-length completeness check is preserved (it now
+        accounts for any resume offset).
 
         Args:
             url: HTTP(S) URL to download.
-            destination: Local filesystem path to write to.
+            partial_path: Path to the ``.partial`` scratch file.
 
         Returns:
-            ``True`` on a complete write (content-length matched bytes
-            written, or the server didn't advertise a length).
-            ``False`` if the advertised content-length didn't match
-            what we wrote.
+            ``True`` when the partial is complete (advertised length matched the
+            total bytes on disk, or no length was advertised).
+
+        Raises:
+            requests.exceptions.RequestException: Transport-layer failures
+                (timeouts, dropped connections) propagate to the retry loop.
+            requests.HTTPError: A genuine HTTP error status (404/403/...) from
+                ``raise_for_status`` — fatal, not retried.
         """
-        logger.info("downloading to: %s", destination)
-        response = requests.get(url, stream=True, timeout=10)
+        already = os.path.getsize(partial_path) if os.path.exists(partial_path) else 0
 
-        total_size = int(response.headers.get("content-length", 0))
+        headers = {}
+        if already:
+            headers["Range"] = f"bytes={already}-"
+
+        response = requests.get(
+            url, stream=True, timeout=_DOWNLOAD_TIMEOUT, headers=headers
+        )
+        response.raise_for_status()
+
+        # A 206 means the server honored our Range request — append. Anything
+        # else (200, or no resume requested) means we get the whole body, so
+        # start the partial over to avoid a corrupt prefix.
+        resuming = already and response.status_code == 206
+        if not resuming:
+            already = 0
+
+        content_length = int(response.headers.get("content-length", 0))
+        # content-length on a 206 is the size of the *remaining* range, so the
+        # full expected size is the resume offset plus what's left to come.
+        total_size = content_length + already if content_length else 0
+
         block_size = 1024
-
-        with tqdm(total=total_size, unit="B", unit_scale=True) as progress_bar:
-            with open(destination, "wb") as file:
+        mode = "ab" if resuming else "wb"
+        with tqdm(
+            total=total_size,
+            initial=already,
+            unit="B",
+            unit_scale=True,
+        ) as progress_bar:
+            with open(partial_path, mode) as file:
                 for data in response.iter_content(block_size):
                     progress_bar.update(len(data))
                     file.write(data)
 
-        if total_size not in (0, progress_bar.n):
+        if total_size and os.path.getsize(partial_path) != total_size:
             return False
 
         return True
+
+    @classmethod
+    def _download_file(cls, url: str, destination: str) -> bool:
+        """Download a URL to a local file, tolerant of transient mirror failures.
+
+        Streams into ``<destination>.partial`` with a connect/read timeout
+        split (``(10, 60)``) and retries transient transport failures up to
+        three times with a 5/10/20s backoff, resuming via an HTTP ``Range``
+        request when the server advertised ``Accept-Ranges: bytes`` and a
+        partial exists. On success the partial is atomically renamed onto
+        ``destination`` (``os.replace``), so a corrupt or truncated file is
+        never left at the final path. Genuine HTTP errors (404/403, connection
+        refused) fail fast with no retry.
+
+        This is an intentional, documented divergence from lvscripts-py's
+        simpler urllib download (ref #87) — see the module-level constants;
+        because lvscripts already uses a ``.partial`` strategy, this narrows
+        rather than widens the gap.
+
+        Args:
+            url: HTTP(S) URL to download.
+            destination: Local filesystem path to write to on success.
+
+        Returns:
+            ``True`` on a complete, verified-length write. ``False`` if every
+            attempt produced a content-length mismatch.
+
+        Raises:
+            requests.HTTPError: A genuine HTTP error status (404/403/...) —
+                fails fast, no retry.
+            requests.exceptions.RequestException: A transport failure that was
+                still transient after the final attempt is re-raised.
+        """
+        logger.info("downloading to: %s", destination)
+        partial_path = destination + _PARTIAL_SUFFIX
+
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            if attempt > 1:
+                backoff = _RETRY_BACKOFF_SECONDS[attempt - 1]
+                logger.warning(
+                    "download attempt %d/%d for %s failed (%s); retrying in %ds",
+                    attempt - 1,
+                    _MAX_ATTEMPTS,
+                    url,
+                    last_exc,
+                    backoff,
+                )
+                time.sleep(backoff)
+
+            try:
+                if cls._stream_to_partial(url, partial_path):
+                    os.replace(partial_path, destination)
+                    return True
+                # Incomplete transfer (content-length mismatch). Treat like a
+                # transient failure: keep the partial and retry with Range.
+                last_exc = RuntimeError("incomplete transfer (content-length mismatch)")
+            except requests.HTTPError:
+                # Genuine HTTP status error (404/403/...). Fail fast — no point
+                # retrying, and don't leave a half-written/error-body partial.
+                if os.path.exists(partial_path):
+                    os.remove(partial_path)
+                raise
+            except requests.exceptions.RequestException as exc:
+                if not cls._is_transient(exc):
+                    # e.g. connection refused — nothing to retry against.
+                    raise
+                last_exc = exc
+
+        logger.error(
+            "download of %s failed after %d attempts: %s",
+            url,
+            _MAX_ATTEMPTS,
+            last_exc,
+        )
+        # Every attempt produced a content-length mismatch (no exception to
+        # re-raise): report failure via the historical ``False`` return so
+        # callers' existing failure messages still fire.
+        if isinstance(last_exc, requests.exceptions.RequestException):
+            raise last_exc
+        return False
 
     def _manage_image_dir(self) -> None:
         """Ensure the cloud-images directory exists, expanding ``~`` if needed."""

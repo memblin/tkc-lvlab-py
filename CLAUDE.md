@@ -110,12 +110,52 @@ The code is organized around the `Lvlab.yml` manifest. Read `parse_config()` fir
 - Several `destroy`/cleanup paths leave files behind on purpose or by oversight — see `docs/walkthrough.md`. Don't "fix" this without checking whether the user relied on it.
 - A sibling project `lvscripts-py` (allowed via `.claude/settings.local.json`) was the original source for porting `createvm`/`deletevm` into this repo. **It is now being archived (2026-05-26); the port is complete and `createvm`/`deletevm` are canonical here.** Treat it as frozen historical reference only — fine to read, but it's not a sync target: don't propose mirroring lvlab's divergences upstream, and don't import from it.
 
+## Documentation: audience and structure
+
+**Primary audience: systems engineers and SREs** — technically fluent but
+time-constrained. They want what a thing does, how to use it, and its failure
+modes, not programming fundamentals. The **software-engineer audience is
+secondary**, invoked only when complexity demands it (a non-obvious code path, a
+non-standard approach, a design rationale not visible from behavior). When that
+audience is present, mark the shift (a "Design note" callout, a separate
+contributor-doc file) rather than letting the tone drift.
+
+Across all docs: **accurate, explicit, concise — in that order** (accuracy is
+never traded for brevity; brevity never for filler). **Segment and link rather
+than overload** — first contact with a topic gives enough to act plus a path to
+deeper material, which lives on its own page. **Layered**: each layer answers a
+question the previous one didn't; if a layer only restates the last, merge them.
+
+**User docs and contributor docs are two products with separate navigation:**
+
+- **User docs** (`docs/`, scanned by Zensical) answer: what is this, who's it
+    for, install, use, failure modes, where to go when it breaks.
+- **Contributor docs** (`docs-extra/`, `.github/` — the doc-builder never scans
+    these) answer: code organization, why it's built this way, dev setup, running
+    tests, proposing a change, conventions.
+- The split is enforced by the **build config**, not frontmatter flags. A
+    **first-class contributor entry point is required** — the README footer or a
+    labeled `docs/index.md` link must reach `docs-extra/CONTRIBUTING.md` within
+    two clicks. **Cross-link, don't substitute**: user docs describe behavior,
+    contributor docs explain why-in-code; neither defers to the other to do its
+    job. If contributor material spans many files, add a topic-oriented index
+    (testing, releases, architecture, conventions — not by filename).
+
+**Landing-page contract** — `docs/index.md` should, in ~200–400 words, answer in
+order: (1) what is this, (2) who is it for, (3) a minimal working example, (4)
+where to go next. The "next" block is 4–6 explicit links labeled by the **task**
+("*Install →* …", "*Configure →* …", "*Troubleshoot →* …", "*Contribute →* …"),
+not by document name. A reader should leave within thirty seconds pointed right.
+
 ## Documentation conventions
 
-The project uses **Zensical + mkdocstrings** to generate API docs from
-Google-style docstrings + type hints. Zensical is the Material-for-MkDocs
-maintainer's MkDocs successor; it reads the existing `mkdocs.yml` directly.
-Preview locally with:
+Reference docs are **generated from the source of truth** wherever the toolchain
+supports it — hand-maintained reference drifts, generated reference doesn't. For
+this project that's API docs from Google-style docstrings + type hints via
+**Zensical + mkdocstrings** (Zensical is the Material-for-MkDocs maintainer's
+MkDocs successor; it reads the existing `mkdocs.yml` directly). The generator's
+input — docstrings and type hints — is therefore part of the contract for new
+code (below). Preview locally with:
 
 ```bash
 uv sync --group dev
@@ -124,10 +164,9 @@ uv run zensical serve   # http://127.0.0.1:8000
 uv run zensical build -s
 ```
 
-The site is configured in `mkdocs.yml` (Zensical reads it without a rewrite).
-The `docs/` directory holds the published site files (`index.md`, `api/`).
-Files that should NOT render in the public site live in the sibling
-`docs-extra/` directory, which the doc-builder never scans.
+The published site lives in `docs/` (`index.md`, `api/`), configured by
+`mkdocs.yml`; see "Documentation: audience and structure" above for the `docs/`
+vs `docs-extra/` split.
 
 ### For new code — required
 
@@ -298,27 +337,66 @@ Alternatively the orchestrator can hand the agent the current `main` HEAD SHA in
 
 For short, single-file changes that don't need a separate branch, prefer spawning the agent without `isolation: "worktree"` so it works directly on `main` — same risk profile as the orchestrator working on `main`, no stale-base trap.
 
-## GitHub interactions (MCP vs. git/gh)
+## GitHub access and collaboration
 
-A **GitHub MCP server** is installed (the `github` plugin; tools are `mcp__plugin_github_github__*`). It authenticates as the repo owner. **Prefer the MCP tools for GitHub *data* operations** — reading/creating/editing issues and PRs, comments, labels, reviews, code/issue search, release/tag lookups. They're typed and don't trigger Bash permission prompts, so they're cleaner than shelling out to `gh`. `gh` is a fine fallback if a needed operation isn't exposed as an MCP tool, or if the MCP server is unavailable in a given session (it's a plugin, not guaranteed present).
+This repository is worked on by both the human maintainer and Claude as a
+collaborator. The access model keeps the boundary between them visible in the
+audit log and limits blast radius.
 
-**Local-repo git operations still go through git (and `gh` where noted), not the MCP.** Our flow is *commit locally, then push* — the MCP's `push_files` / `create_or_update_file` commit *through the API* (a different, server-side model that bypasses local pre-commit and the local working tree), so do **not** use them for normal work. Pushing local commits, fetches, and tags all use the git HTTPS-PAT paths below. The push/tag gates in "Git pushes" apply regardless of which tool could perform the write — e.g. don't open/merge/close PRs or push tags via the MCP just because it *can*; the same "only when explicitly asked" rule binds.
+### Preferred surface — the GitHub MCP server
 
-## Git pushes
+A **GitHub MCP server is installed** (the `github` plugin; tools are
+`mcp__plugin_github_github__*`, authenticating as the repo owner). **It is the
+default way Claude interacts with GitHub** — issues, PR review threads,
+comments, labels, reviews, code/issue search, release/tag lookups are all MCP
+tool calls, not `gh` shell-outs (typed, no Bash permission prompts). On a
+typical day Claude's GitHub interaction is mostly MCP; the git transport below
+is the exception, used only when actually pushing commits.
 
-**Pushes via `gh`'s authenticated PAT are allowed when the user has asked for them**, scoped to the PAT's `contents:write` + `pull-requests:write`. The user normally pushes themselves from their own terminal (via the SSH remote); if the user asks you to push, use the HTTPS PAT path.
+`gh` is the fallback when an operation isn't exposed as an MCP tool, or when the
+MCP server isn't loaded in a session (it's a plugin — a fresh session may need
+`/plugin` + `/reload-plugins`).
 
-The remote `origin` is configured for SSH (`git@github.com:...`) but the gh PAT only authenticates HTTPS. Two consequences:
+**Do not use the MCP's `push_files` / `create_or_update_file` for normal work** —
+they commit server-side through the API, bypassing local pre-commit and the
+working tree. Our flow is commit-locally-then-push via git.
 
-- For pushes, push to the HTTPS URL explicitly (`git push https://github.com/memblin/tkc-lvlab-py.git main`) — `gh auth git-credential` is wired into the global gitconfig and supplies the token. Don't rewrite `origin`; the user uses SSH from their own terminal.
-- Fetches in this environment will also need the HTTPS URL (e.g. `git pull https://github.com/memblin/tkc-lvlab-py.git main`) because no SSH key here has read access.
+### Remote and transport
 
-**Still off-limits without an explicit, scoped request:**
+- `origin` is configured for **SSH** (`git@github.com:...`) and is used by the
+    human maintainer from their own terminal.
+- Claude does **not** use SSH and has no SSH keys. When Claude pushes, it pushes
+    to the **explicit HTTPS URL** (`git push https://github.com/memblin/tkc-lvlab-py.git <branch>`);
+    `gh auth git-credential` supplies the PAT. Fetches here also need the HTTPS
+    URL (`git pull https://github.com/memblin/tkc-lvlab-py.git main`) — no SSH
+    key here has read access.
+- Don't rewrite `origin` to HTTPS. Keeping SSH on `origin` and HTTPS as Claude's
+    explicit-URL path makes the actor distinction visible in shell history and
+    reflog: `origin` = human, explicit HTTPS URL = agent.
 
-- Force-push of any kind (`--force`, `--force-with-lease`) — `main` is the live branch, not a topic-branch sandbox.
-- Pushing tags — tag pushes on `main` trigger `.github/workflows/build-release.yml` and cut a real GitHub release. See "Releasing".
-- Pushes to `main` (the user pushes themselves; only push when explicitly asked).
-- `gh pr merge`, `gh pr close`, branch deletion on the remote, or any write to issues/discussions/releases the user hasn't asked for.
+### Authentication
+
+Claude authenticates via a **fine-grained PAT** (the same token backs `gh` and
+the MCP server) with the minimum scopes for its work. Current scope set:
+`contents:write`, `pull-requests:write`, `issues:write` (Claude files and edits
+issues). Document scope changes here so they're reviewable at rotation time. **If
+an operation fails for lack of a scope, ask the maintainer to extend the token**
+rather than working around it.
+
+### Pushes — allowed only when asked
+
+Push only when the user has asked. The user normally pushes their own commits
+from their own terminal; when asked, use the HTTPS PAT path above.
+
+### Off-limits without an explicit, scoped request — regardless of tool (git, gh, or MCP)
+
+- Force-push of any kind (`--force`, `--force-with-lease`) — `main` is a live branch.
+- Pushing tags — tag pushes on `main` trigger `.github/workflows/build-release.yml`
+    and cut a real GitHub release (see "Releasing").
+- Pushes to `main` when the user hasn't asked.
+- `gh pr merge` / `gh pr close`, branch deletion on the remote, or any write to
+    issues / discussions / releases / project boards the user hasn't asked for —
+    the MCP being *able* to do these doesn't grant consent.
 
 ## Releasing
 

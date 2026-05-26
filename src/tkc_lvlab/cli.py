@@ -37,6 +37,7 @@ from rich.table import Table
 
 from ._logging import configure_logging, get_logger
 from .config import (
+    ConfigManager,
     parse_config,
     generate_hosts,
     generate_hosts_entries,
@@ -145,6 +146,43 @@ def _root(
     configure_logging(verbosity=verbose, quiet=quiet)
 
 
+def _load_config() -> ConfigManager:
+    """Load the manifest into a :class:`ConfigManager`, exiting on any absence/parse failure.
+
+    Routes the read through the module-level :func:`parse_config` (the seam
+    CLI tests patch) and wraps the result so the manifest is parsed exactly
+    once per command path. Every manifest-absence outcome maps to the same
+    exit-1 behaviour the inline ``parse_config()`` call sites had:
+
+    - ``parse_config`` raising :class:`ConfigError` (structurally invalid
+      manifest) or ``TypeError`` (the historical missing-file unpack signal
+      some tests still simulate) → ``logger.error`` + ``typer.Exit(1)``.
+    - ``parse_config`` returning ``None`` (a genuinely missing file) — which
+      the old call sites turned into a ``TypeError`` by unpacking ``None`` —
+      → the same ``logger.error`` + ``typer.Exit(1)``.
+
+    Commands that must distinguish the soft missing-file path from a parse
+    error (``images clean``) or treat it as non-fatal
+    (``global show instances``) do **not** use this helper; they wrap
+    :func:`parse_config` directly and inspect the result.
+
+    Returns:
+        A loaded :class:`ConfigManager`.
+
+    Raises:
+        typer.Exit: Code 1 when the manifest is missing or cannot be parsed.
+    """
+    try:
+        parsed = parse_config()
+    except (ConfigError, TypeError):
+        logger.error(CONFIG_PARSE_ERROR_MSG)
+        raise typer.Exit(code=1)
+    if parsed is None:
+        logger.error(CONFIG_PARSE_ERROR_MSG)
+        raise typer.Exit(code=1)
+    return ConfigManager.from_parsed(parsed)
+
+
 def _resolve_existing_machine(vm_name: str) -> tuple[Machine | None, str | None]:
     """Resolve a manifest entry into a :class:`Machine` that exists in libvirt.
 
@@ -172,13 +210,10 @@ def _resolve_existing_machine(vm_name: str) -> tuple[Machine | None, str | None]
             or a structurally invalid one (:class:`ConfigError`). Matches the
             long-standing parse-failure behaviour.
     """
-    try:
-        environment, _, config_defaults, machines = parse_config()
-    except (ConfigError, TypeError):
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    config = _load_config()
+    environment, _, config_defaults, _ = config.as_tuple()
 
-    machine_config = get_machine_by_vm_name(machines, vm_name)
+    machine_config = config.get_machine(vm_name)
     if not machine_config:
         logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
         return None, None
@@ -243,22 +278,17 @@ def capabilities() -> None:
 @app.command()
 def cloudinit(vm_name: str) -> None:
     """Render cloud-init files for a manifest VM without starting it."""
-    try:
-        environment, images, config_defaults, machines = parse_config()
-    except (ConfigError, TypeError):
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    config = _load_config()
+    environment, images, config_defaults, machines = config.as_tuple()
 
-    machine = Machine(
-        get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-    )
+    machine = Machine(config.get_machine(vm_name), environment, config_defaults)
 
     if machine:
         image_config = _resolve_image_config(images, machine.os, machine.vm_name)
         cloud_image = CloudImage(machine.os, image_config, environment, config_defaults)
         # Render and write cloud-init config
         try:
-            _, _, _ = machine.cloud_init(cloud_image, config_defaults)
+            _, _, _ = machine.cloud_init(cloud_image, config_defaults, machines)
         except LvlabError as exc:
             logger.error("%s", exc)
             raise typer.Exit(code=1)
@@ -291,18 +321,13 @@ def destroy(
 @app.command()
 def down(vm_name: str) -> None:
     """Gracefully shut down a manifest VM."""
-    try:
-        environment, _, config_defaults, machines = parse_config()
-    except (ConfigError, TypeError):
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    config = _load_config()
+    environment, _, config_defaults, _ = config.as_tuple()
 
-    machine_config = get_machine_by_vm_name(machines, vm_name)
+    machine_config = config.get_machine(vm_name)
     if machine_config:
 
-        machine = Machine(
-            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-        )
+        machine = Machine(machine_config, environment, config_defaults)
 
         exists, state, _ = machine.exists_in_libvirt(
             environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
@@ -426,11 +451,7 @@ def hosts(
     needs `sudo $(which lvlab) hosts --append`. --heredoc wraps the
     output in a `cat <<EOF` heredoc.
     """
-    try:
-        environment, _, config_defaults, machines = parse_config()
-    except (ConfigError, TypeError):
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    environment, _, config_defaults, machines = _load_config().as_tuple()
 
     if append:
         _hosts_run_append(environment, config_defaults, machines)
@@ -508,11 +529,21 @@ def ssh_config(vm_name: str = typer.Argument(None)) -> None:
     VM_NAME, only that machine's snippet is emitted. Output goes to
     stdout; redirect or append it to ~/.ssh/config yourself.
     """
+    # ssh-config keeps its bespoke parse handling (echo to stdout, only the
+    # missing-file failure caught — a structural ConfigError still
+    # propagates) to preserve its observable behaviour; it just sources the
+    # parsed sections through ConfigManager so the read happens once. A
+    # missing file (parse_config -> None) is the same exit-1 the old
+    # ``None`` unpack TypeError produced.
     try:
-        _, _, config_defaults, machines = parse_config()
+        config = ConfigManager.from_parsed(parse_config())
     except TypeError:
         typer.echo(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
+    if not config.loaded:
+        typer.echo(CONFIG_PARSE_ERROR_MSG)
+        raise typer.Exit(code=1)
+    _, _, config_defaults, machines = config.as_tuple()
 
     selected_machines = _ssh_config_select_machines(machines, vm_name)
     cloud_init_defaults = config_defaults.get("cloud_init", {})
@@ -602,11 +633,7 @@ def _init_process_image(image: CloudImage) -> None:
 @app.command()
 def init() -> None:
     """Initialize the environment: download and verify cloud images."""
-    try:
-        environment, images, config_defaults, _ = parse_config()
-    except (ConfigError, TypeError):
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    environment, images, config_defaults, _ = _load_config().as_tuple()
 
     typer.echo()
     typer.echo(f'Initializing Libvirt Lab Environment: {environment["name"]}\n')
@@ -751,18 +778,13 @@ def snapshot_create(
     snapshot_description: str = typer.Argument(None),
 ) -> None:
     """Create a snapshot for a given VM."""
-    try:
-        environment, _, config_defaults, machines = parse_config()
-    except (ConfigError, TypeError):
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    config = _load_config()
+    environment, _, config_defaults, _ = config.as_tuple()
 
-    machine_config = get_machine_by_vm_name(machines, vm_name)
+    machine_config = config.get_machine(vm_name)
     if machine_config:
 
-        machine = Machine(
-            get_machine_by_vm_name(machines, vm_name), environment, config_defaults
-        )
+        machine = Machine(machine_config, environment, config_defaults)
         libvirt_endpoint = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
 
         if machine:
@@ -837,11 +859,7 @@ def status() -> None:
     been dropped to avoid an N+1 ``virsh domstate --reason`` call per
     machine.
     """
-    try:
-        environment, images, _, machines = parse_config()
-    except (ConfigError, TypeError):
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    environment, images, _, machines = _load_config().as_tuple()
 
     uri = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
     env_name = environment.get("name", "no-name-lvlab")
@@ -962,12 +980,12 @@ def _up_start_existing(
 
 
 def _up_build_cloud_init_iso(
-    machine: Machine, cloud_image: CloudImage, config_defaults: dict
+    machine: Machine, cloud_image: CloudImage, config_defaults: dict, machines: list
 ) -> None:
     """Render cloud-init files, pack them into cidata.iso, exit on failure."""
     try:
         metadata_config_fpath, userdata_config_fpath, network_config_fpath = (
-            machine.cloud_init(cloud_image, config_defaults)
+            machine.cloud_init(cloud_image, config_defaults, machines)
         )
     except LvlabError as exc:
         logger.error("%s", exc)
@@ -987,7 +1005,11 @@ def _up_build_cloud_init_iso(
 
 
 def _up_first_time_create(
-    machine: Machine, environment: dict, images: dict, config_defaults: dict
+    machine: Machine,
+    environment: dict,
+    images: dict,
+    config_defaults: dict,
+    machines: list,
 ) -> None:
     """First-time create: vdisks → cloud-init ISO → virt-install."""
     typer.echo(f"Creating virtual machine: {machine.vm_name}")
@@ -996,7 +1018,7 @@ def _up_first_time_create(
     cloud_image = CloudImage(machine.os, image_config, environment, config_defaults)
 
     machine.create_vdisks(environment, config_defaults, cloud_image)
-    _up_build_cloud_init_iso(machine, cloud_image, config_defaults)
+    _up_build_cloud_init_iso(machine, cloud_image, config_defaults, machines)
 
     typer.echo(f"Attempting to start virtual maching: {machine.vm_name}")
     if machine.deploy(
@@ -1019,13 +1041,10 @@ def up(vm_name: str) -> None:
     ISO pack -> virt-install) or powers it on if it's shut off.
     Already-running VMs are a no-op.
     """
-    try:
-        environment, images, config_defaults, machines = parse_config()
-    except (ConfigError, TypeError):
-        logger.error(CONFIG_PARSE_ERROR_MSG)
-        raise typer.Exit(code=1)
+    config = _load_config()
+    environment, images, config_defaults, machines = config.as_tuple()
 
-    machine_config = get_machine_by_vm_name(machines, vm_name)
+    machine_config = config.get_machine(vm_name)
     if not machine_config:
         logger.error("Machine %s not found in manifest.", vm_name)
         return
@@ -1037,7 +1056,7 @@ def up(vm_name: str) -> None:
     if exists:
         _up_start_existing(machine, status_state, environment)
     else:
-        _up_first_time_create(machine, environment, images, config_defaults)
+        _up_first_time_create(machine, environment, images, config_defaults, machines)
 
 
 def _global_manifest_domain_names() -> set[str] | None:

@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tkc_lvlab.config import parse_config, parse_file_from_url
+from tkc_lvlab.config import ConfigManager, parse_config, parse_file_from_url
 from tkc_lvlab.exceptions import ConfigError, LvlabError
 
 
@@ -182,3 +182,89 @@ def test_parse_file_from_url_handles_debian_sha512sums() -> None:
     """
     url = "https://cloud.debian.org/images/cloud/bookworm/20240717-1811/SHA512SUMS"
     assert parse_file_from_url(url) == "SHA512SUMS"
+
+
+# ---------------------------------------------------------------------------
+# ConfigManager (#49)
+# ---------------------------------------------------------------------------
+
+
+def test_config_manager_exposes_four_sections(tmp_path: Path) -> None:
+    """A valid manifest is exposed via the four section properties.
+
+    The manager wraps ``parse_config`` and surfaces the same data a command
+    would otherwise unpack from the 4-tuple — environment, images,
+    config_defaults, machines — without the caller re-reading the file.
+    """
+    manifest = tmp_path / "Lvlab.yml"
+    manifest.write_text(SAMPLE_MANIFEST)
+
+    config = ConfigManager(str(manifest))
+
+    assert config.loaded is True
+    assert config.environment["name"] == "demo"
+    assert "fedora40" in config.images
+    assert config.config_defaults == {"domain": "local", "cpu": 2}
+    assert [m["vm_name"] for m in config.machines] == ["alpha", "beta"]
+    # as_tuple() reproduces the legacy parse_config shape exactly.
+    assert config.as_tuple() == parse_config(str(manifest))
+
+
+def test_config_manager_get_machine_finds_by_vm_name(tmp_path: Path) -> None:
+    """``get_machine`` returns the matching machine dict, or None when absent."""
+    manifest = tmp_path / "Lvlab.yml"
+    manifest.write_text(SAMPLE_MANIFEST)
+
+    config = ConfigManager(str(manifest))
+
+    assert config.get_machine("beta")["hostname"] == "beta"
+    assert config.get_machine("does-not-exist") is None
+
+
+def test_config_manager_missing_file_is_soft_path(tmp_path: Path) -> None:
+    """A missing manifest is the soft path: loaded=False, empty sections.
+
+    This is the DISTINCT, non-error outcome (vs. a structural ConfigError):
+    constructing the manager does not raise, and every section is empty so a
+    caller can decide whether to refuse (``.loaded``) or proceed.
+    """
+    missing = tmp_path / "Definitely-Not-Here.yml"
+
+    config = ConfigManager(str(missing))
+
+    assert config.loaded is False
+    assert config.environment == {}
+    assert config.images == {}
+    assert config.config_defaults == {}
+    assert config.machines == []
+    assert config.get_machine("anything") is None
+
+
+def test_config_manager_bad_structure_raises_configerror(tmp_path: Path) -> None:
+    """A structurally invalid manifest raises ConfigError from the constructor.
+
+    Distinct from the missing-file soft path above: a present-but-broken
+    manifest is an error, not an empty manager.
+    """
+    manifest = tmp_path / "Lvlab.yml"
+    manifest.write_text("- just\n- a\n- list\n")
+    with pytest.raises(ConfigError, match="not a mapping"):
+        ConfigManager(str(manifest))
+
+
+def test_config_manager_from_parsed_wraps_without_rereading(tmp_path: Path) -> None:
+    """``from_parsed`` wraps an already-parsed tuple without touching disk.
+
+    This is the seam the CLI uses: it calls ``parse_config`` once and hands
+    the result here, so no second read happens. A ``None`` (missing-file)
+    tuple becomes the same soft, loaded=False manager.
+    """
+    parsed = ({"name": "demo"}, {"img": {}}, {"cpu": 2}, [{"vm_name": "alpha"}])
+    config = ConfigManager.from_parsed(parsed)
+    assert config.loaded is True
+    assert config.environment == {"name": "demo"}
+    assert config.get_machine("alpha") == {"vm_name": "alpha"}
+
+    soft = ConfigManager.from_parsed(None)
+    assert soft.loaded is False
+    assert soft.machines == []

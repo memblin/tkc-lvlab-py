@@ -1,9 +1,12 @@
 """Manifest loading and ``/etc/hosts`` rendering for the lvlab CLI.
 
-Every ``lvlab`` subcommand starts by calling :func:`parse_config` to read
-``Lvlab.yml`` from the current working directory and unpack it into the
-four pieces every command needs (environment, images, defaults,
-machines).
+Every ``lvlab`` subcommand starts by loading ``Lvlab.yml`` from the current
+working directory and unpacking it into the four pieces every command needs
+(environment, images, defaults, machines). :func:`parse_config` is the
+low-level reader; :class:`ConfigManager` wraps it to give each command a
+single parsed view (and to expose a :meth:`ConfigManager.get_machine`
+accessor) so the manifest is read once per command path rather than
+re-parsed at each call site.
 
 ``/etc/hosts``-style rendering lives here too because the same manifest
 data drives the standalone ``lvlab hosts`` output AND the
@@ -204,6 +207,158 @@ def parse_config(
     machines = environment.get("machines", {})
 
     return (environment, images, config_defaults, machines)
+
+
+class ConfigManager:
+    """Load, validate, and expose a single ``Lvlab.yml`` manifest.
+
+    A thin wrapper around :func:`parse_config` that reads the manifest once
+    and exposes its four constituent pieces (``environment``, ``images``,
+    ``config_defaults``, ``machines``) as properties plus a
+    :meth:`get_machine` convenience accessor. The intent is to give every
+    command a single parsed view of the manifest instead of re-reading the
+    file at each call site (see the duplicate parse that used to live in
+    :meth:`tkc_lvlab.utils.libvirt.Machine.cloud_init`).
+
+    The two manifest-absence outcomes from :func:`parse_config` are kept as
+    **distinct, documented states**:
+
+    - **Missing file** — the soft path. :attr:`loaded` is ``False`` and the
+        four section properties return empty values. Callers that need to
+        refuse rather than guess should check :attr:`loaded`.
+    - **Structurally invalid file** — :func:`parse_config` raises
+        :class:`tkc_lvlab.exceptions.ConfigError`, which propagates out of the
+        constructor unchanged. (Malformed YAML still surfaces as
+        ``yaml.YAMLError`` from the underlying loader.)
+
+    Args:
+        fpath: Path to the manifest. Defaults to ``"Lvlab.yml"`` in the
+            current working directory when ``None``.
+
+    Attributes:
+        fpath: The manifest path this manager loaded (or attempted to load).
+        loaded: ``True`` when the manifest existed and parsed; ``False`` for
+            the soft missing-file path.
+
+    Raises:
+        ConfigError: The manifest exists but is structurally invalid (not a
+            mapping, no non-empty ``environment`` list, or no ``images``
+            section). Propagated from :func:`parse_config`.
+        yaml.YAMLError: The manifest content was not valid YAML.
+    """
+
+    def __init__(self, fpath: str | None = None) -> None:
+        self.fpath: str | None = fpath
+        self._load(parse_config(fpath))
+
+    @classmethod
+    def from_parsed(
+        cls,
+        parsed: (
+            tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]]
+            | None
+        ),
+        fpath: str | None = None,
+    ) -> "ConfigManager":
+        """Wrap an already-parsed manifest tuple in a manager.
+
+        This is the seam the CLI uses: it lets a command call the
+        module-level :func:`parse_config` (which tests patch at the
+        ``tkc_lvlab.cli`` import boundary) and hand the result here, so the
+        manager never re-reads the file and the existing CLI test seam stays
+        intact.
+
+        Args:
+            parsed: The :func:`parse_config` return value — the four-tuple
+                ``(environment, images, config_defaults, machines)`` on
+                success, or ``None`` for the soft missing-file path.
+            fpath: The manifest path that produced ``parsed`` (recorded on
+                :attr:`fpath`; purely informational).
+
+        Returns:
+            A :class:`ConfigManager` reflecting ``parsed``.
+        """
+        manager = cls.__new__(cls)
+        manager.fpath = fpath
+        manager._load(parsed)
+        return manager
+
+    def _load(
+        self,
+        parsed: (
+            tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]]
+            | None
+        ),
+    ) -> None:
+        """Populate the section state from a :func:`parse_config` result."""
+        self.loaded: bool = parsed is not None
+        if parsed is None:
+            self._environment: dict[str, Any] = {}
+            self._images: dict[str, Any] = {}
+            self._config_defaults: dict[str, Any] = {}
+            self._machines: list[dict[str, Any]] = []
+        else:
+            (
+                self._environment,
+                self._images,
+                self._config_defaults,
+                self._machines,
+            ) = parsed
+
+    @property
+    def environment(self) -> dict[str, Any]:
+        """The manifest's ``environment[0]`` dict (``{}`` when not loaded)."""
+        return self._environment
+
+    @property
+    def images(self) -> dict[str, Any]:
+        """The manifest's ``images`` map (``{}`` when not loaded)."""
+        return self._images
+
+    @property
+    def config_defaults(self) -> dict[str, Any]:
+        """The manifest's ``config_defaults`` block (``{}`` when not loaded)."""
+        return self._config_defaults
+
+    @property
+    def machines(self) -> list[dict[str, Any]]:
+        """The manifest's ``machines`` list (``[]`` when not loaded)."""
+        return self._machines
+
+    def as_tuple(
+        self,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        """Return the four sections as the legacy :func:`parse_config` tuple.
+
+        Provided so call sites that unpack
+        ``environment, images, config_defaults, machines`` keep their exact
+        existing shape while sourcing the data from this manager.
+
+        Returns:
+            ``(environment, images, config_defaults, machines)``.
+        """
+        return (
+            self._environment,
+            self._images,
+            self._config_defaults,
+            self._machines,
+        )
+
+    def get_machine(self, vm_name: str) -> dict[str, Any] | None:
+        """Find a machine dict by its ``vm_name``.
+
+        Args:
+            vm_name: The short name to match against each machine entry's
+                ``vm_name`` field.
+
+        Returns:
+            The matching machine dict, or ``None`` if no machine in the
+            manifest has the requested ``vm_name``.
+        """
+        for machine in self._machines:
+            if machine.get("vm_name", None) == vm_name:
+                return machine
+        return None
 
 
 def parse_file_from_url(url: str) -> str:

@@ -6,9 +6,11 @@ methods (``list_snapshots`` returns ``list[str]``, ``create_snapshot``
 returns ``True`` or raises ``VirshError``, ``delete_snapshot`` returns
 ``None`` or raises ``VirshError``).
 
-Strategy: stub ``parse_config``, ``get_machine_by_vm_name`` and ``Machine``
-at the ``tkc_lvlab.cli`` import boundary so nothing here ever reads a
-manifest, builds a Machine, or invokes ``virsh``.
+Strategy: stub ``parse_config`` (the seam :class:`ConfigManager` reads
+through) and ``Machine`` at the ``tkc_lvlab.cli`` import boundary so nothing
+here ever reads a manifest, builds a Machine, or invokes ``virsh``. The
+stubbed manifest already carries the ``web01`` machine, so the manager's
+``get_machine`` resolves it directly.
 """
 
 from __future__ import annotations
@@ -62,9 +64,6 @@ def test_snapshot_list_renders_string_names_with_bullet_prefix() -> None:
     runner = CliRunner()
     with (
         mock.patch.object(cli, "parse_config", return_value=_stub_parse_config()),
-        mock.patch.object(
-            cli, "get_machine_by_vm_name", return_value={"vm_name": "web01"}
-        ),
         mock.patch.object(cli, "Machine", return_value=machine),
     ):
         result = runner.invoke(snapshot, ["list", "web01"])
@@ -83,9 +82,6 @@ def test_snapshot_list_empty_prints_no_snapshots_message() -> None:
     runner = CliRunner()
     with (
         mock.patch.object(cli, "parse_config", return_value=_stub_parse_config()),
-        mock.patch.object(
-            cli, "get_machine_by_vm_name", return_value={"vm_name": "web01"}
-        ),
         mock.patch.object(cli, "Machine", return_value=machine),
     ):
         result = runner.invoke(snapshot, ["list", "web01"])
@@ -110,9 +106,6 @@ def test_snapshot_list_does_not_call_getName_on_string() -> None:
     runner = CliRunner()
     with (
         mock.patch.object(cli, "parse_config", return_value=_stub_parse_config()),
-        mock.patch.object(
-            cli, "get_machine_by_vm_name", return_value={"vm_name": "web01"}
-        ),
         mock.patch.object(cli, "Machine", return_value=machine),
     ):
         result = runner.invoke(snapshot, ["list", "web01"])
@@ -137,9 +130,6 @@ def test_snapshot_create_happy_path_prints_success_using_snapshot_name() -> None
     runner = CliRunner()
     with (
         mock.patch.object(cli, "parse_config", return_value=_stub_parse_config()),
-        mock.patch.object(
-            cli, "get_machine_by_vm_name", return_value={"vm_name": "web01"}
-        ),
         mock.patch.object(cli, "Machine", return_value=machine),
     ):
         result = runner.invoke(snapshot, ["create", "web01", "pre-upgrade"])
@@ -162,9 +152,6 @@ def test_snapshot_create_virsh_error_is_logged_and_does_not_crash(
     runner = CliRunner()
     with (
         mock.patch.object(cli, "parse_config", return_value=_stub_parse_config()),
-        mock.patch.object(
-            cli, "get_machine_by_vm_name", return_value={"vm_name": "web01"}
-        ),
         mock.patch.object(cli, "Machine", return_value=machine),
         caplog.at_level(logging.ERROR, logger="tkc_lvlab.cli"),
     ):
@@ -191,9 +178,6 @@ def test_snapshot_delete_happy_path_prints_success_message() -> None:
     runner = CliRunner()
     with (
         mock.patch.object(cli, "parse_config", return_value=_stub_parse_config()),
-        mock.patch.object(
-            cli, "get_machine_by_vm_name", return_value={"vm_name": "web01"}
-        ),
         mock.patch.object(cli, "Machine", return_value=machine),
     ):
         result = runner.invoke(snapshot, ["delete", "web01", "pre-upgrade", "--force"])
@@ -215,9 +199,6 @@ def test_snapshot_delete_virsh_error_is_logged_and_does_not_crash(
     runner = CliRunner()
     with (
         mock.patch.object(cli, "parse_config", return_value=_stub_parse_config()),
-        mock.patch.object(
-            cli, "get_machine_by_vm_name", return_value={"vm_name": "web01"}
-        ),
         mock.patch.object(cli, "Machine", return_value=machine),
         caplog.at_level(logging.ERROR, logger="tkc_lvlab.cli"),
     ):
@@ -239,9 +220,6 @@ def test_snapshot_delete_aborted_when_confirm_returns_false() -> None:
     runner = CliRunner()
     with (
         mock.patch.object(cli, "parse_config", return_value=_stub_parse_config()),
-        mock.patch.object(
-            cli, "get_machine_by_vm_name", return_value={"vm_name": "web01"}
-        ),
         mock.patch.object(cli, "Machine", return_value=machine),
     ):
         # Pipe "n" as the confirm input; no --force flag.

@@ -219,3 +219,49 @@ def test_up_exits_one_on_parse_config_typeerror() -> None:
 
     assert result.exit_code == 1, result.output
     mocked_logger.error.assert_called_with("Could not parse config file.")
+
+
+def test_up_exits_one_when_manifest_missing() -> None:
+    """A missing Lvlab.yml (parse_config → None) → error log + exit 1 (#49).
+
+    Locks the soft missing-file path through ConfigManager: the old code
+    unpacked ``None`` into a TypeError; the manager surfaces ``loaded=False``
+    and ``_load_config`` maps it to the same exit-1 the operator saw before.
+    """
+    runner = CliRunner()
+    with (
+        mock.patch.object(cli, "parse_config", return_value=None),
+        mock.patch.object(cli, "logger") as mocked_logger,
+        mock.patch.object(cli, "Machine") as machine_cls,
+    ):
+        result = runner.invoke(app, ["up", "alpha"])
+
+    assert result.exit_code == 1, result.output
+    machine_cls.assert_not_called()
+    mocked_logger.error.assert_called_with("Could not parse config file.")
+
+
+def test_up_create_parses_manifest_once_and_passes_machines(tmp_path) -> None:
+    """The create path reads the manifest once and threads machines to cloud_init (#49).
+
+    Proves the de-dup win at the command boundary: ``parse_config`` fires a
+    single time for the whole ``up`` run, and the parsed machines list is
+    handed to ``Machine.cloud_init`` (so it never re-reads the file itself).
+    """
+    runner = CliRunner()
+    fake_machine = _make_fake_machine(deploy_returns=True, tmp_path=tmp_path)
+    fake_iso = _make_fake_iso(tmp_path)
+
+    with (
+        _patched_config() as parse_config_mock,
+        mock.patch.object(cli, "Machine", return_value=fake_machine),
+        mock.patch.object(cli, "CloudImage"),
+        mock.patch.object(cli, "CloudInitIso", return_value=fake_iso),
+    ):
+        result = runner.invoke(app, ["up", "alpha"])
+
+    assert result.exit_code == 0, result.output
+    parse_config_mock.assert_called_once()
+    # cloud_init received the parsed machines list as its 3rd positional arg.
+    _, _, machines_arg = fake_machine.cloud_init.call_args.args
+    assert machines_arg == SAMPLE_MACHINES

@@ -229,3 +229,70 @@ def test_cloud_init_initializes_empty_runcmd_when_neither_side_has_one(
     runcmd = captured[0]["runcmd"]
     assert len(runcmd) == 2  # /etc/hosts heredoc + template heredoc
     assert all("hosts heredoc" in line for line in runcmd)
+
+
+def test_cloud_init_does_not_reparse_when_machines_injected(tmp_path: Path) -> None:
+    """Passing ``machines`` in means cloud_init never re-reads the manifest (#49).
+
+    The CLI already holds the parsed machines list, so it passes it through
+    and the duplicate ``parse_config`` call inside cloud_init is skipped. We
+    assert ``parse_config`` is never invoked and that the injected machines
+    flow into ``generate_hosts`` (the only consumer).
+    """
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {}
+    injected_machines = [{"vm_name": "web01", "hostname": "web01"}]
+
+    network_obj, metadata_obj, userdata_obj, cloud_image = _patch_collaborators()
+    seen_machines: list = []
+
+    with (
+        mock.patch("tkc_lvlab.utils.libvirt.NetworkConfig", return_value=network_obj),
+        mock.patch("tkc_lvlab.utils.libvirt.MetaData", return_value=metadata_obj),
+        mock.patch("tkc_lvlab.utils.libvirt.UserData", return_value=userdata_obj),
+        mock.patch("tkc_lvlab.utils.libvirt.parse_config") as parse_config_mock,
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.generate_hosts",
+            side_effect=lambda env, defs, machines, heredoc=None: seen_machines.append(
+                machines
+            )
+            or "## hosts heredoc\n",
+        ),
+    ):
+        machine.cloud_init(cloud_image, {"cloud_init": {}}, injected_machines)
+
+    parse_config_mock.assert_not_called()
+    # Both generate_hosts calls (/etc/hosts + template) got the injected list.
+    assert seen_machines == [injected_machines, injected_machines]
+
+
+def test_cloud_init_falls_back_to_parse_config_when_machines_none(
+    tmp_path: Path,
+) -> None:
+    """Omitting ``machines`` keeps the one-time parse_config fallback (compat).
+
+    Callers without the parsed list handy can still call cloud_init; it reads
+    the manifest exactly once via parse_config. Locks that the fallback path
+    is preserved for backward compatibility.
+    """
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {}
+    network_obj, metadata_obj, userdata_obj, cloud_image = _patch_collaborators()
+
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.parse_config",
+            return_value=({}, {}, {}, []),
+        ) as parse_config_mock,
+        mock.patch("tkc_lvlab.utils.libvirt.NetworkConfig", return_value=network_obj),
+        mock.patch("tkc_lvlab.utils.libvirt.MetaData", return_value=metadata_obj),
+        mock.patch("tkc_lvlab.utils.libvirt.UserData", return_value=userdata_obj),
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.generate_hosts",
+            side_effect=lambda env, defs, machines, heredoc=None: "## hosts\n",
+        ),
+    ):
+        # No machines arg → the one-time parse_config fallback runs.
+        machine.cloud_init(cloud_image, {"cloud_init": {}})
+
+    parse_config_mock.assert_called_once()

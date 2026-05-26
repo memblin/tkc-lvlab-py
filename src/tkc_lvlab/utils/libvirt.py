@@ -299,6 +299,7 @@ class Machine:
         self,
         cloud_image: "CloudImage",
         config_defaults: dict[str, Any],
+        machines: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str, str]:
         """Render this machine's three cloud-init documents to disk.
 
@@ -319,6 +320,12 @@ class Machine:
                 for this machine — only its ``network_version`` is
                 consulted (passed to :class:`NetworkConfig`).
             config_defaults: The manifest's ``config_defaults`` block.
+            machines: The manifest's ``machines`` list, used to render the
+                ``/etc/hosts`` snippet. Callers (the CLI commands) already
+                hold this from their single manifest load and pass it in so
+                the manifest is not re-read here. When ``None`` (a
+                convenience fallback for callers without the list handy), the
+                manifest is parsed once via :func:`parse_config`.
 
         Returns:
             ``(meta_data_path, user_data_path, network_config_path)`` —
@@ -331,9 +338,10 @@ class Machine:
                 Extend :data:`_HOSTS_TEMPLATE_MAPPING` to add a new family.
             LvlabError: When :attr:`config_fpath` cannot be created
                 (raised by :meth:`_ensure_config_dir`).
-            ConfigError: When ``parse_config`` cannot read the manifest
-                (missing or structurally invalid). The CLI boundary
-                converts both to a ``typer.Exit``.
+            ConfigError: Only on the ``machines is None`` fallback, when
+                :func:`parse_config` cannot read the manifest (missing or
+                structurally invalid). The CLI boundary converts it to a
+                ``typer.Exit``.
         """
         self._ensure_config_dir()
 
@@ -357,11 +365,16 @@ class Machine:
         # cloud_init.user still wins.
         cloud_init_config.setdefault("user", cloud_image.default_username)
 
-        try:
-            _, _, _, machines = parse_config()
-        except (ConfigError, TypeError) as exc:
-            logger.error("Could not parse config file.")
-            raise ConfigError("Could not parse config file.") from exc
+        # The CLI passes the already-parsed machines list so the manifest is
+        # read once per command path. The None fallback re-parses only for
+        # callers that don't hold the list (kept distinct so the common path
+        # never touches disk a second time).
+        if machines is None:
+            try:
+                _, _, _, machines = parse_config()
+            except (ConfigError, TypeError) as exc:
+                logger.error("Could not parse config file.")
+                raise ConfigError("Could not parse config file.") from exc
 
         hosts_snippet = generate_hosts(
             self.environment, config_defaults, machines, heredoc="/etc/hosts"

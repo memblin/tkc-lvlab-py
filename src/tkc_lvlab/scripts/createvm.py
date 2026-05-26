@@ -47,6 +47,7 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 from .. import __version__
 from ..config import parse_config
+from ..exceptions import ImageError
 from ..utils.catalog import (
     BUILTIN_IMAGES,
     ImageEntry as CatalogEntry,
@@ -347,13 +348,22 @@ def _ensure_image_available(cloud_image: CloudImage) -> None:
     Raises:
         typer.Exit: Download or verification failed.
     """
-    if not cloud_image.exists_locally("image"):
-        if not cloud_image.download_image():
-            _fail(f"Failed to download cloud image from {cloud_image.image_url}")
-    if cloud_image.checksum_url and not cloud_image.exists_locally("checksum"):
-        cloud_image.download_checksum()
-    if cloud_image.checksum_url_gpg and not cloud_image.exists_locally("checksum_gpg"):
-        cloud_image.download_checksum_gpg()
+    try:
+        if not cloud_image.exists_locally("image"):
+            if not cloud_image.download_image():
+                _fail(f"Failed to download cloud image from {cloud_image.image_url}")
+        if cloud_image.checksum_url and not cloud_image.exists_locally("checksum"):
+            cloud_image.download_checksum()
+        if cloud_image.checksum_url_gpg and not cloud_image.exists_locally(
+            "checksum_gpg"
+        ):
+            cloud_image.download_checksum_gpg()
+    except ImageError as exc:
+        # Clean boundary (issue #98): a transport/HTTP download failure (e.g.
+        # the gzip-served Fedora GPG key returning 416) surfaces the
+        # ImageError's actionable message + manual-placement workaround
+        # instead of a raw requests traceback.
+        _fail(str(exc))
     if cloud_image.checksum_url_gpg:
         cloud_image.gpg_verify_checksum_file()
     if cloud_image.checksum_url and not cloud_image.checksum_verify_image():

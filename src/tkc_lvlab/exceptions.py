@@ -21,6 +21,7 @@ Hierarchy::
     │   └── ManifestError  — semantic manifest-validation failure
     ├── VirshError         — a ``virsh`` invocation failed
     ├── LibvirtNetworkError — libvirt network info unresolvable / invalid
+    ├── ImageError         — a cloud image / sidecar could not be obtained
     ├── DependencyError    — a required host binary is missing
     ├── OsInfoLookupError  — virt-install osinfo enumeration failed
     ├── PasswordHashError  — password hash could not be generated
@@ -124,6 +125,19 @@ class LibvirtNetworkError(LvlabError, RuntimeError):
 
     Both are operator-actionable errors; the message names the specific
     failure.
+    """
+
+
+class ImageError(LvlabError, RuntimeError):
+    """Raised when a cloud image (or its checksum/GPG sidecar) can't be obtained.
+
+    Wraps the download path's transport/HTTP failures
+    (:class:`requests.RequestException`, including ``HTTPError`` and
+    exhausted retries) into a clean, operator-actionable message instead
+    of leaking a raw ``requests`` traceback at the CLI boundary. The
+    message names the URL, a short reason, and the manual-placement
+    workaround — drop the file into the cache directory and re-run (issue
+    #98).
     """
 
 

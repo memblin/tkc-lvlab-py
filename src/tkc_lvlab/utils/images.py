@@ -38,6 +38,7 @@ import requests
 from tqdm import tqdm
 
 from .._logging import get_logger
+from ..exceptions import ImageError
 from .catalog import derive_os_variant, derive_username
 
 
@@ -235,7 +236,9 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
             requests.exceptions.RequestException: Transport-layer failures
                 (timeouts, dropped connections) propagate to the retry loop.
             requests.HTTPError: A genuine HTTP error status (404/403/...) from
-                ``raise_for_status`` — fatal, not retried.
+                ``raise_for_status`` — fatal, not retried. (HTTP 416 on a
+                resume is the exception: it's handled here as a stale partial,
+                not re-raised — see below.)
         """
         already = os.path.getsize(partial_path) if os.path.exists(partial_path) else 0
 
@@ -246,19 +249,57 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         response = requests.get(
             url, stream=True, timeout=_DOWNLOAD_TIMEOUT, headers=headers
         )
+
+        # HTTP 416 (Range Not Satisfiable) on a resume means our ``.partial``
+        # is stale or longer than the resource — its byte count starts past
+        # the resource's end. The classic cause is a gzip-DECODED partial
+        # measured against a COMPRESSED Content-Length (issue #98). Discard the
+        # partial and signal "incomplete" so the retry loop restarts fresh
+        # (no Range) instead of treating 416 as a fatal HTTP error.
+        if response.status_code == 416:
+            response.close()
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
+            return False
+
         response.raise_for_status()
+
+        # ``Content-Encoding`` (gzip/deflate/br) transforms the body in
+        # transit: requests writes DECODED bytes, while Content-Length and
+        # Range describe the ENCODED representation. So for an encoded response
+        # both byte-resume and the byte-length completeness check are invalid —
+        # a clean end of stream is the only completeness signal (issue #98:
+        # fedoraproject.org/fedora.gpg is gzip-served, which made the length
+        # check report "incomplete" on every otherwise-perfect download).
+        encoding = response.headers.get("content-encoding", "").strip().lower()
+        content_encoded = encoding not in ("", "identity")
+
+        # If we requested a byte range but the server returned an encoded body,
+        # the range applies to encoded bytes we cannot append to decoded
+        # output. Discard the partial and retry fresh (next attempt sees no
+        # partial, sends no Range, and gets a clean full 200).
+        if content_encoded and headers.get("Range"):
+            response.close()
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
+            return False
 
         # A 206 means the server honored our Range request — append. Anything
         # else (200, or no resume requested) means we get the whole body, so
         # start the partial over to avoid a corrupt prefix.
-        resuming = already and response.status_code == 206
+        resuming = bool(already) and response.status_code == 206 and not content_encoded
         if not resuming:
             already = 0
 
-        content_length = int(response.headers.get("content-length", 0))
-        # content-length on a 206 is the size of the *remaining* range, so the
-        # full expected size is the resume offset plus what's left to come.
-        total_size = content_length + already if content_length else 0
+        if content_encoded:
+            # Can't trust Content-Length for an encoded body; rely on the
+            # stream ending cleanly.
+            total_size = 0
+        else:
+            content_length = int(response.headers.get("content-length", 0))
+            # content-length on a 206 is the size of the *remaining* range, so
+            # the full expected size is the resume offset plus what's left.
+            total_size = content_length + already if content_length else 0
 
         block_size = 1024
         mode = "ab" if resuming else "wb"
@@ -359,6 +400,40 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
             raise last_exc
         return False
 
+    @classmethod
+    def _download_or_raise(cls, url: str, destination: str) -> bool:
+        """Download ``url`` to ``destination``, raising a clean ImageError on failure.
+
+        Thin wrapper over :meth:`_download_file` that translates the raw
+        ``requests`` transport/HTTP failures (connection refused, timeouts,
+        a fatal 404/403, exhausted retries) into an :class:`ImageError`
+        carrying the manual-placement workaround, so the CLI boundary can
+        surface a clean message instead of a ``requests`` traceback (issue
+        #98). The bool return (``True`` complete / ``False`` content-length
+        mismatch) passes through unchanged.
+
+        Args:
+            url: HTTP(S) URL to download.
+            destination: Local filesystem path to write to on success.
+
+        Returns:
+            ``True`` on a complete write; ``False`` on a content-length
+            mismatch that survived every retry.
+
+        Raises:
+            ImageError: The download failed with a transport or HTTP error.
+        """
+        try:
+            return cls._download_file(url, destination)
+        except requests.RequestException as exc:
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+            reason = f"HTTP {status}" if status else exc.__class__.__name__
+            raise ImageError(
+                f"Could not download {url} ({reason}). You can place the file "
+                f"manually at {destination} and re-run."
+            ) from exc
+
     def _manage_image_dir(self) -> None:
         """Ensure the cloud-images directory exists, expanding ``~`` if needed."""
         if "~" in self.image_dir:
@@ -375,11 +450,12 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
 
         Creates the cache directory if needed. Returns ``True`` on
         successful download, ``False`` on content-length mismatch.
+
+        Raises:
+            ImageError: The download failed with a transport or HTTP error.
         """
         self._manage_image_dir()
-        if self._download_file(self.image_url, self.image_fpath):
-            return True
-        return False
+        return self._download_or_raise(self.image_url, self.image_fpath)
 
     def download_checksum(self) -> bool:
         """Download the checksum manifest to :attr:`checksum_fpath`.
@@ -387,10 +463,11 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         Returns:
             ``True`` on successful download, ``False`` on content-length
             mismatch.
+
+        Raises:
+            ImageError: The download failed with a transport or HTTP error.
         """
-        if self._download_file(self.checksum_url, self.checksum_fpath):
-            return True
-        return False
+        return self._download_or_raise(self.checksum_url, self.checksum_fpath)
 
     def download_checksum_gpg(self) -> bool:
         """Download the GPG keyring to :attr:`checksum_gpg_fpath`.
@@ -398,10 +475,11 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         Returns:
             ``True`` on successful download, ``False`` on content-length
             mismatch.
+
+        Raises:
+            ImageError: The download failed with a transport or HTTP error.
         """
-        if self._download_file(self.checksum_url_gpg, self.checksum_gpg_fpath):
-            return True
-        return False
+        return self._download_or_raise(self.checksum_url_gpg, self.checksum_gpg_fpath)
 
     def exists_locally(self, file_type: str = "image") -> bool:
         """Check whether one of the on-disk artifacts is already cached.

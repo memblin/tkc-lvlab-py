@@ -30,6 +30,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
+from tkc_lvlab.exceptions import ImageError
 from tkc_lvlab.utils.images import CloudImage
 
 
@@ -48,17 +49,32 @@ class _FakeResponse:
         status_code: int = 200,
         accept_ranges: bool = False,
         http_error: bool = False,
+        content_encoding: str | None = None,
+        content_length: int | None = None,
     ) -> None:
         self._body = body
         self.status_code = status_code
-        self.headers: dict[str, str] = {"content-length": str(len(body))}
+        # ``content_length`` lets a test advertise a length that differs from
+        # the written body — e.g. the COMPRESSED size on a gzip response.
+        length = content_length if content_length is not None else len(body)
+        self.headers: dict[str, str] = {"content-length": str(length)}
         if accept_ranges:
             self.headers["accept-ranges"] = "bytes"
+        if content_encoding:
+            self.headers["content-encoding"] = content_encoding
         self._http_error = http_error
+        self.closed = False
 
     def raise_for_status(self) -> None:
         if self._http_error:
-            raise requests.HTTPError(f"{self.status_code} error")
+            # Mirror requests: the raised HTTPError carries the response, so
+            # callers can read ``exc.response.status_code``.
+            err = requests.HTTPError(f"{self.status_code} error")
+            err.response = self  # type: ignore[attr-defined]
+            raise err
+
+    def close(self) -> None:
+        self.closed = True
 
     def iter_content(self, block_size: int) -> Iterable[bytes]:
         for i in range(0, len(self._body), block_size):
@@ -196,3 +212,101 @@ def test_connection_refused_fails_fast_with_no_retry(tmp_path: Path) -> None:
 
     assert get.call_count == 1
     sleep.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Content-Encoding + 416 + clean error boundary (issue #98)
+# ---------------------------------------------------------------------------
+
+
+def test_gzip_encoded_response_completes_without_false_incomplete(
+    tmp_path: Path,
+) -> None:
+    """A Content-Encoding: gzip response completes without a bogus retry.
+
+    Real-bug surface (issue #98): for a gzip-served file the Content-Length is
+    the COMPRESSED size, but requests writes DECODED bytes, so the byte-length
+    completeness check reported "incomplete" on every perfect download — then
+    the retry sent a Range past EOF and 416'd. The fix skips the length check
+    for content-encoded bodies, so a single clean stream completes.
+    """
+    destination = tmp_path / "fedora.gpg"
+    decoded = b"d" * 4700  # bytes requests actually writes (decoded)
+    # Advertise the COMPRESSED length (smaller) — the trap.
+    resp = _FakeResponse(body=decoded, content_encoding="gzip", content_length=4494)
+
+    with patch("tkc_lvlab.utils.images.requests.get", return_value=resp) as get:
+        with patch("tkc_lvlab.utils.images.time.sleep") as sleep:
+            result = CloudImage._download_file(
+                "https://fedoraproject.example/fedora.gpg", str(destination)
+            )
+
+    assert result is True
+    assert destination.read_bytes() == decoded
+    assert get.call_count == 1  # no bogus "incomplete" retry
+    sleep.assert_not_called()
+    assert not (tmp_path / "fedora.gpg.partial").exists()
+
+
+def test_http_416_on_resume_discards_stale_partial_and_restarts(
+    tmp_path: Path,
+) -> None:
+    """A stale .partial that 416s on resume is discarded; the retry restarts fresh.
+
+    Real-bug surface (issue #98): a leftover/over-long ``.partial`` made the
+    resume send ``Range: bytes=<n>-`` past the resource end; the server's 416
+    was treated as a fatal HTTPError and exploded a traceback. The fix discards
+    the partial on 416 and restarts without a Range.
+    """
+    destination = tmp_path / "image.qcow2"
+    partial = tmp_path / "image.qcow2.partial"
+    partial.write_bytes(b"stale" * 1000)  # 5000 bytes — past the resource end
+    payload = b"y" * 3000
+
+    calls = {"n": 0}
+
+    def fake_get(url, *, stream, timeout, headers):  # noqa: ARG001
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # A partial exists -> we resume with a Range -> server says 416.
+            assert headers.get("Range") == "bytes=5000-"
+            return _FakeResponse(status_code=416)
+        # Retry: the stale partial was discarded, so no Range, full 200.
+        assert "Range" not in headers
+        return _FakeResponse(body=payload)
+
+    with patch("tkc_lvlab.utils.images.requests.get", side_effect=fake_get):
+        with patch("tkc_lvlab.utils.images.time.sleep"):
+            result = CloudImage._download_file(
+                "https://mirror.example/image.qcow2", str(destination)
+            )
+
+    assert result is True
+    assert destination.read_bytes() == payload
+    assert calls["n"] == 2
+    assert not partial.exists()
+
+
+def test_download_or_raise_wraps_http_error_with_workaround(tmp_path: Path) -> None:
+    """A fatal HTTP error surfaces as a clean ImageError naming the workaround.
+
+    Real-bug surface (issue #98): a hard download failure propagated a raw
+    ``requests`` traceback to the CLI. ``_download_or_raise`` (used by every
+    public ``download_*`` method) must translate it into an actionable
+    ImageError that names the URL, the reason, and the manual cache path.
+    """
+    destination = tmp_path / "image.qcow2"
+    not_found = _FakeResponse(status_code=404, http_error=True)
+
+    with patch("tkc_lvlab.utils.images.requests.get", return_value=not_found):
+        with patch("tkc_lvlab.utils.images.time.sleep"):
+            with pytest.raises(ImageError) as excinfo:
+                CloudImage._download_or_raise(
+                    "https://mirror.example/missing.qcow2", str(destination)
+                )
+
+    message = str(excinfo.value)
+    assert "Could not download https://mirror.example/missing.qcow2" in message
+    assert "HTTP 404" in message
+    assert str(destination) in message
+    assert "place the file manually" in message

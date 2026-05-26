@@ -708,7 +708,15 @@ def init() -> None:
     # a list of CloudImages?
     for image_name, image_config in images.items():
         image = CloudImage(image_name, image_config, environment, config_defaults)
-        _init_process_image(image)
+        try:
+            _init_process_image(image)
+        except LvlabError as exc:
+            # Clean boundary (issue #98): a download/verify failure (e.g. a
+            # gzip-served sidecar that 416s, a 404, connection refused) surfaces
+            # as the ImageError's actionable message + workaround, not a
+            # traceback.
+            logger.error("%s", exc)
+            raise typer.Exit(code=1)
         typer.echo()
 
 

@@ -91,6 +91,56 @@ lvlab down salt.local
 Equivalent to `virsh shutdown <domain>` plus a small poll loop. The VM
 stays defined; only the running domain is shut off.
 
+## global
+
+Hypervisor-wide commands that are not scoped to a single `Lvlab.yml` machine.
+
+### global show instances
+
+Print a cross-connection overview of every libvirt domain visible from this
+workstation.
+
+```bash
+lvlab global show instances
+
+# Include an additional remote or custom connection
+lvlab global show instances --uri qemu+ssh://builder.example.com/system
+```
+
+`global show instances` always enumerates `qemu:///system` **and**
+`qemu:///session` — both common local libvirt sockets — so you see rootful
+and rootless VMs in one table without naming either explicitly. Pass `--uri`
+one or more times to add further connections; the fixed pair always appears
+first and duplicates are silently dropped.
+
+**Columns printed:**
+
+| Column           | What it shows                                                                                                                          |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Name             | Libvirt domain name                                                                                                                    |
+| Connection (URI) | The connection the domain was found on                                                                                                 |
+| State            | `virsh domstate` string (`running`, `shut off`, `paused`, …)                                                                           |
+| vCPUs            | Allocated virtual CPU count                                                                                                            |
+| Memory           | Max memory (MiB, or KiB when not a whole-MiB multiple)                                                                                 |
+| Autostart        | Whether the domain auto-starts with the host                                                                                           |
+| Persistent       | Whether the domain is persistent (survives reboot)                                                                                     |
+| In manifest      | Present only when an `Lvlab.yml` is in the current directory — `yes` when the domain matches a manifest entry's `<vm_name>_<env>` name |
+
+The **`In manifest`** column appears automatically when `lvlab global show instances` is run from a directory that contains a readable `Lvlab.yml`. It
+compares every domain name against the namespaced domain names the manifest
+would create (`<vm_name>_<environment_name>`), so you can see at a glance
+which running VMs belong to the current environment. If no `Lvlab.yml` is
+present (or it cannot be parsed), the column is omitted rather than showing
+an all-`no` column.
+
+**Performance guarantee:** only cheap reads are issued — one
+`virsh list --all` plus one `virsh dominfo` per domain. No running guest is
+paused, snapshotted, or polled for live CPU/disk/network stats.
+
+**Unreachable connections:** a connection that cannot be reached (missing
+socket, permission denied, daemon not running) is printed as a dim note and
+skipped; the remaining connections are still shown.
+
 ## hosts
 
 Render an `/etc/hosts` snippet for every machine in the manifest that
@@ -114,6 +164,69 @@ The same snippet is also injected into the **guest's** `/etc/hosts` and
 `/etc/cloud/templates/hosts.{debian,redhat}.tmpl` automatically at
 first-boot via `runcmd`, so VMs come up able to resolve each other by
 hostname.
+
+## images
+
+Cloud-image cache management commands.
+
+### images clean
+
+Remove cloud-image files from the cache that no `images:` entry in the
+current `Lvlab.yml` claims.
+
+```bash
+# Dry run — show what would be removed (default, nothing is deleted)
+lvlab images clean
+
+# Actually remove the unreferenced files
+lvlab images clean --force       # --yes and --delete are accepted aliases
+```
+
+**Dry-run by default.** Without `--force` (or its aliases `--yes` /
+`--delete`), `images clean` only lists the candidates it would remove. Run
+with `--force` once you have reviewed the output.
+
+**What is protected:**
+
+- Every image listed in the manifest's `images:` section — whether or not
+    any machine currently references it. Protection covers the image qcow2,
+    its checksum file, the `.verified` companion written after GPG
+    verification, and the GPG keyring.
+- Any cache image currently used as a qcow2 backing file by an on-disk VM
+    disk (detected via `qemu-img info`). This is a defense-in-depth layer on
+    top of the manifest check: it prevents the cache from being cleaned while
+    a VM whose manifest entry was removed still has a live disk backed by
+    that image.
+
+**Sidecar removal:** when a candidate image is removed, its sidecar files
+(checksum, `.verified`, GPG keyring) are removed at the same time. You will
+not be left with dangling verification artefacts after a cleanup.
+
+**Safety model summary:**
+
+| Scenario                                                   | Behavior                                               |
+| ---------------------------------------------------------- | ------------------------------------------------------ |
+| No `--force`                                               | Dry run — lists candidates, deletes nothing            |
+| `--force`, no lock                                         | Removes all unreferenced files                         |
+| `--force`, `prevent_cloud_image_cleanup: true` in manifest | Exits with code 1, nothing removed                     |
+| Missing or unparseable `Lvlab.yml`                         | Exits with code 1 — refuses to guess what is protected |
+
+**`prevent_cloud_image_cleanup` lock flag:** setting
+`prevent_cloud_image_cleanup: true` in `config_defaults` hard-disables all
+deletion, even when `--force` is passed. This is useful on a shared image
+server where multiple manifests draw from the same cache and you want to
+prevent accidental wipeouts. See [the config reference](#where-things-live-on-disk)
+for placement.
+
+**Example output (dry run):**
+
+```
+Cloud-image cache: /var/lib/libvirt/images/lvlab/cloud-images
+Protected (defined in manifest): /var/lib/libvirt/images/lvlab/cloud-images/debian-12-generic-amd64-20240101-1234.qcow2
+Would remove: /var/lib/libvirt/images/lvlab/cloud-images/fedora-39-cloud-base.qcow2
+  - sidecar: /var/lib/libvirt/images/lvlab/cloud-images/fedora-39-cloud-base.qcow2.Fedora-Cloud-39-1.5-x86_64-CHECKSUM
+Dry run: nothing deleted. Re-run with --force to remove the above.
+```
 
 ## init
 
@@ -143,8 +256,9 @@ prefix prevents a Debian 11 manifest from clobbering a Debian 12
 checksum and vice versa.
 
 The cloud-image directory can be shared between environments — there's
-no need to duplicate images for multiple environments. Cleanup of the
-image cache is currently manual.
+no need to duplicate images for multiple environments. Unreferenced
+images can be removed with [`lvlab images clean`](#images-clean) (dry-run
+by default).
 
 ### Image Naming
 
@@ -386,8 +500,9 @@ you've committed to a shared manifest setup.
 ### deletevm
 
 ```bash
-sudo deletevm testvm.local           # prompts
-sudo deletevm testvm.local --force   # skips the prompt
+sudo deletevm testvm.local                          # tier-1 prompt, then tier-2 if snapshots
+sudo deletevm testvm.local --force                  # skip tier-1; tier-2 still fires if snapshots
+sudo deletevm testvm.local --force --snapshots-too  # fully non-interactive
 ```
 
 `deletevm` looks up exactly the libvirt domain name you pass — no
@@ -399,10 +514,20 @@ its disks live nested elsewhere, so the missing one-off dir is expected
 and undefine is the operative effect. (Use `lvlab destroy` for manifest
 VMs, which resolves names against the current manifest.)
 
-Snapshot fallback: if `virsh undefine` refuses because snapshots exist,
-`deletevm` prompts for confirmation, then deletes them (preferring
-`--children`, falling back to `--metadata` for backing-chain qcow2 cases)
-and retries.
+**Confirmation tiers:** snapshot presence is detected up front (before any
+destructive step) so the prompts can branch correctly:
+
+| Flags                     | Tier-1 ("irreversible, all data lost")          | Tier-2 ("snapshots present; remove them?") |
+| ------------------------- | ----------------------------------------------- | ------------------------------------------ |
+| _(none)_                  | Prompted                                        | Prompted if snapshots exist                |
+| `--force`                 | Skipped if **no** snapshots; prompted otherwise | Prompted if snapshots exist                |
+| `--force --snapshots-too` | Skipped                                         | Skipped                                    |
+
+The rationale for `--force` not fully suppressing tier-2: deleting
+snapshots is an extra-destructive step that `--force` alone does not
+consent to. Pass `--force --snapshots-too` only when you are certain the
+VM and all its snapshots should be removed without any interactive
+confirmation — for example in a scripted teardown.
 
 Storage cleanup runs only on a successful undefine; a failed undefine
 leaves the VM directory in place so you can inspect what went wrong.
@@ -421,3 +546,21 @@ Two paths are configurable in the manifest's `config_defaults`:
 Both directories must be writable by your user if you want to run
 `lvlab` without `sudo`. Pre-create them and `chown` them to your
 user up front.
+
+## config_defaults reference
+
+The following `config_defaults` keys are recognized. Set them under
+`environment[0].config_defaults` in `Lvlab.yml`.
+
+| Key                           | Type    | Default                         | Description                                                                                                                                                                                                                                   |
+| ----------------------------- | ------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cloud_image_basedir`         | string  | `/var/lib/libvirt/images/lvlab` | Root directory for the cloud-image cache. The actual cache lands in `<cloud_image_basedir>/cloud-images/` (the `/cloud-images` suffix is appended automatically unless the path already ends in it).                                          |
+| `disk_image_basedir`          | string  | same as `cloud_image_basedir`   | Root for per-VM qcow2 disks and rendered cloud-init files. Layout: `<basedir>/<environment_name>/<vm_name>/`.                                                                                                                                 |
+| `prevent_cloud_image_cleanup` | boolean | `false`                         | When `true`, `lvlab images clean --force` exits with code 1 and removes nothing. Use on shared image servers or any environment where the cache must not be pruned automatically. Has no effect unless `--force` is passed to `images clean`. |
+| `cpu`                         | integer | —                               | Default vCPU count for every machine. Individual machines can override.                                                                                                                                                                       |
+| `memory`                      | integer | —                               | Default RAM in MiB for every machine. Individual machines can override.                                                                                                                                                                       |
+| `domain`                      | string  | —                               | DNS domain appended to each machine's hostname to form the default FQDN.                                                                                                                                                                      |
+| `os`                          | string  | —                               | Default image key (must match an `images:` entry) for machines that do not specify their own `os`.                                                                                                                                            |
+| `disks`                       | list    | —                               | Default disk list applied to every machine.                                                                                                                                                                                                   |
+| `interfaces`                  | dict    | —                               | Default interface settings (`network`, `network_type`) applied to every machine.                                                                                                                                                              |
+| `cloud_init`                  | dict    | —                               | Default cloud-init settings (`user`, `pubkey`, `sudo`, `shell`) for every machine.                                                                                                                                                            |

@@ -129,19 +129,30 @@ is why custom images must follow that naming convention.
 ## status
 
 Show the configured environment, every machine in the manifest along
-with its current libvirt state, and the cloud images the manifest
-references.
+with its current libvirt state, and the cloud images available to you.
 
 ```bash
 lvlab status
 ```
 
-Machines not present on the hypervisor are reported as `undeployed`.
-Present machines show the lowercase `virsh domstate` string
-(`running`, `shut off`, `paused`, `crashed`, etc.). The
-parenthesized state-reason suffix previous releases printed (e.g.
-`is the machine is running (normal startup from boot)`) was dropped
-in 0.2.x to avoid an N+1 `virsh domstate --reason` call per machine.
+Output is two tables (the shared CLI table style — see
+[`tkc_lvlab.utils.output`](api/utils/output.md)):
+
+- **Machines** — each manifest VM and its state. Machines not present
+    on the hypervisor are reported as `undeployed`; present machines
+    show the lowercase `virsh domstate` string (`running`, `shut off`,
+    `paused`, `crashed`, etc.). The parenthesized state-reason suffix
+    previous releases printed (e.g. `(normal startup from boot)`) was
+    dropped in 0.2.x to avoid an N+1 `virsh domstate --reason` call per
+    machine.
+- **Images** — the built-in default catalog merged with the manifest's
+    `images:` (manifest wins on a name collision), so you see *what
+    images are available to you*, not just what this manifest names.
+    Each row is labelled with its `source` (`manifest` vs `default`)
+    and whether the image is already `cached` on disk.
+
+When stdout is piped or redirected the tables render as plain text
+(no ANSI), widened so long image URLs aren't clipped.
 
 ## ssh-config
 

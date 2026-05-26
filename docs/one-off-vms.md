@@ -49,6 +49,8 @@ sudo createvm testvm.local debian12
 sudo createvm testvm.local debian13 --ip4 192.168.122.50
 
 # Pre-download every catalog image (built-ins + any cwd Lvlab.yml).
+# DEPRECATED: prefer `lvlab init`, which initializes the built-in
+# defaults when there's no Lvlab.yml. This flag still works for now.
 sudo createvm --init-cloud-images
 ```
 
@@ -58,20 +60,20 @@ and must be given together.
 
 ### Flags
 
-| Flag                     | Purpose                                                                                                                                                                                                                                                        |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `VM_NAME` (positional)   | FQDN / domain name for the VM. Required together with `VM_DISTRO`.                                                                                                                                                                                             |
-| `VM_DISTRO` (positional) | Image key, matched case-insensitively against the built-in catalog (`debian11`, `debian12`, `debian13`, `almalinux9`, `almalinux10`, `ubuntu2204`, `ubuntu2404`, `fedora44`) merged with any `images:` in a cwd `Lvlab.yml`. Required together with `VM_NAME`. |
-| `--ip4`                  | Optional static IPv4. Accepts `IP` (uses `--network`) or `NETWORK,IP`. Validated against the network's subnet AND DHCP range, then rendered into the guest's cloud-init network-config. For DHCP, pass `dhcp` (or `default` / `auto`) or omit the flag.        |
-| `--netmask`              | CIDR prefix appended to `--ip4` when it lacks one. Default `24`.                                                                                                                                                                                               |
-| `--disk-size`            | qcow2 disk size. Default `35G`.                                                                                                                                                                                                                                |
-| `--cpu`                  | vCPU count. Default `2`.                                                                                                                                                                                                                                       |
-| `--memory`               | RAM, optional unit suffix (`2048`, `2G`, `512M`). Default `2048` (MiB).                                                                                                                                                                                        |
-| `--network`              | libvirt network name. Default `default` (the stock NAT).                                                                                                                                                                                                       |
-| `--public-key`           | Optional extra SSH public key file (appended after discovered defaults).                                                                                                                                                                                       |
-| `--init-cloud-images`    | Download every catalog image that isn't cached. With no positional args, exits after; with them, pre-fetches then creates.                                                                                                                                     |
-| `--config`               | Path to a specific `Lvlab.yml` whose `images:` are merged into the catalog, instead of the cwd lookup.                                                                                                                                                         |
-| `--version` / `-V`       | Print the installed `tkc-lvlab` version and exit.                                                                                                                                                                                                              |
+| Flag                     | Purpose                                                                                                                                                                                                                                                               |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VM_NAME` (positional)   | FQDN / domain name for the VM. Required together with `VM_DISTRO`.                                                                                                                                                                                                    |
+| `VM_DISTRO` (positional) | Image key, matched case-insensitively against the built-in catalog (`debian11`, `debian12`, `debian13`, `almalinux9`, `almalinux10`, `ubuntu2204`, `ubuntu2404`, `fedora44`) merged with any `images:` in a cwd `Lvlab.yml`. Required together with `VM_NAME`.        |
+| `--ip4`                  | Optional static IPv4. Accepts `IP` (uses `--network`) or `NETWORK,IP`. Validated against the network's subnet AND DHCP range, then rendered into the guest's cloud-init network-config. For DHCP, pass `dhcp` (or `default` / `auto`) or omit the flag.               |
+| `--netmask`              | CIDR prefix appended to `--ip4` when it lacks one. Default `24`.                                                                                                                                                                                                      |
+| `--disk-size`            | qcow2 disk size. Default `35G`.                                                                                                                                                                                                                                       |
+| `--cpu`                  | vCPU count. Default `2`.                                                                                                                                                                                                                                              |
+| `--memory`               | RAM, optional unit suffix (`2048`, `2G`, `512M`). Default `2048` (MiB).                                                                                                                                                                                               |
+| `--network`              | libvirt network name. Default `default` (the stock NAT).                                                                                                                                                                                                              |
+| `--public-key`           | Optional extra SSH public key file (appended after discovered defaults).                                                                                                                                                                                              |
+| `--init-cloud-images`    | **Deprecated** — prefer `lvlab init` (the single image-init path; it initializes the built-in defaults with no `Lvlab.yml`). Still works: downloads every catalog image that isn't cached. With no positional args, exits after; with them, pre-fetches then creates. |
+| `--config`               | Path to a specific `Lvlab.yml` whose `images:` are merged into the catalog, instead of the cwd lookup.                                                                                                                                                                |
+| `--version` / `-V`       | Print the installed `tkc-lvlab` version and exit.                                                                                                                                                                                                                     |
 
 `createvm` attaches the guest to a managed libvirt network
 (`--network network=<name>,model=virtio`), defaulting to the stock NAT

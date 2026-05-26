@@ -1055,7 +1055,10 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     init_cloud_images: bool = typer.Option(
         False,
         "--init-cloud-images",
-        help="Download any missing cloud images before VM creation.",
+        help=(
+            "Download any missing cloud images before VM creation. "
+            "DEPRECATED: prefer 'lvlab init' (the single image-init path)."
+        ),
     ),
     config_path: Path | None = typer.Option(
         None,
@@ -1093,6 +1096,15 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         _fail(str(exc))
 
     if init_cloud_images:
+        # Deprecated in favour of `lvlab init`, which is now the single
+        # image-init path and also initializes the built-in defaults when no
+        # Lvlab.yml is present (issue #97). Kept working for compatibility.
+        typer.secho(
+            "Note: 'createvm --init-cloud-images' is deprecated; use 'lvlab init' "
+            "instead (it initializes the built-in defaults with no Lvlab.yml). "
+            "This flag still works for now.",
+            fg=typer.colors.YELLOW,
+        )
         _initialize_cloud_images(catalog)
         if not has_all_vm_args:
             typer.secho("Cloud images initialized.", fg=typer.colors.GREEN)

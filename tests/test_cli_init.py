@@ -165,3 +165,49 @@ def test_init_handles_parse_failure_via_configerror() -> None:
 
     assert result.exit_code == 1
     mocked_logger.error.assert_called_with("Could not parse config file.")
+
+
+# ---------------------------------------------------------------------------
+# No-manifest built-in default catalog (issue #97)
+# ---------------------------------------------------------------------------
+
+
+def test_init_with_no_manifest_initializes_builtin_defaults() -> None:
+    """`lvlab init` with no Lvlab.yml downloads the built-in default catalog.
+
+    Previously this errored (parse_config -> None -> exit 1), forcing users to
+    `createvm --init-cloud-images`. Now it initializes BUILTIN_IMAGES.
+    """
+    from tkc_lvlab.utils.catalog import BUILTIN_IMAGES
+
+    runner = CliRunner()
+    images = [
+        _mock_image(name, has_gpg=False, has_checksum=False) for name in BUILTIN_IMAGES
+    ]
+    with (
+        mock.patch.object(cli, "parse_config", return_value=None),
+        mock.patch.object(cli, "CloudImage", side_effect=images) as cloud_image_cls,
+    ):
+        result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0, result.output
+    # One CloudImage per built-in, named for the catalog keys.
+    assert cloud_image_cls.call_count == len(BUILTIN_IMAGES)
+    built_names = [c.args[0] for c in cloud_image_cls.call_args_list]
+    assert set(built_names) == set(BUILTIN_IMAGES)
+    # Each image was fetched (not local in this test).
+    for img in images:
+        img.download_image.assert_called_once()
+
+
+def test_init_with_no_manifest_still_fails_on_bad_manifest() -> None:
+    """A structurally invalid manifest still fails loudly (not the None path)."""
+    runner = CliRunner()
+    with (
+        mock.patch.object(cli, "parse_config", side_effect=ConfigError("boom")),
+        mock.patch.object(cli, "CloudImage") as cloud_image_cls,
+    ):
+        result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    cloud_image_cls.assert_not_called()

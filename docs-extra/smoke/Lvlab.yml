@@ -12,6 +12,10 @@ environment:
     config_defaults:
       domain: local
       cpu: 1
+      # Fallback only — each machine pins its own minimized per-distro memory
+      # below (smallest reliable footprint per distro's documented floor,
+      # never under 512 MiB). Debian 512 / Ubuntu 1024 / AlmaLinux 1536 /
+      # Fedora 2048. See the retest footprint plan.
       memory: 1024
       disks:
         - name: primary
@@ -32,6 +36,7 @@ environment:
       - vm_name: deb12-static
         hostname: deb12-static
         os: debian12
+        memory: 512
         interfaces:
           - name: eth0
             ip4: 192.168.122.190/24
@@ -39,6 +44,7 @@ environment:
       - vm_name: deb12-dhcp
         hostname: deb12-dhcp
         os: debian12
+        memory: 512
         interfaces:
           - name: eth0
 
@@ -46,6 +52,7 @@ environment:
       - vm_name: deb13-static
         hostname: deb13-static
         os: debian13
+        memory: 512
         interfaces:
           - name: eth0
             ip4: 192.168.122.191/24
@@ -53,6 +60,7 @@ environment:
       - vm_name: deb13-dhcp
         hostname: deb13-dhcp
         os: debian13
+        memory: 512
         interfaces:
           - name: eth0
 
@@ -60,6 +68,7 @@ environment:
       - vm_name: deb11-static
         hostname: deb11-static
         os: debian11
+        memory: 512
         interfaces:
           - name: eth0
             ip4: 192.168.122.194/24
@@ -67,6 +76,7 @@ environment:
       - vm_name: deb11-dhcp
         hostname: deb11-dhcp
         os: debian11
+        memory: 512
         interfaces:
           - name: eth0
 
@@ -74,6 +84,7 @@ environment:
       - vm_name: fed44-static
         hostname: fed44-static
         os: fedora44
+        memory: 2048
         interfaces:
           - name: eth0
             ip4: 192.168.122.192/24
@@ -81,6 +92,7 @@ environment:
       - vm_name: fed44-dhcp
         hostname: fed44-dhcp
         os: fedora44
+        memory: 2048
         interfaces:
           - name: eth0
 
@@ -88,6 +100,7 @@ environment:
       - vm_name: alma10-static
         hostname: alma10-static
         os: almalinux10
+        memory: 1536
         interfaces:
           - name: eth0
             ip4: 192.168.122.193/24
@@ -95,6 +108,7 @@ environment:
       - vm_name: alma10-dhcp
         hostname: alma10-dhcp
         os: almalinux10
+        memory: 1536
         interfaces:
           - name: eth0
 
@@ -102,6 +116,7 @@ environment:
       - vm_name: alma9-static
         hostname: alma9-static
         os: almalinux9
+        memory: 1536
         interfaces:
           - name: eth0
             ip4: 192.168.122.195/24
@@ -109,6 +124,7 @@ environment:
       - vm_name: alma9-dhcp
         hostname: alma9-dhcp
         os: almalinux9
+        memory: 1536
         interfaces:
           - name: eth0
 
@@ -116,6 +132,7 @@ environment:
       - vm_name: ubuntu2204-static
         hostname: ubuntu2204-static
         os: ubuntu2204
+        memory: 1024
         interfaces:
           - name: eth0
             ip4: 192.168.122.196/24
@@ -123,6 +140,7 @@ environment:
       - vm_name: ubuntu2204-dhcp
         hostname: ubuntu2204-dhcp
         os: ubuntu2204
+        memory: 1024
         interfaces:
           - name: eth0
 
@@ -130,6 +148,7 @@ environment:
       - vm_name: ubuntu2404-static
         hostname: ubuntu2404-static
         os: ubuntu2404
+        memory: 1024
         interfaces:
           - name: eth0
             ip4: 192.168.122.197/24
@@ -137,6 +156,7 @@ environment:
       - vm_name: ubuntu2404-dhcp
         hostname: ubuntu2404-dhcp
         os: ubuntu2404
+        memory: 1024
         interfaces:
           - name: eth0
 

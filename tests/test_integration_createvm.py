@@ -74,6 +74,24 @@ _DELETEVM_TIMEOUT_SECONDS = 120
 # so a larger virtual size costs nothing on disk beyond the copied base.
 _TEST_DISK_SIZE = "12G"
 
+# Minimized per-distro guest memory (MiB) for the integration matrix:
+# the smallest reliable footprint per distro's documented floor, never
+# below 512. Debian cloud images boot happily at 512; Ubuntu's cloud
+# images want ~1 GiB; AlmaLinux's docs floor is 1.5 GiB; Fedora Cloud's
+# is 2 GiB. Keyed by BUILTIN_IMAGES distro; _DEFAULT_TEST_MEMORY covers
+# any future catalog addition until it gets its own tuned value.
+_DEFAULT_TEST_MEMORY = "1024"
+_TEST_MEMORY_BY_DISTRO = {
+    "debian11": "512",
+    "debian12": "512",
+    "debian13": "512",
+    "ubuntu2204": "1024",
+    "ubuntu2404": "1024",
+    "almalinux9": "1536",
+    "almalinux10": "1536",
+    "fedora44": "2048",
+}
+
 
 def _env_subset(env_var: str, allowed: Sequence[str]) -> list[str]:
     """Return ``allowed`` filtered by a comma-separated env var (or all).
@@ -164,7 +182,7 @@ def test_createvm_connectivity_and_deletevm(
         "--public-key",
         str(test_ssh_pubkey_path),
         "--memory",
-        "1024",
+        _TEST_MEMORY_BY_DISTRO.get(distro, _DEFAULT_TEST_MEMORY),
         "--cpu",
         "1",
         "--disk-size",

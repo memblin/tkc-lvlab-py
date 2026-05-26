@@ -1,7 +1,7 @@
-"""Shared cloud-image entry resolution for both deploy paths.
+"""Shared cloud-image catalog + entry resolution for both deploy paths.
 
-A cloud image is described the same way everywhere — in
-:data:`tkc_lvlab.scripts.createvm.BUILTIN_IMAGES`, in an ``Lvlab.yml``
+A cloud image is described the same way everywhere — in the built-in
+:data:`BUILTIN_IMAGES` catalog (defined here), in an ``Lvlab.yml``
 ``images:`` entry, and in the smoke manifest. This module turns one such
 description plus its key into a fully-resolved :class:`ImageEntry`, with
 two fields derived from the key unless the entry overrides them:
@@ -156,3 +156,172 @@ def build_image_entry(key: str, cfg: dict[str, Any]) -> ImageEntry:
         os_variant=derive_os_variant(key, cfg.get("os_variant")),
         default_username=derive_username(key, cfg.get("username")),
     )
+
+
+# ---------------------------------------------------------------------------
+# Built-in cloud-image catalog
+# ---------------------------------------------------------------------------
+
+
+# Built-in cloud images resolvable out of the box by both the standalone
+# ``createvm`` script (via ``VM_DISTRO``) and ``lvlab init`` when no
+# manifest is present. Each value uses the **same schema as an
+# ``Lvlab.yml`` ``images:`` entry** so the built-in catalog and a cwd
+# manifest merge through one code path (:func:`resolve_catalog`). The
+# optional ``os_variant`` / ``username`` keys are omitted here: they're
+# derived from the key (debian12 -> debian12 / debian) via
+# :func:`build_image_entry` and only need to appear when the derivation is
+# wrong (both createvm and ``lvlab up`` honour them — see this module).
+#
+# The ``refresh-cloud-images`` skill under ``.claude/skills/`` keeps these
+# in sync with upstream and surfaces new-major / EOL drift.
+BUILTIN_IMAGES: dict[str, dict[str, Any]] = {
+    "debian12": {
+        "image_url": (
+            "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/"
+            "debian-12-generic-amd64-20260518-2482.qcow2"
+        ),
+        "checksum_url": (
+            "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/SHA512SUMS"
+        ),
+        "checksum_type": "sha512",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+    },
+    "debian13": {
+        "image_url": (
+            "https://cloud.debian.org/images/cloud/trixie/latest/"
+            "debian-13-generic-amd64.qcow2"
+        ),
+        "checksum_url": "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
+        "checksum_type": "sha512",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+    },
+    "fedora44": {
+        "image_url": (
+            "https://download.fedoraproject.org/pub/fedora/linux/releases/44/"
+            "Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
+        ),
+        "checksum_url": (
+            "https://download.fedoraproject.org/pub/fedora/linux/releases/44/"
+            "Cloud/x86_64/images/Fedora-Cloud-44-1.7-x86_64-CHECKSUM"
+        ),
+        "checksum_type": "sha256",
+        "checksum_url_gpg": "https://fedoraproject.org/fedora.gpg",
+        "network_version": 2,
+    },
+    "almalinux10": {
+        "image_url": (
+            "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/"
+            "AlmaLinux-10-GenericCloud-latest.x86_64.qcow2"
+        ),
+        "checksum_url": (
+            "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/CHECKSUM"
+        ),
+        "checksum_type": "sha256",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+    },
+    "almalinux9": {
+        "image_url": (
+            "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/"
+            "AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"
+        ),
+        "checksum_url": (
+            "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/CHECKSUM"
+        ),
+        "checksum_type": "sha256",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+    },
+    "debian11": {
+        "image_url": (
+            "https://cloud.debian.org/images/cloud/bullseye/20260518-2482/"
+            "debian-11-generic-amd64-20260518-2482.qcow2"
+        ),
+        "checksum_url": (
+            "https://cloud.debian.org/images/cloud/bullseye/20260518-2482/SHA512SUMS"
+        ),
+        "checksum_type": "sha512",
+        "checksum_url_gpg": None,
+        # Debian 11 stays on network-config v1 (ENI): the v2/netplan path
+        # stalls networking.service ~5 min via the ifupdown DHCPv6 hang.
+        "network_version": 1,
+    },
+    # Ubuntu publishes its cloud image as a ``.img`` (still qcow2 inside),
+    # checksums as ``hex *filename`` (binary marker), and a *detached* GPG
+    # signature (``SHA256SUMS.gpg``) that our clearsign verifier can't use
+    # — so ``checksum_url_gpg`` is left unset. The key ``ubuntu2204`` would
+    # derive the osinfo-unknown ``ubuntu2204``, so pin ``os_variant``.
+    "ubuntu2204": {
+        "image_url": (
+            "https://cloud-images.ubuntu.com/jammy/current/"
+            "jammy-server-cloudimg-amd64.img"
+        ),
+        "checksum_url": "https://cloud-images.ubuntu.com/jammy/current/SHA256SUMS",
+        "checksum_type": "sha256",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+        "os_variant": "ubuntu22.04",
+    },
+    "ubuntu2404": {
+        "image_url": (
+            "https://cloud-images.ubuntu.com/noble/current/"
+            "noble-server-cloudimg-amd64.img"
+        ),
+        "checksum_url": "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
+        "checksum_type": "sha256",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+        "os_variant": "ubuntu24.04",
+    },
+}
+
+
+def resolve_catalog(
+    manifest_images: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Merge the built-in catalog with a manifest's ``images:`` section.
+
+    Args:
+        manifest_images: The ``images:`` map from an ``Lvlab.yml``, or
+            ``None`` when no manifest is present.
+
+    Returns:
+        A new dict of ``{name: image_config}``. Manifest entries override
+        built-ins on a name collision; built-in names not redefined by the
+        manifest remain resolvable.
+    """
+    catalog: dict[str, dict[str, Any]] = {
+        name: dict(cfg) for name, cfg in BUILTIN_IMAGES.items()
+    }
+    if manifest_images:
+        for name, cfg in manifest_images.items():
+            catalog[name] = dict(cfg)
+    return catalog
+
+
+def resolve_image_entry(distro: str, catalog: dict[str, dict[str, Any]]) -> ImageEntry:
+    """Resolve a ``VM_DISTRO`` value against a merged catalog.
+
+    Matching is case-insensitive. ``os_variant`` and ``default_username``
+    are taken from the source dict when present, else derived from the key.
+
+    Args:
+        distro: The user-supplied ``VM_DISTRO`` value.
+        catalog: A merged catalog from :func:`resolve_catalog`.
+
+    Returns:
+        A fully-populated :class:`ImageEntry`.
+
+    Raises:
+        ValueError: ``distro`` isn't in the catalog (message lists the
+            available names).
+    """
+    index = {name.lower(): name for name in catalog}
+    real_key = index.get(distro.lower())
+    if real_key is None:
+        available = ", ".join(sorted(catalog))
+        raise ValueError(f"Unknown distro '{distro}'. Available: {available}")
+    return build_image_entry(real_key, catalog[real_key])

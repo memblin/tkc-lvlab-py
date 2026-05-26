@@ -96,6 +96,8 @@ nav:
           - images: api/utils/images.md
           - cloud_init: api/utils/cloud_init.md
           - libvirt: api/utils/libvirt.md
+          - catalog: api/utils/catalog.md
+          - output: api/utils/output.md
       - scripts:
           - createvm: api/scripts/createvm.md
           - deletevm: api/scripts/deletevm.md

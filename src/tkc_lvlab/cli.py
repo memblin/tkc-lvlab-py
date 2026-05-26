@@ -30,12 +30,15 @@ module does not flow through them.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from ._logging import configure_logging, get_logger
+from .utils.catalog import resolve_catalog
+from .utils.output import get_console, styled_table
 from .config import (
     ConfigManager,
     parse_config,
@@ -64,7 +67,6 @@ from .utils.virsh import (
     DOMSTATE_RUNNING,
     DomInfo,
     VirshError,
-    humanize_state,
     virsh_capabilities,
     virsh_dominfo,
     virsh_domstate,
@@ -948,14 +950,21 @@ def status() -> None:
     (e.g. ``the machine is running (normal startup from boot)``) has
     been dropped to avoid an N+1 ``virsh domstate --reason`` call per
     machine.
+
+    Issue #103 reshaped the output into the shared-style tables (see
+    :mod:`tkc_lvlab.utils.output`): a Machines table (VM + state) and an
+    Images table that merges the built-in default catalog with the
+    manifest's ``images:`` — labelling each image's source (``manifest``
+    vs ``default``) and whether it's cached on disk — so defaults show
+    up even when the manifest doesn't reference them.
     """
-    environment, images, _, machines = _load_config().as_tuple()
+    environment, images, config_defaults, machines = _load_config().as_tuple()
 
     uri = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
     env_name = environment.get("name", "no-name-lvlab")
 
-    typer.echo()
-    typer.echo(f"LvLab Environment Name: {env_name}\n")
+    console = get_console()
+    console.print(f"\nLvLab Environment Name: {env_name}\n")
 
     try:
         current_vms = virsh_list_all_names(uri)
@@ -963,29 +972,81 @@ def status() -> None:
         logger.error("Failed to list domains at %s: %s", uri, exc)
         raise typer.Exit(code=1)
 
-    typer.echo("Machines Defined:\n")
+    machines_table = styled_table(title="Machines")
+    machines_table.add_column("VM", style="bold")
+    machines_table.add_column("State")
     for machine in machines:
-        libvirt_vm_name = f"{machine['vm_name']}_{env_name}"
+        vm_name = machine["vm_name"]
+        libvirt_vm_name = f"{vm_name}_{env_name}"
         if libvirt_vm_name in current_vms:
             try:
                 state = virsh_domstate(uri, libvirt_vm_name)
             except VirshError as exc:
                 logger.error("Failed to query state for %s: %s", libvirt_vm_name, exc)
-                typer.echo(f"  - {machine['vm_name']} is unknown (virsh error)")
+                machines_table.add_row(vm_name, "unknown (virsh error)")
                 continue
-            human_state, _ = humanize_state(state, "")
-            typer.echo(f"  - {machine['vm_name']} is {human_state}")
+            machines_table.add_row(vm_name, state)
         else:
-            typer.echo(f"  - {machine['vm_name']} is undeployed")
+            machines_table.add_row(vm_name, "undeployed")
+    console.print(machines_table)
 
-    typer.echo()
-    typer.echo("Images Used:\n")
-    for image_name, image_data in images.items():
-        typer.echo(
-            f"  - {image_name} from {image_data.get('image_url', 'Missing Image URL.')}"
-        )
+    console.print()
+    console.print(_build_images_table(images, environment, config_defaults))
+    console.print()
 
-    typer.echo()
+
+def _build_images_table(
+    images: dict[str, Any] | None,
+    environment: dict[str, Any],
+    config_defaults: dict[str, Any],
+) -> Table:
+    """Build the ``status`` Images table: built-in defaults merged with the manifest.
+
+    Merges the built-in catalog (:data:`tkc_lvlab.utils.catalog.BUILTIN_IMAGES`)
+    with the manifest's ``images:`` — manifest wins on a name collision —
+    so built-in defaults are listed even when the manifest doesn't
+    reference them (``status`` answers "what images are available", not
+    just "what this manifest names"). Each row is labelled with its source
+    (``manifest`` vs ``default``) and whether the image is already cached
+    on disk.
+
+    Args:
+        images: The manifest's ``images:`` dict, or ``None`` when absent.
+        environment: The manifest's ``environment[0]`` dict (passed
+            through to :class:`~tkc_lvlab.utils.images.CloudImage`).
+        config_defaults: The manifest's ``config_defaults`` dict (supplies
+            ``cloud_image_basedir`` for the cache-path lookup).
+
+    Returns:
+        A populated :class:`rich.table.Table` titled ``Images``.
+    """
+    manifest_names = set(images or {})
+    catalog = resolve_catalog(images)
+
+    table = styled_table(title="Images")
+    table.add_column("image", style="bold")
+    table.add_column("source")
+    table.add_column("cached")
+    table.add_column("url")
+
+    for name in sorted(catalog):
+        cfg = catalog[name]
+        source = "manifest" if name in manifest_names else "default"
+        url = cfg.get("image_url")
+        if url:
+            cached = (
+                "yes"
+                if CloudImage(name, cfg, environment, config_defaults).exists_locally(
+                    "image"
+                )
+                else "no"
+            )
+        else:
+            url = "(missing image_url)"
+            cached = "?"
+        table.add_row(name, source, cached, url)
+
+    return table
 
 
 @app.command()
@@ -1206,17 +1267,12 @@ def _global_collect_instances(
 def _global_console() -> Console:
     """Return a Console that does not truncate the instances table.
 
-    Rich defaults a non-interactive Console (piped output, the test runner) to
-    80 columns and *truncates* table cells that overflow — which would clip
-    long domain names and connection URIs. When attached to a terminal we honor
-    its width; otherwise we widen enough that the table renders in full. The
-    ``COLUMNS`` env var still wins if the user sets it.
+    Thin wrapper over the shared :func:`tkc_lvlab.utils.output.get_console`
+    (issue #103): a non-interactive console is widened so long domain
+    names and connection URIs aren't clipped, while a real terminal's
+    width and a user-set ``COLUMNS`` are honored.
     """
-    console = Console()
-    if not console.is_terminal and "COLUMNS" not in os.environ:
-        # Wide enough for Name + URI + every metric column without clipping.
-        return Console(width=200)
-    return console
+    return get_console()
 
 
 def _global_format_memory(max_memory_kib: int | None) -> str:

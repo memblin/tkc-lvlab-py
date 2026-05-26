@@ -456,6 +456,7 @@ class _CloudInitComposer:
         cloud_image: "CloudImage",
         config_defaults: dict[str, Any],
         machines: list[dict[str, Any]] | None = None,
+        password_hash: str | None = None,
     ) -> tuple[str, str, str]:
         """Render the three cloud-init documents to disk.
 
@@ -470,6 +471,11 @@ class _CloudInitComposer:
             machines: The manifest's ``machines`` list for the ``/etc/hosts``
                 render. ``None`` triggers a one-time :func:`parse_config`
                 fallback.
+            password_hash: A generated SHA-512-crypt console password hash
+                to inject as ``users[*].passwd`` (issue #106). Only applied
+                when the merged ``cloud_init`` has no explicit ``passwd`` —
+                a manifest-configured password always wins. ``None`` injects
+                nothing (key-only VM).
 
         Returns:
             ``(meta_data_path, user_data_path, network_config_path)``.
@@ -503,6 +509,12 @@ class _CloudInitComposer:
         # using the same derivation createvm applies. An explicit
         # cloud_init.user still wins.
         cloud_init_config.setdefault("user", cloud_image.default_username)
+        # Inject a generated one-time console password hash (issue #106) only
+        # when the manifest didn't configure one — an explicit cloud_init.passwd
+        # always wins, and password_hash=None (opt-out / key-only) injects
+        # nothing.
+        if password_hash is not None:
+            cloud_init_config.setdefault("passwd", password_hash)
 
         # The CLI passes the already-parsed machines list so the manifest is
         # read once per command path. The None fallback re-parses only for
@@ -808,6 +820,7 @@ class Machine:
         cloud_image: "CloudImage",
         config_defaults: dict[str, Any],
         machines: list[dict[str, Any]] | None = None,
+        password_hash: str | None = None,
     ) -> tuple[str, str, str]:
         """Render this machine's three cloud-init documents to disk.
 
@@ -834,6 +847,10 @@ class Machine:
                 the manifest is not re-read here. When ``None`` (a
                 convenience fallback for callers without the list handy), the
                 manifest is parsed once via :func:`parse_config`.
+            password_hash: Optional SHA-512-crypt console password hash to
+                inject as ``users[*].passwd`` (issue #106). Applied only when
+                the manifest has no explicit ``cloud_init.passwd``; ``None``
+                injects nothing.
 
         Returns:
             ``(meta_data_path, user_data_path, network_config_path)`` —
@@ -851,7 +868,9 @@ class Machine:
                 structurally invalid). The CLI boundary converts it to a
                 ``typer.Exit``.
         """
-        return self._composer().render(cloud_image, config_defaults, machines)
+        return self._composer().render(
+            cloud_image, config_defaults, machines, password_hash=password_hash
+        )
 
     def _composer(self) -> _CloudInitComposer:
         """Return this machine's cloud-init composer, building one if absent.

@@ -94,3 +94,54 @@ def styled_table(title: str | None = None, *, box: Box = SQUARE) -> Table:
         header_style="bold cyan",
         title_justify="left",
     )
+
+
+def render_one_time_password(
+    password_plain: str, *, console: Console | None = None
+) -> None:
+    """Print a one-time console password block (shown once, not retrievable).
+
+    Shared by ``createvm`` and ``lvlab up`` so both surface a generated
+    console password identically (issue #106). The plaintext is written to
+    stdout exactly once and never logged.
+
+    Args:
+        password_plain: The plaintext password phrase to display.
+        console: Console to print to; defaults to the shared console.
+    """
+    console = console or get_console()
+    console.print(
+        "One-time VM password (shown once and not retrievable later):",
+        style="yellow",
+    )
+    console.print(password_plain, style="bold yellow")
+    console.print()
+
+
+def render_ssh_hint(
+    username: str, ip: str | None, *, console: Console | None = None
+) -> None:
+    """Print an example SSH command, or a hint for finding the address.
+
+    Shared by ``createvm`` and ``lvlab up`` (issue #106). When ``ip`` is
+    known (a static address or a resolved DHCP lease) it prints a ready
+    ``ssh user@ip`` line; otherwise it points the operator at how to find
+    the address.
+
+    Args:
+        username: The first-boot account to SSH in as.
+        ip: The resolved IPv4 address, or ``None`` when unknown.
+        console: Console to print to; defaults to the shared console.
+    """
+    console = console or get_console()
+    if ip:
+        console.print("Example SSH command:", style="blue")
+        console.print(f"  $ ssh {username}@{ip}", style="green")
+    else:
+        console.print(
+            "Once it finishes booting, find its address (e.g. "
+            "`lvlab global show instances`), then:",
+            style="blue",
+        )
+        console.print(f"  $ ssh {username}@<ip>", style="green")
+    console.print()

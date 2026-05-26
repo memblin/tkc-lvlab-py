@@ -60,12 +60,14 @@ def _patch_collaborators():
     return network_obj, metadata_obj, userdata_obj, cloud_image
 
 
-def _run_cloud_init(machine, config_defaults, userdata_capture: list):
+def _run_cloud_init(machine, config_defaults, userdata_capture: list, **kwargs):
     """Invoke ``machine.cloud_init`` with all rendering + IO collaborators stubbed.
 
     ``userdata_capture`` is a list the test passes in; the patched
     ``UserData`` mock appends the cloud_init_config kwarg it was
-    constructed with so the test can assert on the merged config.
+    constructed with so the test can assert on the merged config. Extra
+    ``kwargs`` (e.g. ``password_hash``) are forwarded to
+    :meth:`Machine.cloud_init`.
     """
     network_obj, metadata_obj, userdata_obj, cloud_image = _patch_collaborators()
 
@@ -88,7 +90,7 @@ def _run_cloud_init(machine, config_defaults, userdata_capture: list):
             ),
         ),
     ):
-        return machine.cloud_init(cloud_image, config_defaults)
+        return machine.cloud_init(cloud_image, config_defaults, **kwargs)
 
 
 def test_cloud_init_writes_three_files_to_config_fpath(tmp_path: Path) -> None:
@@ -296,3 +298,39 @@ def test_cloud_init_falls_back_to_parse_config_when_machines_none(
         machine.cloud_init(cloud_image, {"cloud_init": {}})
 
     parse_config_mock.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# One-time console password injection (issue #106)
+# ---------------------------------------------------------------------------
+
+
+def test_cloud_init_injects_generated_password_hash(tmp_path: Path) -> None:
+    """A password_hash with no manifest passwd lands in the merged config."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {}
+    captured: list = []
+    _run_cloud_init(
+        machine, {"cloud_init": {}}, captured, password_hash="$6$rounds=4096$abc$xyz"
+    )
+    assert captured[0].get("passwd") == "$6$rounds=4096$abc$xyz"
+
+
+def test_cloud_init_manifest_passwd_wins_over_generated(tmp_path: Path) -> None:
+    """An explicit manifest passwd is never overwritten by a generated one."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {"passwd": "$6$manifest$set"}
+    captured: list = []
+    _run_cloud_init(
+        machine, {"cloud_init": {}}, captured, password_hash="$6$generated$ignored"
+    )
+    assert captured[0].get("passwd") == "$6$manifest$set"
+
+
+def test_cloud_init_no_password_hash_injects_nothing(tmp_path: Path) -> None:
+    """password_hash=None (opt-out / key-only) leaves passwd unset."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {}
+    captured: list = []
+    _run_cloud_init(machine, {"cloud_init": {}}, captured, password_hash=None)
+    assert "passwd" not in captured[0]

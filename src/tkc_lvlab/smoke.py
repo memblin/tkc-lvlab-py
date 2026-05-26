@@ -38,18 +38,21 @@ authoritative source — plus a per-distro overhead allowance from
 
 from __future__ import annotations
 
+import concurrent.futures
 import dataclasses
 import json
 import os
 import platform
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Sequence
 
 import yaml
+from rich.live import Live
 
 from ._logging import get_logger
 from .config import parse_config
@@ -58,6 +61,7 @@ from .utils.catalog import derive_username
 from .utils.images import CloudImage
 from .utils.libvirt import Machine
 from .utils.network import LibvirtNetworkInfo, get_network_info
+from .utils.output import get_console, is_tty, styled_table
 from .utils.virsh import VirshError, run_virsh
 
 logger = get_logger(__name__)
@@ -896,6 +900,110 @@ def _ssh_probe(
     )
 
 
+# ---------------------------------------------------------------------------
+# Live status table (issue #101)
+# ---------------------------------------------------------------------------
+
+
+class SmokePhase:
+    """The per-case phases shown in the live smoke table (issue #101)."""
+
+    PENDING = "pending"
+    UP = "up"
+    BOOTING = "booting"
+    VERIFYING = "verifying"
+    TEARDOWN = "tearing down"
+    PASS = "PASS"
+    FAIL = "FAIL"
+
+    #: Phases that mean the case is finished (for the running/done footer tally).
+    TERMINAL = frozenset({PASS, FAIL})
+
+
+@dataclass
+class _CaseProgress:
+    """Mutable per-case row state for the live table."""
+
+    vm_name: str
+    mode: str
+    ip: str | None = None
+    phase: str = SmokePhase.PENDING
+
+
+class SmokeProgress:
+    """Thread-safe per-case phase tracker driving the live smoke table.
+
+    Cases run in concurrent batches, so worker threads advance phases
+    through the locked setters while the main thread reads consistent
+    snapshots to render (issue #101) — every Rich call stays on the main
+    thread.
+    """
+
+    def __init__(self, cases: Sequence[SmokeCase]) -> None:
+        self._lock = threading.Lock()
+        self._order = [c.vm_name for c in cases]
+        self._states = {
+            c.vm_name: _CaseProgress(c.vm_name, c.mode, c.static_ip) for c in cases
+        }
+
+    def set_phase(self, vm_name: str, phase: str) -> None:
+        """Advance a case to ``phase``."""
+        with self._lock:
+            self._states[vm_name].phase = phase
+
+    def set_ip(self, vm_name: str, ip: str | None) -> None:
+        """Record a case's resolved IP (a DHCP lease, once it appears)."""
+        with self._lock:
+            self._states[vm_name].ip = ip
+
+    def snapshot(self) -> list["_CaseProgress"]:
+        """Return a consistent copy of every case's state, in declared order."""
+        with self._lock:
+            return [dataclasses.replace(self._states[n]) for n in self._order]
+
+
+def render_smoke_table(states: list["_CaseProgress"], *, pool_size: int):
+    """Build the live smoke status table from a state snapshot (issue #101).
+
+    Args:
+        states: Per-case snapshot from :meth:`SmokeProgress.snapshot`.
+        pool_size: The concurrent batch width, shown in the title.
+
+    Returns:
+        A populated :class:`rich.table.Table` with a running/pending/
+        passed/failed caption.
+    """
+    table = styled_table(
+        title=f"lvlab smoke — {len(states)} cases, pool of {pool_size}"
+    )
+    table.add_column("vm", style="bold")
+    table.add_column("mode")
+    table.add_column("ip")
+    table.add_column("phase")
+
+    passed = failed = pending = running = 0
+    for state in states:
+        table.add_row(
+            state.vm_name,
+            state.mode,
+            state.ip or ("—" if state.mode == "dhcp" else ""),
+            state.phase,
+        )
+        if state.phase == SmokePhase.PASS:
+            passed += 1
+        elif state.phase == SmokePhase.FAIL:
+            failed += 1
+        elif state.phase == SmokePhase.PENDING:
+            pending += 1
+        else:
+            running += 1
+
+    table.caption = (
+        f"running {running} · pending {pending} · passed {passed} · failed {failed}"
+    )
+    return table
+
+
 def _teardown(
     case: SmokeCase, *, lvlab: str, uri: str
 ) -> None:  # pragma: no cover - VM lifecycle
@@ -930,8 +1038,19 @@ def _run_case(
     uri: str,
     network_name: str,
     key_path: str | None,
+    progress: "SmokeProgress | None" = None,
 ) -> CaseResult:  # pragma: no cover - VM lifecycle
-    """Drive the full up -> verify -> down -> destroy lifecycle for one case."""
+    """Drive the full up -> verify -> down -> destroy lifecycle for one case.
+
+    When ``progress`` is supplied, advances the case's phase through it at
+    each step so the live table reflects the run as it proceeds (issue
+    #101).
+    """
+
+    def phase(name: str) -> None:
+        if progress is not None:
+            progress.set_phase(case.vm_name, name)
+
     result = CaseResult(
         distro=case.os,
         vm_name=case.vm_name,
@@ -940,6 +1059,7 @@ def _run_case(
     )
     start = time.monotonic()
 
+    phase(SmokePhase.UP)
     up = subprocess.run(
         [lvlab, "up", case.vm_name],
         stdout=subprocess.PIPE,
@@ -950,19 +1070,25 @@ def _run_case(
     if up.returncode != 0:
         result.detail = f"`lvlab up` failed (rc={up.returncode})"
         result.total_seconds = round(time.monotonic() - start, 1)
+        phase(SmokePhase.TEARDOWN)
         _teardown(case, lvlab=lvlab, uri=uri)
+        phase(SmokePhase.FAIL)
         return result
 
+    phase(SmokePhase.BOOTING)
     ip = (
         case.static_ip
         if case.mode == "static"
         else _resolve_dhcp_ip(case, network_name, uri)
     )
     result.resolved_ip = ip
+    if progress is not None and ip:
+        progress.set_ip(case.vm_name, ip)
 
     if not ip:
         result.detail = "no IP resolved (DHCP lease never appeared)"
     else:
+        phase(SmokePhase.VERIFYING)
         ok, detail = _ssh_probe(case.ssh_user, ip, key_path)
         result.ssh_ok = ok
         result.detail = detail
@@ -970,9 +1096,73 @@ def _run_case(
             result.boot_to_ssh_seconds = round(time.monotonic() - start, 1)
             result.result = "pass"
 
+    phase(SmokePhase.TEARDOWN)
     _teardown(case, lvlab=lvlab, uri=uri)
     result.total_seconds = round(time.monotonic() - start, 1)
+    phase(SmokePhase.PASS if result.result == "pass" else SmokePhase.FAIL)
     return result
+
+
+def _run_batches(
+    plan: "SmokePlan",
+    progress: "SmokeProgress",
+    *,
+    lvlab: str,
+    uri: str,
+    network_name: str,
+    key_path: str | None,
+    live: bool,
+) -> list[CaseResult]:  # pragma: no cover - VM lifecycle
+    """Run every batch's cases concurrently, optionally rendering a live table.
+
+    When ``live`` is true (TEXT format on a terminal), a Rich ``Live`` table
+    is refreshed from the main thread off the shared (locked)
+    :class:`SmokeProgress` while the batch's workers advance their phases
+    (issue #101). Otherwise the batches run exactly as before with no live
+    rendering. Batches run sequentially; cases within a batch run in a
+    thread pool.
+
+    Returns:
+        The collected :class:`CaseResult` list (unordered; the caller sorts).
+    """
+    pool_size = max((len(b.cases) for b in plan.batches), default=1)
+    results: list[CaseResult] = []
+    live_view = Live(console=get_console(), refresh_per_second=8) if live else None
+    if live_view is not None:
+        live_view.start()
+    try:
+        for batch in plan.batches:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(batch.cases)
+            ) as pool:
+                futures = [
+                    pool.submit(
+                        _run_case,
+                        case,
+                        lvlab=lvlab,
+                        uri=uri,
+                        network_name=network_name,
+                        key_path=key_path,
+                        progress=progress,
+                    )
+                    for case in batch.cases
+                ]
+                pending = set(futures)
+                while pending:
+                    _done, pending = concurrent.futures.wait(pending, timeout=0.25)
+                    if live_view is not None:
+                        live_view.update(
+                            render_smoke_table(progress.snapshot(), pool_size=pool_size)
+                        )
+                results.extend(f.result() for f in futures)
+        if live_view is not None:
+            live_view.update(
+                render_smoke_table(progress.snapshot(), pool_size=pool_size)
+            )
+    finally:
+        if live_view is not None:
+            live_view.stop()
+    return results
 
 
 def smoke_env_dir(config_defaults: dict[str, Any], environment: dict[str, Any]) -> str:
@@ -1056,8 +1246,6 @@ def run_smoke(
     Raises:
         SmokeError: Manifest missing/empty, or preflight failed.
     """
-    import concurrent.futures
-
     parsed = parse_config(config_path)
     if parsed is None:
         raise SmokeError(f"No manifest found at '{config_path}'.")
@@ -1099,24 +1287,19 @@ def run_smoke(
 
     lvlab = _lvlab_bin()
     key_path = _ssh_private_key(config_defaults)
-    results: list[CaseResult] = []
-    for batch in plan.batches:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(batch.cases)
-        ) as pool:
-            futures = [
-                pool.submit(
-                    _run_case,
-                    case,
-                    lvlab=lvlab,
-                    uri=uri,
-                    network_name=network_name,
-                    key_path=key_path,
-                )
-                for case in batch.cases
-            ]
-            for fut in concurrent.futures.as_completed(futures):
-                results.append(fut.result())
+    progress = SmokeProgress(cases)
+    # Live phase table only for the human-facing TEXT format on a terminal
+    # (issue #101); JSON/YAML and piped output stay exactly as before.
+    live = fmt is OutputFormat.TEXT and is_tty()
+    results = _run_batches(
+        plan,
+        progress,
+        lvlab=lvlab,
+        uri=uri,
+        network_name=network_name,
+        key_path=key_path,
+        live=live,
+    )
 
     order = {c.vm_name: i for i, c in enumerate(cases)}
     results.sort(key=lambda r: order.get(r.vm_name, 0))

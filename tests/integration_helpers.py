@@ -53,7 +53,13 @@ MANIFEST_TEMPLATE = dedent(
           interfaces:
             network: default
             network_type: {network_type}
-          cloud_image_basedir: /var/lib/libvirt/images
+          # lvlab appends /cloud-images to this, so point at the lvlab/
+          # basedir to reuse the cache `lvlab init` / `createvm` already
+          # populate (/var/lib/libvirt/images/lvlab/cloud-images). A bare
+          # /var/lib/libvirt/images here looks for an unpopulated
+          # /var/lib/libvirt/images/cloud-images and the run fails on a
+          # host seeded only via `lvlab init` (#134).
+          cloud_image_basedir: /var/lib/libvirt/images/lvlab
           disk_image_basedir: {storage_root}
           cloud_init:
             user: root

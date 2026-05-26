@@ -16,12 +16,14 @@ with :data:`tests.conftest.LVLAB_TEST_PREFIX` so every libvirt
 domain, top-level storage subdir, and per-VM subdir is
 reaper-recognisable in isolation.
 
-The cloud-image cache at ``/var/lib/libvirt/images/cloud-images/``
+The cloud-image cache at ``/var/lib/libvirt/images/lvlab/cloud-images/``
 is intentionally shared with normal lvlab usage — forcing tests to
 re-download a 432 MB qcow2 every run would make the suite hostile
 to iterate. The test manifest sets ``cloud_image_basedir:
-/var/lib/libvirt/images`` so lvlab's idempotent ``/cloud-images``
-append resolves to that shared cache.
+/var/lib/libvirt/images/lvlab`` so lvlab's idempotent ``/cloud-images``
+append resolves to the same cache ``lvlab init`` / ``createvm`` populate
+(#134 — a bare ``/var/lib/libvirt/images`` would look for an
+unpopulated ``/var/lib/libvirt/images/cloud-images``).
 """
 
 from __future__ import annotations

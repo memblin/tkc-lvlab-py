@@ -165,6 +165,59 @@ BUILTIN_IMAGES: dict[str, dict[str, Any]] = {
         "checksum_url_gpg": None,
         "network_version": 2,
     },
+    "almalinux9": {
+        "image_url": (
+            "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/"
+            "AlmaLinux-9-GenericCloud-latest.x86_64.qcow2"
+        ),
+        "checksum_url": (
+            "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/CHECKSUM"
+        ),
+        "checksum_type": "sha256",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+    },
+    "debian11": {
+        "image_url": (
+            "https://cloud.debian.org/images/cloud/bullseye/20260518-2482/"
+            "debian-11-generic-amd64-20260518-2482.qcow2"
+        ),
+        "checksum_url": (
+            "https://cloud.debian.org/images/cloud/bullseye/20260518-2482/SHA512SUMS"
+        ),
+        "checksum_type": "sha512",
+        "checksum_url_gpg": None,
+        # Debian 11 stays on network-config v1 (ENI): the v2/netplan path
+        # stalls networking.service ~5 min via the ifupdown DHCPv6 hang.
+        "network_version": 1,
+    },
+    # Ubuntu publishes its cloud image as a ``.img`` (still qcow2 inside),
+    # checksums as ``hex *filename`` (binary marker), and a *detached* GPG
+    # signature (``SHA256SUMS.gpg``) that our clearsign verifier can't use
+    # — so ``checksum_url_gpg`` is left unset. The key ``ubuntu2204`` would
+    # derive the osinfo-unknown ``ubuntu2204``, so pin ``os_variant``.
+    "ubuntu2204": {
+        "image_url": (
+            "https://cloud-images.ubuntu.com/jammy/current/"
+            "jammy-server-cloudimg-amd64.img"
+        ),
+        "checksum_url": "https://cloud-images.ubuntu.com/jammy/current/SHA256SUMS",
+        "checksum_type": "sha256",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+        "os_variant": "ubuntu22.04",
+    },
+    "ubuntu2404": {
+        "image_url": (
+            "https://cloud-images.ubuntu.com/noble/current/"
+            "noble-server-cloudimg-amd64.img"
+        ),
+        "checksum_url": "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
+        "checksum_type": "sha256",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+        "os_variant": "ubuntu24.04",
+    },
 }
 
 

@@ -33,8 +33,12 @@ if [ ! -x "$LVLAB" ]; then echo "lvlab not found (set LVLAB=...)"; exit 2; fi
 PAIRS=(
   "deb12-static 192.168.122.190 deb12-dhcp debian"
   "deb13-static 192.168.122.191 deb13-dhcp debian"
+  "deb11-static 192.168.122.194 deb11-dhcp debian"
   "fed44-static 192.168.122.192 fed44-dhcp fedora"
   "alma10-static 192.168.122.193 alma10-dhcp almalinux"
+  "alma9-static 192.168.122.195 alma9-dhcp almalinux"
+  "ubuntu2204-static 192.168.122.196 ubuntu2204-dhcp ubuntu"
+  "ubuntu2404-static 192.168.122.197 ubuntu2404-dhcp ubuntu"
 )
 
 lease_ip() { virsh -c "$URI" domifaddr "$1" --source lease 2>/dev/null \

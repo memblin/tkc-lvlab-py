@@ -38,7 +38,13 @@ from rich.table import Table
 
 from ._logging import configure_logging, get_logger
 from .utils.catalog import resolve_catalog
-from .utils.output import get_console, styled_table
+from .utils.output import (
+    get_console,
+    render_one_time_password,
+    render_ssh_hint,
+    styled_table,
+)
+from .utils.passwords import generate_one_time_password
 from .config import (
     ConfigManager,
     parse_config,
@@ -46,7 +52,7 @@ from .config import (
     generate_hosts_entries,
     parse_hosts_file,
 )
-from .exceptions import ConfigError, LvlabError
+from .exceptions import ConfigError, LvlabError, PasswordHashError
 from .smoke import OutputFormat, SmokeError, run_smoke
 from .utils.cloud_init import CloudInitIso
 from .utils.libvirt import (
@@ -1126,13 +1132,87 @@ def _up_start_existing(
         typer.echo(f"The virtual machine {machine.vm_name} is running already")
 
 
+def _resolve_up_password(
+    machine: Machine, config_defaults: dict
+) -> tuple[str | None, str | None]:
+    """Decide the one-time console password for a first-boot ``up`` (issue #106).
+
+    Returns ``(plaintext, hash)``. ``(None, None)`` when the manifest
+    already configures a password (``cloud_init.passwd``) or explicitly
+    opts out (``cloud_init.password: false`` / ``generate_password: false``)
+    — nothing to generate, inject, or print. Otherwise a freshly generated
+    phrase and its SHA-512-crypt hash. If ``openssl`` is unavailable the
+    password is skipped (logged) rather than failing the deploy — the SSH
+    key is the primary access path; the console password is a convenience.
+
+    Args:
+        machine: The resolved :class:`Machine`.
+        config_defaults: The manifest's ``config_defaults`` block.
+
+    Returns:
+        ``(plaintext, hash)`` to generate+print, or ``(None, None)``.
+    """
+    ci_machine = machine.cloud_init_config or {}
+    ci_defaults = config_defaults.get("cloud_init", {}) or {}
+
+    if ci_machine.get("passwd") or ci_defaults.get("passwd"):
+        return None, None
+
+    def _opted_out(ci: dict) -> bool:
+        return ci.get("password") is False or ci.get("generate_password") is False
+
+    if _opted_out(ci_machine) or _opted_out(ci_defaults):
+        return None, None
+
+    try:
+        return generate_one_time_password()
+    except PasswordHashError as exc:
+        logger.warning("Skipping one-time console password: %s", exc)
+        return None, None
+
+
+def _machine_login_user(machine: Machine, config_defaults: dict) -> str:
+    """Return the effective first-boot login user for the SSH hint.
+
+    Mirrors :meth:`Machine.cloud_init`'s resolution: an explicit
+    ``cloud_init.user`` (machine, then defaults) wins, else the image's
+    conventional account (already set on the machine's resolved ``os``
+    via the catalog) — falling back to ``root``.
+    """
+    ci_machine = machine.cloud_init_config or {}
+    ci_defaults = config_defaults.get("cloud_init", {}) or {}
+    return ci_machine.get("user") or ci_defaults.get("user") or "root"
+
+
+def _machine_static_ip(machine: Machine) -> str | None:
+    """Return the first interface's static IPv4 (CIDR stripped), or ``None``.
+
+    ``None`` means the machine uses DHCP, so the SSH hint can't name an
+    address up front.
+    """
+    interfaces = machine.interfaces or []
+    if isinstance(interfaces, dict):
+        interfaces = [interfaces]
+    for iface in interfaces:
+        ip4 = iface.get("ip4") if isinstance(iface, dict) else None
+        if ip4:
+            return str(ip4).split("/", maxsplit=1)[0]
+    return None
+
+
 def _up_build_cloud_init_iso(
-    machine: Machine, cloud_image: CloudImage, config_defaults: dict, machines: list
+    machine: Machine,
+    cloud_image: CloudImage,
+    config_defaults: dict,
+    machines: list,
+    password_hash: str | None = None,
 ) -> None:
     """Render cloud-init files, pack them into cidata.iso, exit on failure."""
     try:
         metadata_config_fpath, userdata_config_fpath, network_config_fpath = (
-            machine.cloud_init(cloud_image, config_defaults, machines)
+            machine.cloud_init(
+                cloud_image, config_defaults, machines, password_hash=password_hash
+            )
         )
     except LvlabError as exc:
         logger.error("%s", exc)
@@ -1164,10 +1244,17 @@ def _up_first_time_create(
     image_config = _resolve_image_config(images, machine.os, machine.vm_name)
     cloud_image = CloudImage(machine.os, image_config, environment, config_defaults)
 
-    machine.create_vdisks(environment, config_defaults, cloud_image)
-    _up_build_cloud_init_iso(machine, cloud_image, config_defaults, machines)
+    # Generate a one-time console password (issue #106) unless the manifest
+    # configures or opts out of one. The hash goes into cloud-init; the
+    # plaintext is printed once below.
+    password_plain, password_hash = _resolve_up_password(machine, config_defaults)
 
-    typer.echo(f"Attempting to start virtual maching: {machine.vm_name}")
+    machine.create_vdisks(environment, config_defaults, cloud_image)
+    _up_build_cloud_init_iso(
+        machine, cloud_image, config_defaults, machines, password_hash=password_hash
+    )
+
+    typer.echo(f"Attempting to start virtual machine: {machine.vm_name}")
     if machine.deploy(
         machine.config_fpath,
         config_defaults,
@@ -1175,6 +1262,15 @@ def _up_first_time_create(
         os_variant=cloud_image.os_variant,
     ):
         typer.echo("Virtual machine deployment complete.")
+        typer.echo()
+        # Surface the one-time password (shown once) + an SSH hint, aligned
+        # with createvm's output (issue #106). The plaintext is never logged.
+        if password_plain:
+            render_one_time_password(password_plain)
+        render_ssh_hint(
+            _machine_login_user(machine, config_defaults),
+            _machine_static_ip(machine),
+        )
     else:
         logger.error("Virtual machine installation failed.")
         raise typer.Exit(code=1)

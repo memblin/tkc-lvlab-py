@@ -134,6 +134,16 @@ The `--os-variant` virt-install needs is derived from the image
 name's first hyphenated segment (see "Image Naming" above), which
 is why custom images must follow that naming convention.
 
+On first create, `up` also generates a **one-time console password**
+(the same way `createvm` does), injects only its hash into cloud-init,
+and prints the plaintext **once** along with an example SSH command —
+a console fallback for before SSH is reachable. SSH keys remain the
+primary access path. To use your own password set `cloud_init.passwd`
+(a crypt hash) in the manifest; to opt out entirely (key-only VM) set
+`cloud_init.password: false`. The password only takes effect at
+first-boot cloud-init, so re-running `up` on an existing VM doesn't
+change it.
+
 ## status
 
 Show the configured environment, every machine in the manifest along

@@ -66,6 +66,7 @@ from ..utils.network import (
     validate_static_ip,
 )
 from ..utils.osinfo import OsInfoLookupError, resolve_os_variant
+from ..utils.output import render_one_time_password, render_ssh_hint
 from ..utils.passwords import (
     PasswordHashError,
     generate_password_phrase,
@@ -954,18 +955,13 @@ def _print_completion_details(
 
     typer.secho("VM creation completed.", fg=typer.colors.GREEN)
     typer.echo()
-    typer.secho(
-        "One-time VM password (shown once and not retrievable later):",
-        fg=typer.colors.YELLOW,
-    )
-    typer.secho(ctx.password_plain, fg=typer.colors.YELLOW)
-    typer.echo()
+    # Shared one-time-password + SSH-hint output (issue #106): lvlab up uses
+    # the same helpers so both read consistently.
+    render_one_time_password(ctx.password_plain)
 
     if ctx.vm_ip is not None:
         static_ip = ctx.vm_ip.split("/", maxsplit=1)[0]
-        typer.secho("Example SSH command:", fg=typer.colors.BLUE)
-        typer.secho(f"  $ ssh {username}@{static_ip}", fg=typer.colors.GREEN)
-        typer.echo()
+        render_ssh_hint(username, static_ip)
         return
 
     if ctx.forward_mode.lower() != "nat":
@@ -1000,10 +996,7 @@ def _print_completion_details(
             f"DHCP lease detected for {vm_hostname}: {lease_ip}", fg=typer.colors.GREEN
         )
         typer.echo()
-        ssh_ip = lease_ip.split("/", maxsplit=1)[0]
-        typer.secho("Example SSH command:", fg=typer.colors.BLUE)
-        typer.secho(f"  $ ssh {username}@{ssh_ip}", fg=typer.colors.GREEN)
-        typer.echo()
+        render_ssh_hint(username, lease_ip.split("/", maxsplit=1)[0])
         return
 
     typer.secho(

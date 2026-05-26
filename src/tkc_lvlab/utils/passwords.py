@@ -192,6 +192,30 @@ def hash_password_sha512(password: str, rounds: int = 4096) -> str:
     return result.stdout.strip()
 
 
+def generate_one_time_password(rounds: int = 4096) -> tuple[str, str]:
+    """Generate a one-time console password as ``(plaintext, crypt_hash)``.
+
+    Pairs :func:`generate_password_phrase` with :func:`hash_password_sha512`
+    so both deploy paths — the standalone ``createvm`` script and
+    ``lvlab up`` — mint the console password identically (issue #106). The
+    plaintext is meant to be printed once and never persisted; only the
+    hash is written into cloud-init's ``users[*].passwd``.
+
+    Args:
+        rounds: SHA-512-crypt rounds, forwarded to
+            :func:`hash_password_sha512`.
+
+    Returns:
+        A ``(plaintext, crypt_hash)`` pair.
+
+    Raises:
+        PasswordHashError: ``openssl`` is missing or ``openssl passwd``
+            failed.
+    """
+    plaintext = generate_password_phrase()
+    return plaintext, hash_password_sha512(plaintext, rounds=rounds)
+
+
 def _generate_sha512_crypt_salt(length: int = 16) -> str:
     """Return a random crypt-compatible salt of the given length.
 

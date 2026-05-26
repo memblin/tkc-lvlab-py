@@ -39,6 +39,12 @@ def _make_fake_machine(deploy_returns: bool, tmp_path) -> mock.Mock:
     m.libvirt_vm_name = "alpha_demo"
     m.config_fpath = str(tmp_path)
     m.os = "debian13"
+    # Realistic empties so the #106 one-time-password / SSH-hint reads behave:
+    # opt out of the generated console password (that path has its own tests
+    # below) so these orchestration tests stay deterministic and never shell
+    # out to openssl; no interfaces -> DHCP -> generic SSH hint.
+    m.cloud_init_config = {"password": False}
+    m.interfaces = []
     m.exists_in_libvirt.return_value = (False, None, None)
     m.cloud_init.return_value = ("metadata", "userdata", "network")
     m.deploy.return_value = deploy_returns
@@ -265,3 +271,82 @@ def test_up_create_parses_manifest_once_and_passes_machines(tmp_path) -> None:
     # cloud_init received the parsed machines list as its 3rd positional arg.
     _, _, machines_arg = fake_machine.cloud_init.call_args.args
     assert machines_arg == SAMPLE_MACHINES
+
+
+# ---------------------------------------------------------------------------
+# One-time console password + SSH hint (issue #106)
+# ---------------------------------------------------------------------------
+
+
+def test_up_generates_injects_and_prints_password_once(tmp_path) -> None:
+    """First-time up with no configured password: generate, inject the hash,
+    print the plaintext exactly once."""
+    runner = CliRunner()
+    fake_machine = _make_fake_machine(deploy_returns=True, tmp_path=tmp_path)
+    fake_machine.cloud_init_config = {}  # no configured password -> generate
+    fake_iso = _make_fake_iso(tmp_path)
+    phrase = "Cedar-Spruce-Atlas-Pine"
+    hashed = "$6$rounds=4096$salt$hash"
+
+    with (
+        _patched_config(),
+        mock.patch.object(cli, "Machine", return_value=fake_machine),
+        mock.patch.object(cli, "CloudImage"),
+        mock.patch.object(cli, "CloudInitIso", return_value=fake_iso),
+        mock.patch.object(
+            cli, "generate_one_time_password", return_value=(phrase, hashed)
+        ),
+    ):
+        result = runner.invoke(app, ["up", "alpha"])
+
+    assert result.exit_code == 0, result.output
+    # The generated hash is injected into cloud-init.
+    assert fake_machine.cloud_init.call_args.kwargs["password_hash"] == hashed
+    # The plaintext is shown exactly once.
+    assert result.output.count(phrase) == 1
+
+
+def test_up_respects_manifest_configured_password(tmp_path) -> None:
+    """A manifest-configured cloud_init.passwd is respected: no generation,
+    and no generated hash is injected."""
+    runner = CliRunner()
+    fake_machine = _make_fake_machine(deploy_returns=True, tmp_path=tmp_path)
+    fake_machine.cloud_init_config = {"passwd": "$6$manifest$preset"}
+    fake_iso = _make_fake_iso(tmp_path)
+
+    with (
+        _patched_config(),
+        mock.patch.object(cli, "Machine", return_value=fake_machine),
+        mock.patch.object(cli, "CloudImage"),
+        mock.patch.object(cli, "CloudInitIso", return_value=fake_iso),
+        mock.patch.object(cli, "generate_one_time_password") as gen,
+    ):
+        result = runner.invoke(app, ["up", "alpha"])
+
+    assert result.exit_code == 0, result.output
+    gen.assert_not_called()
+    # The manifest passwd is rendered by Machine.cloud_init itself; up injects
+    # no generated hash.
+    assert fake_machine.cloud_init.call_args.kwargs["password_hash"] is None
+
+
+def test_up_password_opt_out_generates_nothing(tmp_path) -> None:
+    """cloud_init.password: false opts out — no generation, no injected hash."""
+    runner = CliRunner()
+    fake_machine = _make_fake_machine(deploy_returns=True, tmp_path=tmp_path)
+    fake_machine.cloud_init_config = {"password": False}
+    fake_iso = _make_fake_iso(tmp_path)
+
+    with (
+        _patched_config(),
+        mock.patch.object(cli, "Machine", return_value=fake_machine),
+        mock.patch.object(cli, "CloudImage"),
+        mock.patch.object(cli, "CloudInitIso", return_value=fake_iso),
+        mock.patch.object(cli, "generate_one_time_password") as gen,
+    ):
+        result = runner.invoke(app, ["up", "alpha"])
+
+    assert result.exit_code == 0, result.output
+    gen.assert_not_called()
+    assert fake_machine.cloud_init.call_args.kwargs["password_hash"] is None
+    assert "One-time VM password" not in result.output

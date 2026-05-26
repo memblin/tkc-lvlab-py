@@ -183,19 +183,115 @@ def _load_config() -> ConfigManager:
     return ConfigManager.from_parsed(parsed)
 
 
+class ResolvedMachine:
+    """The libvirt-resolved view of a manifest machine.
+
+    Bundles the four facts every machine-scoped command needs after the
+    shared prologue (load config → resolve manifest entry → construct
+    :class:`Machine` → probe libvirt): the :class:`Machine` object, the
+    libvirt URI it was probed against, whether a domain exists there, and
+    its current state. It is the return value of :func:`_resolve_machine`,
+    the one prologue seam the machine-scoped commands call.
+
+    Commands that only act on an already-defined domain (``destroy``,
+    ``snapshot create``/``list``/``delete``) use the
+    :func:`_resolve_existing_machine` wrapper, which collapses both the
+    not-in-manifest and not-deployed outcomes to a single ``None``
+    early-return. ``down`` branches on presence/state and consumes the
+    fields directly. (``up`` keeps its own prologue: it needs the full
+    parsed config tuple for the first-time-create path and pins a distinct
+    not-found message, so routing it through this seam would add threading
+    rather than remove duplication.)
+
+    Attributes:
+        machine: The constructed :class:`Machine`.
+        libvirt_uri: The URI the machine was probed against.
+        exists: ``True`` when a domain with the machine's libvirt name is
+            defined at ``libvirt_uri``.
+        state: The libvirt domain state string (e.g. ``"running"``,
+            ``"shut off"``), or ``None`` when the domain does not exist.
+    """
+
+    __slots__ = ("machine", "libvirt_uri", "exists", "state")
+
+    def __init__(
+        self,
+        machine: Machine,
+        libvirt_uri: str,
+        exists: bool,
+        state: str | None,
+    ) -> None:
+        self.machine = machine
+        self.libvirt_uri = libvirt_uri
+        self.exists = exists
+        self.state = state
+
+
+def _resolve_machine(vm_name: str) -> ResolvedMachine | None:
+    """Run the shared machine-scoped command prologue.
+
+    Consolidates the load-config → resolve-manifest-entry →
+    construct-:class:`Machine` → probe-libvirt sequence that the
+    machine-scoped commands all repeat. The manifest-level failure
+    boundary is handled here once:
+
+    - ``parse_config()`` failing (missing file or :class:`ConfigError`) →
+      ``logger.error`` then ``typer.Exit(1)`` (via :func:`_load_config`).
+    - ``vm_name`` not in the manifest → ``logger.error`` with the
+      ``MACHINE_NOT_IN_MANIFEST_MSG`` template, returns ``None``.
+
+    On success the caller gets a :class:`ResolvedMachine` carrying the
+    machine, URI, existence, and state, and decides what to do with the
+    presence/state (``down`` shuts down a running domain or no-ops an
+    absent one; :func:`_resolve_existing_machine` rejects absent ones).
+
+    Args:
+        vm_name: The ``vm_name`` from the user-supplied CLI argument.
+
+    Returns:
+        A :class:`ResolvedMachine` on success, or ``None`` when ``vm_name``
+        is not in the manifest (the caller should return early).
+
+    Raises:
+        typer.Exit: Code 1 when the manifest is missing or cannot be
+            parsed. Matches the long-standing parse-failure behaviour.
+    """
+    config = _load_config()
+    environment, _, config_defaults, _ = config.as_tuple()
+
+    machine_config = config.get_machine(vm_name)
+    if not machine_config:
+        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
+        return None
+
+    machine = Machine(machine_config, environment, config_defaults)
+    libvirt_uri = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
+    try:
+        exists, state, _ = machine.exists_in_libvirt(libvirt_uri)
+    except VirshError as exc:
+        # Single boundary for an unreachable/failing connection during the
+        # existence probe — converts the leaked traceback every machine-scoped
+        # command previously risked into a clean exit-1 (the #51 hierarchy's
+        # stated reason for being). The narrower operation errors
+        # (create/delete snapshot) stay caught in their command bodies, which
+        # carry an operation-specific message and intentionally exit 0.
+        logger.error("Failed to query libvirt at %s: %s", libvirt_uri, exc)
+        raise typer.Exit(code=1)
+    return ResolvedMachine(machine, libvirt_uri, exists, state)
+
+
 def _resolve_existing_machine(vm_name: str) -> tuple[Machine | None, str | None]:
     """Resolve a manifest entry into a :class:`Machine` that exists in libvirt.
 
-    Shared boilerplate for the commands that operate on an already-defined
-    domain (``destroy``, ``snapshot list``, ``snapshot delete``, etc.). All
-    failure paths log the same way the inline-bodied commands did:
+    Thin wrapper over :func:`_resolve_machine` for the commands that operate
+    only on an already-defined domain (``destroy``, ``snapshot list``,
+    ``snapshot delete``). It adds the not-deployed guard on top of the shared
+    prologue, collapsing both non-fatal outcomes to a single ``(None, None)``:
 
-    - ``parse_config()`` failing → ``logger.error`` then ``typer.Exit(1)``.
-    - ``vm_name`` not in the manifest → ``logger.error`` with the
-      ``MACHINE_NOT_IN_MANIFEST_MSG`` template, returns ``(None, None)``.
+    - ``vm_name`` not in the manifest → handled by :func:`_resolve_machine`
+      (``logger.error`` with ``MACHINE_NOT_IN_MANIFEST_MSG``).
     - Machine resolved but not present at the libvirt URI →
-      ``logger.warning`` with the ``MACHINE_NOT_DEPLOYED_MSG`` template,
-      returns ``(None, None)``.
+      ``logger.warning`` with the ``MACHINE_NOT_DEPLOYED_MSG`` template.
 
     Args:
         vm_name: The ``vm_name`` from the user-supplied CLI argument.
@@ -206,25 +302,19 @@ def _resolve_existing_machine(vm_name: str) -> tuple[Machine | None, str | None]
 
     Raises:
         typer.Exit: With code 1 when ``parse_config()`` cannot read the
-            manifest — either a missing file (``None`` unpack ``TypeError``)
-            or a structurally invalid one (:class:`ConfigError`). Matches the
-            long-standing parse-failure behaviour.
+            manifest — either a missing file or a structurally invalid one
+            (:class:`ConfigError`). Matches the long-standing parse-failure
+            behaviour.
     """
-    config = _load_config()
-    environment, _, config_defaults, _ = config.as_tuple()
-
-    machine_config = config.get_machine(vm_name)
-    if not machine_config:
-        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
+    resolved = _resolve_machine(vm_name)
+    if resolved is None:
         return None, None
-
-    machine = Machine(machine_config, environment, config_defaults)
-    libvirt_uri = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
-    exists, _, _ = machine.exists_in_libvirt(libvirt_uri)
-    if not exists:
-        logger.warning(MACHINE_NOT_DEPLOYED_MSG, machine.vm_name, libvirt_uri)
+    if not resolved.exists:
+        logger.warning(
+            MACHINE_NOT_DEPLOYED_MSG, resolved.machine.vm_name, resolved.libvirt_uri
+        )
         return None, None
-    return machine, libvirt_uri
+    return resolved.machine, resolved.libvirt_uri
 
 
 def _resolve_image_config(images: dict, machine_os: str, vm_name: str) -> dict:
@@ -321,39 +411,24 @@ def destroy(
 @app.command()
 def down(vm_name: str) -> None:
     """Gracefully shut down a manifest VM."""
-    config = _load_config()
-    environment, _, config_defaults, _ = config.as_tuple()
+    resolved = _resolve_machine(vm_name)
+    if resolved is None:
+        return
 
-    machine_config = config.get_machine(vm_name)
-    if machine_config:
+    if not resolved.exists:
+        return
 
-        machine = Machine(machine_config, environment, config_defaults)
-
-        exists, state, _ = machine.exists_in_libvirt(
-            environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
-        )
-
-        if exists:
-            if state in {"running", "paused"}:
-                typer.echo(f"Shutting down virtual machine {vm_name}.")
-                if (
-                    machine.shutdown(
-                        environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
-                    )
-                    > 0
-                ):
-                    logger.error("Shutdown appears to have failed.")
-                else:
-                    typer.echo(
-                        "Shutdown appears successful. The virtual machine may take a short time to complete shutdown."
-                    )
-            elif state in ["VIR_DOMAIN_SHUTOFF"]:
-                typer.echo(
-                    f"The virtual machine {machine.vm_name} is shutdown already."
-                )
-
-    else:
-        logger.error("Machine %s not found in manifest.", vm_name)
+    machine, state = resolved.machine, resolved.state
+    if state in {"running", "paused"}:
+        typer.echo(f"Shutting down virtual machine {vm_name}.")
+        if machine.shutdown(resolved.libvirt_uri) > 0:
+            logger.error("Shutdown appears to have failed.")
+        else:
+            typer.echo(
+                "Shutdown appears successful. The virtual machine may take a short time to complete shutdown."
+            )
+    elif state in ["VIR_DOMAIN_SHUTOFF"]:
+        typer.echo(f"The virtual machine {machine.vm_name} is shutdown already.")
 
 
 def _hosts_classify_entries(
@@ -778,40 +853,20 @@ def snapshot_create(
     snapshot_description: str = typer.Argument(None),
 ) -> None:
     """Create a snapshot for a given VM."""
-    config = _load_config()
-    environment, _, config_defaults, _ = config.as_tuple()
+    machine, libvirt_uri = _resolve_existing_machine(vm_name)
+    if machine is None:
+        return
 
-    machine_config = config.get_machine(vm_name)
-    if machine_config:
-
-        machine = Machine(machine_config, environment, config_defaults)
-        libvirt_endpoint = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
-
-        if machine:
-            exists, _, _ = machine.exists_in_libvirt(libvirt_endpoint)
-            if exists:
-                try:
-                    machine.create_snapshot(
-                        libvirt_endpoint, snapshot_name, snapshot_description
-                    )
-                    typer.echo(
-                        f"Snapshot {snapshot_name} created for {machine.vm_name}"
-                    )
-                except VirshError as e:
-                    logger.error(
-                        "Failed to create snapshot %s for %s: %s",
-                        snapshot_name,
-                        machine.vm_name,
-                        e,
-                    )
-            else:
-                logger.warning(
-                    MACHINE_NOT_DEPLOYED_MSG,
-                    machine.vm_name,
-                    libvirt_endpoint,
-                )
-    else:
-        logger.error(MACHINE_NOT_IN_MANIFEST_MSG, vm_name)
+    try:
+        machine.create_snapshot(libvirt_uri, snapshot_name, snapshot_description)
+        typer.echo(f"Snapshot {snapshot_name} created for {machine.vm_name}")
+    except VirshError as e:
+        logger.error(
+            "Failed to create snapshot %s for %s: %s",
+            snapshot_name,
+            machine.vm_name,
+            e,
+        )
 
 
 @snapshot_app.command("delete")

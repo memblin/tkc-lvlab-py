@@ -1258,6 +1258,12 @@ def smoke(
         "--skip-preflight",
         help="Skip the preflight checks (debugging only).",
     ),
+    assume_yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the memory-heavy confirmation prompt (use in CI / scripts).",
+    ),
 ) -> None:
     """Boot every manifest VM, SSH-verify it, then tear it down (manual only).
 
@@ -1283,6 +1289,7 @@ def smoke(
             max_memory_mib=max_memory,
             reserve_mib=reserve,
             skip_preflight=skip_preflight,
+            assume_yes=assume_yes,
         )
     except SmokeError as exc:
         typer.secho(f"smoke: {exc}", fg=typer.colors.RED, err=True)

@@ -174,6 +174,61 @@ def test_format_plan_reports_resources_and_budget():
     assert "Batch 1" in text
 
 
+def _plan(*batches: tuple[int, list[str]], available: int = 8000) -> "smoke.SmokePlan":
+    # Build a SmokePlan directly from (memory_mib, [vm_names]) pairs so the
+    # threshold/render logic is tested without depending on the packer.
+    built = tuple(
+        smoke.Batch(cases=tuple(_case(n) for n in names), memory_mib=mib)
+        for mib, names in batches
+    )
+    return smoke.SmokePlan(
+        batches=built,
+        resources=_host(available),
+        budget_mib=available - 2048,
+        reserve_mib=2048,
+    )
+
+
+def test_should_confirm_memory_true_when_peak_at_least_half_of_available():
+    # Peak batch 4000 MiB vs 8000 available -> exactly 50% -> prompt.
+    assert smoke.should_confirm_memory(_plan((4000, ["a"]), available=8000)) is True
+
+
+def test_should_confirm_memory_false_for_small_run():
+    assert smoke.should_confirm_memory(_plan((3000, ["a"]), available=8000)) is False
+
+
+def test_should_confirm_memory_false_when_available_unknown():
+    plan = _plan((4000, ["a"]), available=0)
+    assert smoke.should_confirm_memory(plan) is False
+
+
+def test_memory_confirm_message_states_peak_and_available():
+    msg = smoke.memory_confirm_message(_plan((20736, ["a"]), available=23352))
+    assert "20736 MiB" in msg
+    assert "23352 MiB" in msg
+
+
+def test_render_plan_table_titles_host_and_lists_members():
+    import io
+
+    from rich.console import Console
+
+    plan = _plan(
+        (1536, ["deb12-static", "deb12-dhcp"]),
+        (768, ["deb13-dhcp"]),
+        available=20000,
+    )
+    buf = io.StringIO()
+    Console(file=buf, width=200).print(smoke.render_plan_table(plan))
+    out = buf.getvalue()
+    assert "smoke plan" in out
+    assert "2 batch(es)" in out
+    assert "8 vCPU" in out  # _host default vcpus
+    assert "deb12-static" in out  # batch members rendered
+    assert "768 MiB" in out
+
+
 def test_parse_free_m_reads_available_column():
     out = (
         "               total        used        free      shared  buff/cache   available\n"

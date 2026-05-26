@@ -55,6 +55,7 @@ from typing import Any, Sequence
 
 import yaml
 from rich.live import Live
+from rich.table import Table
 
 from ._logging import get_logger
 from .config import parse_config
@@ -75,6 +76,10 @@ DEFAULT_LIBVIRT_URI = "qemu:///system"
 # Memory held back from the host's available RAM for the host OS, the harness,
 # and qemu slack. The scheduler packs batches under (available - reserve).
 DEFAULT_RESERVE_MIB = 2048
+
+# Prompt for confirmation before booting when the peak batch would use at least
+# this fraction of available host memory (issue #130). `--yes` bypasses it.
+MEMORY_CONFIRM_FRACTION = 0.5
 
 # Conservative fallbacks if `free`/`nproc` cannot be read on an unusual host —
 # enough to still produce a (small) one-or-two-at-a-time plan.
@@ -712,6 +717,81 @@ def format_plan(plan: SmokePlan) -> str:
     return "\n".join(lines)
 
 
+def _plan_concurrency_label(plan: SmokePlan) -> str:
+    """Short label for how concurrency was chosen (for the plan title)."""
+    if plan.batch_size_override is not None:
+        return f"fixed --batch-size={plan.batch_size_override}"
+    return f"pack <= {plan.budget_mib} MiB"
+
+
+def render_plan_table(plan: SmokePlan) -> Table:
+    """Render the concurrency plan as a Rich table (TEXT on a terminal).
+
+    The same information as :func:`format_plan` (which stays the plain-text
+    form for non-terminal / structured output), in the same box style as the
+    live phase table so the plan and the run read as one UI (issue #126). Host
+    capacity and the packing budget go in the title; one row per batch carries
+    its memory cost and members.
+
+    Args:
+        plan: The computed plan to render.
+
+    Returns:
+        A Rich :class:`~rich.table.Table` ready to print to the console.
+    """
+    res = plan.resources
+    total = sum(len(b.cases) for b in plan.batches)
+    table = styled_table(
+        title=(
+            f"smoke plan · {total} VM(s) · {len(plan.batches)} batch(es) · "
+            f"{res.vcpus} vCPU / {res.available_memory_mib} MiB avail · "
+            f"{_plan_concurrency_label(plan)}"
+        )
+    )
+    table.add_column("batch", justify="right")
+    table.add_column("memory", justify="right")
+    table.add_column("cases")
+    for i, batch in enumerate(plan.batches, start=1):
+        over = " [OVER]" if batch.memory_mib > plan.budget_mib else ""
+        members = ", ".join(c.vm_name for c in batch.cases)
+        table.add_row(str(i), f"{batch.memory_mib} MiB{over}", members)
+    return table
+
+
+def should_confirm_memory(
+    plan: SmokePlan, fraction: float = MEMORY_CONFIRM_FRACTION
+) -> bool:
+    """Whether a run is memory-heavy enough to warrant a confirmation prompt.
+
+    True when the peak batch's memory cost is at least ``fraction`` of the
+    host's available memory (issue #130). Small runs (a VM or two) fall below
+    the threshold and boot without prompting.
+
+    Args:
+        plan: The computed plan (carries per-batch memory + host resources).
+        fraction: Threshold as a fraction of available memory (default
+            :data:`MEMORY_CONFIRM_FRACTION`).
+
+    Returns:
+        ``True`` when a prompt is warranted, else ``False``.
+    """
+    available = plan.resources.available_memory_mib
+    if not plan.batches or available <= 0:
+        return False
+    peak = max(b.memory_mib for b in plan.batches)
+    return peak >= fraction * available
+
+
+def memory_confirm_message(plan: SmokePlan) -> str:
+    """Build the one-line memory-cost notice shown before the confirm prompt."""
+    peak = max((b.memory_mib for b in plan.batches), default=0)
+    res = plan.resources
+    return (
+        f"This run will use up to {peak} MiB of {res.available_memory_mib} MiB "
+        f"available (host total {res.total_memory_mib} MiB)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Result emission (pure)
 # ---------------------------------------------------------------------------
@@ -1277,6 +1357,7 @@ def run_smoke(
     max_memory_mib: int | None = None,
     reserve_mib: int = DEFAULT_RESERVE_MIB,
     skip_preflight: bool = False,
+    assume_yes: bool = False,
 ) -> int:  # pragma: no cover - VM lifecycle
     """Run the manifest-driven smoke suite. **Boots real VMs.**
 
@@ -1292,6 +1373,7 @@ def run_smoke(
         max_memory_mib: Cap the memory budget at this many MiB.
         reserve_mib: Safety reserve held back from available memory.
         skip_preflight: Skip the preflight gate (debugging only).
+        assume_yes: Skip the memory-heavy confirmation prompt (issue #130).
 
     Returns:
         Process exit code: ``0`` if every case passed, ``1`` otherwise.
@@ -1342,8 +1424,26 @@ def run_smoke(
         max_memory_mib=max_memory_mib,
         reserve_mib=reserve_mib,
     )
-    print(format_plan(plan), file=diag)
-    print(file=diag)
+    # On a terminal with TEXT output, render the plan as a Rich table in the
+    # phase-table style (issue #126); otherwise emit the plain-text plan on the
+    # diagnostic stream (stderr for the machine formats).
+    if fmt is OutputFormat.TEXT and is_tty():
+        get_console().print(render_plan_table(plan))
+    else:
+        print(format_plan(plan), file=diag)
+        print(file=diag)
+
+    # Confirm before committing a memory-heavy run, unless --yes (issue #130).
+    # Interactive: prompt; non-interactive stdin: refuse and point at --yes so
+    # the run never blocks on input that won't come (and CI must opt in).
+    if not assume_yes and should_confirm_memory(plan):
+        notice = memory_confirm_message(plan)
+        if sys.stdin.isatty():
+            print(f"{notice} Proceed? [y/N] ", end="", file=diag, flush=True)
+            if input().strip().lower() not in ("y", "yes"):
+                raise SmokeError("Aborted: memory-heavy run declined.")
+        else:
+            raise SmokeError(f"{notice} Non-interactive; pass --yes to proceed.")
 
     lvlab = _lvlab_bin()
     key_path = _ssh_private_key(config_defaults)

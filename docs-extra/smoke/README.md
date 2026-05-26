@@ -108,6 +108,20 @@ summary:
   git_sha: cd3a8ae
 ```
 
+### Teardown timing
+
+Each case is torn down with a graceful `lvlab down` followed by an
+unconditional `lvlab destroy --force`. The graceful wait is **bounded to
+~14s** (issue #132): smoke VMs are ephemeral and force-destroyed
+regardless, so once that grace window elapses the `--force` step powers
+off any guest still running. This keeps a slow-to-poweroff distro from
+stalling the run — **Ubuntu cloud images** (22.04 / 24.04) effectively
+ignore the ACPI poweroff signal without a guest agent and would
+otherwise wait out a much longer window every case, while Debian /
+Fedora / AlmaLinux power off within a few seconds and are caught
+promptly. A clean shutdown is still preferred when it completes inside
+the grace window.
+
 ## Keeping it current
 
 `Lvlab.yml`'s `images:` section tracks lvlab's default image catalog and

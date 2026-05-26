@@ -33,6 +33,7 @@ from tkc_lvlab.smoke import (
     summarize,
 )
 from tkc_lvlab.utils.network import LibvirtNetworkInfo
+from tkc_lvlab.utils.virsh import VirshError
 
 
 def _case(
@@ -318,6 +319,55 @@ def test_parse_domifaddr_lease_ignores_ipv6_only_and_header():
     )
     assert smoke._parse_domifaddr_lease(out) is None
     assert smoke._parse_domifaddr_lease("") is None
+
+
+# ---------------------------------------------------------------------------
+# Teardown grace window (issue #132)
+# ---------------------------------------------------------------------------
+
+
+def test_await_shutoff_returns_early_on_clean_poweroff():
+    """A guest that ACPI-powers-off promptly is caught within one interval,
+    not after the full grace budget."""
+    states = iter(["running", "shut off"])
+    sleeps: list[float] = []
+
+    got = smoke._await_shutoff(
+        lambda: next(states), retries=8, interval=2, sleep=sleeps.append
+    )
+
+    assert got is True
+    # Saw "running" once, slept once, then "shut off" -> stopped early.
+    assert sleeps == [2]
+
+
+def test_await_shutoff_gives_up_after_grace_budget():
+    """A guest that ignores ACPI poweroff (Ubuntu cloud image) is abandoned
+    after the bounded grace so the caller can force it off — never the ~60s
+    stall the old 12x5s loop produced (issue #132)."""
+    sleeps: list[float] = []
+
+    got = smoke._await_shutoff(
+        lambda: "running", retries=8, interval=2, sleep=sleeps.append
+    )
+
+    assert got is False
+    # 8 polls -> 7 sleeps (no sleep after the final poll); bounded at 14s, not 60.
+    assert sleeps == [2] * 7
+
+
+def test_await_shutoff_stops_when_state_is_unreadable():
+    """An unreadable state (VirshError) stops the wait immediately rather than
+    burning the whole grace budget; the unconditional force-destroy follows."""
+    sleeps: list[float] = []
+
+    def boom() -> str:
+        raise VirshError(1, "failed to connect to the hypervisor", ["domstate", "x"])
+
+    got = smoke._await_shutoff(boom, retries=8, interval=2, sleep=sleeps.append)
+
+    assert got is True
+    assert sleeps == []
 
 
 # ---------------------------------------------------------------------------

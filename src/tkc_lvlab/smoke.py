@@ -51,7 +51,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import yaml
 from rich.console import Console
@@ -101,9 +101,14 @@ SSH_PROBE_INTERVAL = 5
 DHCP_POLL_RETRIES = 30
 DHCP_POLL_INTERVAL = 5
 
-# Graceful-shutdown poll after ``lvlab down``.
-SHUTDOWN_POLL_RETRIES = 12
-SHUTDOWN_POLL_INTERVAL = 5
+# Graceful-shutdown grace window after ``lvlab down`` (issue #132). Smoke VMs
+# are ephemeral and force-destroyed regardless, so this only needs to last long
+# enough for a well-behaved guest to ACPI-poweroff cleanly — not the ~60s a
+# guest that ignores the signal (Ubuntu cloud images without a guest agent)
+# would otherwise stall the run. Bounded at ``(RETRIES - 1) * INTERVAL`` = 14s;
+# a prompt shutdown is still caught within one INTERVAL (2s).
+SHUTDOWN_POLL_RETRIES = 8
+SHUTDOWN_POLL_INTERVAL = 2
 
 
 class OutputFormat(str, Enum):
@@ -1225,10 +1230,59 @@ def render_smoke_table(states: list["_CaseProgress"], *, pool_size: int):
     return table
 
 
+def _await_shutoff(
+    domstate: Callable[[], str],
+    *,
+    retries: int = SHUTDOWN_POLL_RETRIES,
+    interval: float = SHUTDOWN_POLL_INTERVAL,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Poll a domain's state until it powers off or the grace budget is spent.
+
+    Smoke VMs are ephemeral and force-destroyed regardless, so the graceful
+    ``lvlab down`` wait only needs to outlast a well-behaved guest's ACPI
+    poweroff. This bounds the wait to ``(retries - 1) * interval`` seconds
+    (issue #132): a distro that ignores the ACPI signal — Ubuntu cloud images
+    without a guest agent — no longer stalls the run for ~60s, while a prompt
+    shutdown is still caught within one ``interval``.
+
+    Args:
+        domstate: Zero-argument callable returning the domain's lowercase state
+            (e.g. ``"running"``, ``"shut off"``).
+        retries: Maximum number of state polls before giving up.
+        interval: Seconds to sleep between polls.
+        sleep: Sleep function; injectable so tests run without real delay.
+
+    Returns:
+        ``True`` if the domain reached ``"shut off"`` (or its state became
+        unreadable) within the grace budget; ``False`` if it was still running
+        when the budget was exhausted. The caller force-destroys for cleanup
+        either way, so this is informational — a clean shutdown was observed
+        when ``True``.
+    """
+    for attempt in range(retries):
+        try:
+            if domstate() == "shut off":
+                return True
+        except VirshError:
+            # State unreadable (transient daemon hiccup, domain already gone);
+            # stop waiting and let the unconditional force-destroy finish up.
+            return True
+        if attempt < retries - 1:
+            sleep(interval)
+    return False
+
+
 def _teardown(
     case: SmokeCase, *, lvlab: str, uri: str
 ) -> None:  # pragma: no cover - VM lifecycle
-    """Shut down + destroy a case's VM regardless of verify outcome."""
+    """Shut down + destroy a case's VM regardless of verify outcome.
+
+    Prefers a graceful ``lvlab down`` but bounds the wait via
+    :func:`_await_shutoff` (issue #132); the unconditional ``lvlab destroy
+    --force`` then powers off any guest still running and removes its storage,
+    so a slow-to-ACPI distro can't stall the run.
+    """
     from .utils.virsh import virsh_domstate
 
     subprocess.run(
@@ -1237,13 +1291,7 @@ def _teardown(
         stderr=subprocess.DEVNULL,
         check=False,
     )
-    for _ in range(SHUTDOWN_POLL_RETRIES):
-        try:
-            if virsh_domstate(uri, case.libvirt_domain) == "shut off":
-                break
-        except VirshError:
-            break
-        time.sleep(SHUTDOWN_POLL_INTERVAL)
+    _await_shutoff(lambda: virsh_domstate(uri, case.libvirt_domain))
     subprocess.run(
         [lvlab, "destroy", case.vm_name, "--force"],
         stdout=subprocess.DEVNULL,

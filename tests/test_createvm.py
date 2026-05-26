@@ -654,6 +654,10 @@ def test_init_cloud_images_only(
     )
     assert result.exit_code == 0, result.output
     assert "Cloud images initialized." in result.output
+    # Deprecation notice steers users to `lvlab init` (issue #97), but the
+    # flag still works.
+    assert "deprecated" in result.output.lower()
+    assert "lvlab init" in result.output
     # Every built-in image was visited for download.
     assert set(built) == set(BUILTIN_IMAGES)
     # No VM was created.

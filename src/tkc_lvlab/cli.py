@@ -37,7 +37,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ._logging import configure_logging, get_logger
-from .utils.catalog import resolve_catalog
+from .utils.catalog import BUILTIN_IMAGES, resolve_catalog
 from .utils.output import (
     get_console,
     render_one_time_password,
@@ -704,14 +704,20 @@ def _init_process_image(image: CloudImage) -> None:
 
 @app.command()
 def init() -> None:
-    """Initialize the environment: download and verify cloud images."""
-    environment, images, config_defaults, _ = _load_config().as_tuple()
+    """Initialize cloud images: the manifest's, or the built-in defaults.
+
+    With an ``Lvlab.yml`` in the current directory, downloads and verifies
+    the images its ``images:`` section names. **With no manifest, it
+    initializes the built-in default catalog** (issue #97) — so a bare
+    ``lvlab init`` works without writing a manifest first, and is the single
+    image-init path (`createvm --init-cloud-images` is deprecated in favour
+    of it).
+    """
+    environment, images, config_defaults = _init_image_source()
 
     typer.echo()
     typer.echo(f'Initializing Libvirt Lab Environment: {environment["name"]}\n')
 
-    # TODO: Would this classify well into an environment object with
-    # a list of CloudImages?
     for image_name, image_config in images.items():
         image = CloudImage(image_name, image_config, environment, config_defaults)
         try:
@@ -724,6 +730,37 @@ def init() -> None:
             logger.error("%s", exc)
             raise typer.Exit(code=1)
         typer.echo()
+
+
+def _init_image_source() -> tuple[dict, dict, dict]:
+    """Resolve ``lvlab init``'s image source: manifest images, else built-ins.
+
+    Reads the cwd ``Lvlab.yml`` via :func:`parse_config`. When a manifest is
+    present its ``environment[0]`` / ``images`` / ``config_defaults`` are
+    used. When **no** manifest exists (``parse_config`` returns ``None``),
+    the built-in default catalog
+    (:data:`tkc_lvlab.utils.catalog.BUILTIN_IMAGES`) is initialized into the
+    shared cache under a synthetic ``default`` environment (issue #97). A
+    structurally invalid manifest still fails loudly.
+
+    Returns:
+        ``(environment, images, config_defaults)``.
+
+    Raises:
+        typer.Exit: Code 1 when a manifest exists but cannot be parsed.
+    """
+    try:
+        parsed = parse_config()
+    except (ConfigError, TypeError):
+        logger.error(CONFIG_PARSE_ERROR_MSG)
+        raise typer.Exit(code=1)
+
+    if parsed is None:
+        logger.info("No Lvlab.yml found; initializing the built-in default catalog.")
+        return {"name": "default"}, dict(BUILTIN_IMAGES), {}
+
+    environment, images, config_defaults, _ = parsed
+    return environment, images, config_defaults
 
 
 def _read_manifest_text(fpath: str = "Lvlab.yml") -> str:

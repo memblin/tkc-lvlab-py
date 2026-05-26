@@ -41,13 +41,20 @@ lvlab -vv up salt.local
 
 ## init
 
-Initialize the environment defined in `Lvlab.yml`.
+Initialize cloud images. With an `Lvlab.yml` in the current directory,
+`init` downloads the images its `images:` section names. **With no
+manifest, `lvlab init` initializes the built-in default catalog** — so a
+bare `lvlab init` works without writing a manifest first. This is the
+single image-init path; `createvm --init-cloud-images` is deprecated in
+favour of it.
 
 ```bash
+# Manifest images (cwd Lvlab.yml), or the built-in defaults if there's no manifest
 lvlab init
 ```
 
-For each image referenced under the manifest's `images` block, `init`:
+For each image referenced under the manifest's `images` block (or each
+built-in default when there's no manifest), `init`:
 
 1. Creates `cloud_image_basedir/cloud-images` if missing.
 1. Downloads the image's `image_url`, `checksum_url`, and (when defined)

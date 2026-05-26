@@ -975,6 +975,57 @@ def _run_case(
     return result
 
 
+def smoke_env_dir(config_defaults: dict[str, Any], environment: dict[str, Any]) -> str:
+    """Return the environment's storage directory the smoke run uses.
+
+    Mirrors :class:`~tkc_lvlab.utils.libvirt.Machine`'s layout: per-VM
+    artifacts live under ``<disk_image_basedir>/<env>/<vm>/``, so the
+    environment directory is ``<disk_image_basedir>/<env>/``.
+
+    Args:
+        config_defaults: The manifest's ``config_defaults`` (supplies
+            ``disk_image_basedir``).
+        environment: The manifest's ``environment[0]`` (supplies ``name``).
+
+    Returns:
+        The absolute environment-directory path (``~`` expanded).
+    """
+    basedir = os.path.expanduser(
+        config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images/lvlab")
+    )
+    return os.path.join(basedir, environment.get("name", "LvLabEnvironment"))
+
+
+def cleanup_empty_env_dir(
+    config_defaults: dict[str, Any], environment: dict[str, Any]
+) -> bool:
+    """Remove the smoke environment directory iff it's empty.
+
+    ``lvlab destroy`` removes each VM's per-VM directory during teardown,
+    but leaves the parent environment directory behind empty (issue #100).
+    Smoke owns its teardown end-to-end, so it reaps its own env dir here.
+    ``os.rmdir`` only removes an *empty* directory, so an env dir that
+    still holds files (e.g. a VM whose teardown failed) is never touched —
+    that's the safety guarantee that keeps this from being a destructive
+    change to the shared ``destroy`` semantics.
+
+    Args:
+        config_defaults: The manifest's ``config_defaults``.
+        environment: The manifest's ``environment[0]``.
+
+    Returns:
+        ``True`` when the directory was removed, ``False`` when it was
+        absent or left in place (not empty).
+    """
+    env_dir = smoke_env_dir(config_defaults, environment)
+    try:
+        os.rmdir(env_dir)
+        return True
+    except OSError:
+        # Missing, or not empty (a teardown left files) — leave it alone.
+        return False
+
+
 def run_smoke(
     config_path: str,
     *,
@@ -1069,6 +1120,13 @@ def run_smoke(
 
     order = {c.vm_name: i for i, c in enumerate(cases)}
     results.sort(key=lambda r: order.get(r.vm_name, 0))
+
+    # Every case tore its VM down; reap the now-empty environment storage
+    # directory smoke created (issue #100). No-op if a teardown left files.
+    if cleanup_empty_env_dir(config_defaults, environment) and fmt is OutputFormat.TEXT:
+        print(
+            f"Removed empty environment directory {smoke_env_dir(config_defaults, environment)}"
+        )
 
     print(render_results(results, fmt))
     return 0 if all(r.result == "pass" for r in results) else 1

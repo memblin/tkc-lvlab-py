@@ -25,9 +25,11 @@ from tkc_lvlab.smoke import (
     check_images_cached,
     check_ssh_key_present,
     check_static_ips_free,
+    cleanup_empty_env_dir,
     format_plan,
     plan_batches,
     render_results,
+    smoke_env_dir,
     summarize,
 )
 from tkc_lvlab.utils.network import LibvirtNetworkInfo
@@ -417,3 +419,51 @@ def test_no_vm_boot_under_pytest():
     assert callable(smoke._run_case)
     # The Batch carrier is a plain data type, not a VM action.
     assert Batch(cases=()).cases == ()
+
+
+# ---------------------------------------------------------------------------
+# Environment-directory cleanup (issue #100)
+# ---------------------------------------------------------------------------
+
+
+def test_smoke_env_dir_matches_machine_layout(tmp_path) -> None:
+    """smoke_env_dir resolves to <disk_image_basedir>/<env> (Machine's layout)."""
+    config_defaults = {"disk_image_basedir": str(tmp_path)}
+    environment = {"name": "smoke"}
+    assert smoke_env_dir(config_defaults, environment) == str(tmp_path / "smoke")
+
+
+def test_cleanup_empty_env_dir_removes_empty_dir(tmp_path) -> None:
+    """An empty env dir (every VM torn down) is reaped; returns True."""
+    env_dir = tmp_path / "smoke"
+    env_dir.mkdir()
+    config_defaults = {"disk_image_basedir": str(tmp_path)}
+    environment = {"name": "smoke"}
+
+    assert cleanup_empty_env_dir(config_defaults, environment) is True
+    assert not env_dir.exists()
+
+
+def test_cleanup_empty_env_dir_leaves_non_empty_dir(tmp_path) -> None:
+    """A non-empty env dir (a teardown left files) is left intact; returns False.
+
+    This is the safety guarantee: cleanup never deletes a dir that still
+    holds a VM's artifacts.
+    """
+    env_dir = tmp_path / "smoke"
+    env_dir.mkdir()
+    leftover = env_dir / "still-here.qcow2"
+    leftover.write_text("not empty")
+    config_defaults = {"disk_image_basedir": str(tmp_path)}
+    environment = {"name": "smoke"}
+
+    assert cleanup_empty_env_dir(config_defaults, environment) is False
+    assert env_dir.exists()
+    assert leftover.exists()
+
+
+def test_cleanup_empty_env_dir_missing_dir_is_noop(tmp_path) -> None:
+    """A missing env dir is a no-op (no raise); returns False."""
+    config_defaults = {"disk_image_basedir": str(tmp_path)}
+    environment = {"name": "never-created"}
+    assert cleanup_empty_env_dir(config_defaults, environment) is False

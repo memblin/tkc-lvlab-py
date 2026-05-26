@@ -54,6 +54,7 @@ from .utils.images import (
     CleanupCandidate,
     CloudImage,
     backing_files_in_use,
+    comment_referenced_files,
     enumerate_protected_files,
     find_cleanup_candidates,
     resolve_cloud_image_dir,
@@ -721,6 +722,30 @@ def init() -> None:
         typer.echo()
 
 
+def _read_manifest_text(fpath: str = "Lvlab.yml") -> str:
+    """Read the raw manifest text for comment-scanning, best-effort.
+
+    The comment-referenced protection (#91) needs the verbatim ``Lvlab.yml``
+    bytes — commented-out image entries are invisible to ``parse_config``.
+    Reading is best-effort: an unreadable or absent file yields an empty
+    string (no comment protection) rather than failing the clean command,
+    which has already validated the manifest via ``parse_config``.
+
+    Args:
+        fpath: Path to the manifest. Defaults to ``"Lvlab.yml"`` in the
+            current working directory (the same default ``parse_config``
+            uses).
+
+    Returns:
+        The file's text, or ``""`` if it could not be read.
+    """
+    try:
+        with open(fpath, "r", encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return ""
+
+
 def _echo_clean_plan(candidates: list[CleanupCandidate], force: bool) -> None:
     """Print the per-candidate removal plan (dry-run preview or live action)."""
     verb = "Removing" if force else "Would remove"
@@ -780,23 +805,33 @@ def images_clean(
     image_dir = resolve_cloud_image_dir(config_defaults)
     typer.echo(f"Cloud-image cache: {image_dir}")
 
-    protected = enumerate_protected_files(images, environment, config_defaults)
+    manifest_protected = enumerate_protected_files(images, environment, config_defaults)
     backing = backing_files_in_use(environment, config_defaults)
-    protected |= backing
+    # Commented-out image entries (#91): a filename mentioned in a comment is
+    # treated as referenced so a temporarily-disabled image isn't re-downloaded.
+    commented = comment_referenced_files(image_dir, _read_manifest_text())
+    protected = manifest_protected | backing | commented
 
     candidates = find_cleanup_candidates(image_dir, protected)
 
-    # Report what survives and why — manifest-protected vs. in-use backing.
+    # Report what survives and why — manifest-protected vs. in-use backing vs.
+    # comment-referenced. Precedence (most authoritative first): an in-use
+    # backing file, then an active manifest entry, then a commented-out mention.
     if os.path.isdir(image_dir):
+        backing_abs = {os.path.abspath(p) for p in backing}
+        manifest_abs = {os.path.abspath(p) for p in manifest_protected}
+        commented_abs = {os.path.abspath(p) for p in commented}
         for fname in sorted(os.listdir(image_dir)):
             fpath = os.path.join(image_dir, fname)
             if not os.path.isfile(fpath):
                 continue
             abspath = os.path.abspath(fpath)
-            if abspath in {os.path.abspath(p) for p in backing}:
+            if abspath in backing_abs:
                 typer.echo(f"Protected (in use as backing file): {fpath}")
-            elif abspath in {os.path.abspath(p) for p in protected}:
+            elif abspath in manifest_abs:
                 typer.echo(f"Protected (defined in manifest): {fpath}")
+            elif abspath in commented_abs:
+                typer.echo(f"Protected (commented out in manifest): {fpath}")
 
     if not candidates:
         typer.echo("No unreferenced cloud-image files to remove.")

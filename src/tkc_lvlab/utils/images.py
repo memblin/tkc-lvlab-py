@@ -720,6 +720,61 @@ def backing_files_in_use(
     return in_use
 
 
+def comment_referenced_files(image_dir: str, manifest_text: str) -> set[str]:
+    """Cache files whose name appears in a commented-out manifest line.
+
+    Implements the #91 protection: when a user comments out an ``images:``
+    entry in ``Lvlab.yml`` (e.g. to temporarily swap in another version of
+    the same OS for testing), the cached image that entry would have
+    downloaded should NOT be reaped by ``lvlab images clean``. Because a
+    commented-out entry is invisible to :func:`parse_config`, this scans the
+    RAW manifest text instead.
+
+    For every line, the text following the first ``#`` is treated as a
+    comment. Any cache file in ``image_dir`` whose basename appears as a
+    substring of that comment text is protected — together with its sidecar
+    files (those whose basename begins with ``<image>.``, the checksum /
+    ``.verified`` / GPG naming this module produces), so an image and its
+    verification artefacts are protected as a unit. This mirrors the sidecar
+    grouping in :func:`find_cleanup_candidates`, where a commented-out
+    checksum sidecar would otherwise be reaped on its own.
+
+    Args:
+        image_dir: The cloud-image cache directory (already ``~``-expanded).
+        manifest_text: The raw text of ``Lvlab.yml``. An empty string (e.g.
+            when the manifest cannot be read) yields no protection.
+
+    Returns:
+        A set of absolute paths in ``image_dir`` protected by a comment
+        reference. Empty when the directory is absent, the manifest has no
+        comments, or no cache filename matches.
+    """
+    if not os.path.isdir(image_dir):
+        return set()
+
+    comment_blob = "\n".join(
+        line.split("#", 1)[1] for line in manifest_text.splitlines() if "#" in line
+    )
+    if not comment_blob.strip():
+        return set()
+
+    files = [
+        fname
+        for fname in os.listdir(image_dir)
+        if os.path.isfile(os.path.join(image_dir, fname))
+    ]
+    # Direct hits: a cache filename mentioned verbatim anywhere in a comment.
+    referenced = {fname for fname in files if fname and fname in comment_blob}
+
+    protected: set[str] = set()
+    for fname in files:
+        if fname in referenced or any(
+            fname.startswith(ref + ".") for ref in referenced
+        ):
+            protected.add(os.path.abspath(os.path.join(image_dir, fname)))
+    return protected
+
+
 def _qemu_img_backing_file(disk_path: str) -> str | None:
     """Return a qcow2 disk's backing-file path via ``qemu-img info``.
 

@@ -197,6 +197,13 @@ with `--force` once you have reviewed the output.
     top of the manifest check: it prevents the cache from being cleaned while
     a VM whose manifest entry was removed still has a live disk backed by
     that image.
+- Any cache image whose filename appears in a **commented-out line** of
+    `Lvlab.yml`. Commenting an `images:` entry out — for example to swap in
+    another version of the same OS for a quick test — keeps its cached image,
+    so you don't have to re-download it when you uncomment the entry later. A
+    filename mentioned anywhere in a comment (including a trailing `# …`
+    comment) counts; its checksum / `.verified` / GPG sidecars are protected
+    alongside it.
 
 **Sidecar removal:** when a candidate image is removed, its sidecar files
 (checksum, `.verified`, GPG keyring) are removed at the same time. You will
@@ -223,6 +230,7 @@ for placement.
 ```
 Cloud-image cache: /var/lib/libvirt/images/lvlab/cloud-images
 Protected (defined in manifest): /var/lib/libvirt/images/lvlab/cloud-images/debian-12-generic-amd64-20240101-1234.qcow2
+Protected (commented out in manifest): /var/lib/libvirt/images/lvlab/cloud-images/debian-11-genericcloud-amd64.qcow2
 Would remove: /var/lib/libvirt/images/lvlab/cloud-images/fedora-39-cloud-base.qcow2
   - sidecar: /var/lib/libvirt/images/lvlab/cloud-images/fedora-39-cloud-base.qcow2.Fedora-Cloud-39-1.5-x86_64-CHECKSUM
 Dry run: nothing deleted. Re-run with --force to remove the above.

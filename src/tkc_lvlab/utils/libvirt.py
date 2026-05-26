@@ -31,7 +31,7 @@ from .subprocess_env import system_first_env
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
 from .network import NETWORK_TYPES, USER_MODE_NETWORK_TYPES, generate_mac
-from .snapshot_cleanup import delete_all_snapshots
+from .snapshot_cleanup import undefine_with_snapshot_cleanup
 from .virsh import (
     DEAD_STATES,
     RUNNING_STATES,
@@ -123,13 +123,13 @@ class _SnapshotManager:
     A focused collaborator extracted from :class:`Machine` (issue #48). It
     owns the ``virsh snapshot-*`` interactions for one domain so the
     :class:`Machine` facade methods ``list_snapshots`` / ``create_snapshot``
-    / ``delete_snapshot`` (and :class:`_DomainDestroyer`'s pre-undefine
-    teardown) can delegate without changing their public contracts. All
-    ``virsh`` work goes
-    through the module-level helpers (``virsh_list_all_names``,
-    ``virsh_snapshot_names``, ``run_virsh``, ``delete_all_snapshots``,
-    ``_xml_tempfile``) so behaviour — including the issue #84
-    cascading-then-metadata teardown — is preserved verbatim.
+    / ``delete_snapshot`` can delegate without changing their public
+    contracts. All ``virsh`` work goes through the module-level helpers
+    (``virsh_list_all_names``, ``virsh_snapshot_names``, ``run_virsh``,
+    ``_xml_tempfile``). (Bulk teardown before ``undefine`` now lives in
+    :class:`_DomainDestroyer`, which uses the one-shot
+    ``undefine --snapshots-metadata`` — issue #96 — rather than a
+    snapshot-delete loop here.)
 
     Args:
         libvirt_vm_name: The env-namespaced libvirt domain name (the real
@@ -247,39 +247,14 @@ class _SnapshotManager:
             timeout=120.0,
         )
 
-    def delete_all(self, uri: str) -> bool:
-        """Delete every snapshot of the domain; required before ``undefine``.
-
-        ``virsh undefine`` refuses when snapshot metadata still exists, so
-        this is mandatory cleanup. Delegates to the shared
-        :func:`tkc_lvlab.utils.snapshot_cleanup.delete_all_snapshots` helper
-        (cascading ``--children`` delete, with the ``--metadata`` fallback
-        for external-children qcow2 chains — issue #84). The no-snapshots
-        case is a no-op inside the helper.
-
-        Args:
-            uri: A libvirt connection URI (e.g. ``qemu:///session``).
-
-        Returns:
-            ``True`` on success (including the no-snapshots case). ``False``
-            if snapshot cleanup raised ``VirshError``.
-        """
-        try:
-            delete_all_snapshots(uri, self.libvirt_vm_name)
-        except VirshError as e:
-            logger.error("Failed to delete snapshots for %s: %s", self.vm_name, e)
-            return False
-        return True
-
 
 class _DomainDestroyer:
     """The full destroy sequence for a single libvirt domain.
 
     A focused collaborator extracted from :class:`Machine` (issue #48). It
-    owns the ordered teardown — force-off (if alive) -> snapshot teardown
-    (via :class:`_SnapshotManager`, which routes through the robust issue
-    #84 ``delete_all_snapshots`` util) -> undefine -> on-disk file cleanup
-    — so the :class:`Machine.destroy` facade can delegate without changing
+    owns the ordered teardown — force-off (if alive) -> undefine (which
+    drops any snapshots in one shot, issue #96) -> on-disk file cleanup —
+    so the :class:`Machine.destroy` facade can delegate without changing
     its ``bool`` contract or its "stop at the first failed step" behaviour.
 
     Args:
@@ -289,8 +264,6 @@ class _DomainDestroyer:
         config_fpath: On-disk directory holding the domain's artifacts
             (qcow2 disks, ``cidata.iso``, rendered cloud-init files); the
             target of the file-cleanup step.
-        snapshots: The domain's :class:`_SnapshotManager`, used for the
-            pre-undefine snapshot teardown.
     """
 
     def __init__(
@@ -298,12 +271,10 @@ class _DomainDestroyer:
         libvirt_vm_name: str,
         vm_name: str,
         config_fpath: str,
-        snapshots: "_SnapshotManager",
     ) -> None:
         self.libvirt_vm_name = libvirt_vm_name
         self.vm_name = vm_name
         self.config_fpath = config_fpath
-        self.snapshots = snapshots
 
     def destroy(self, uri: str) -> bool:
         """Forcefully power off, undefine, and clean up files for the domain.
@@ -348,8 +319,8 @@ class _DomainDestroyer:
             )
             return False
 
-        if not self.snapshots.delete_all(uri):
-            return False
+        # Undefine drops any snapshots in one shot (issue #96), so there's no
+        # separate pre-undefine snapshot-deletion step.
         if not self._undefine(uri):
             return False
         return self._cleanup_files()
@@ -384,10 +355,16 @@ class _DomainDestroyer:
             return None
 
     def _undefine(self, uri: str) -> bool:
-        """Undefine the libvirt domain. Returns False on virsh failure."""
+        """Undefine the libvirt domain, dropping any snapshots in one shot.
+
+        Delegates to
+        :func:`tkc_lvlab.utils.snapshot_cleanup.undefine_with_snapshot_cleanup`,
+        which retries with ``undefine --snapshots-metadata`` if the domain
+        still owns snapshots (issue #96). Returns False on virsh failure.
+        """
         logger.info("Undefining %s", self.vm_name)
         try:
-            run_virsh(uri, ["undefine", self.libvirt_vm_name])
+            undefine_with_snapshot_cleanup(uri, self.libvirt_vm_name)
         except VirshError as e:
             logger.error(
                 "Failed to undefine (remove from Libvirt) %s: %s", self.vm_name, e
@@ -811,7 +788,7 @@ class Machine:
         # rather than copying it, so they never drift from the facade.
         self._snapshots = _SnapshotManager(self.libvirt_vm_name, self.vm_name)
         self._destroyer = _DomainDestroyer(
-            self.libvirt_vm_name, self.vm_name, self.config_fpath, self._snapshots
+            self.libvirt_vm_name, self.vm_name, self.config_fpath
         )
         self._cloud_init_composer = _CloudInitComposer(self)
 
@@ -1090,7 +1067,6 @@ class Machine:
                 self.libvirt_vm_name,
                 self.vm_name,
                 self.config_fpath,
-                self._get_snapshots(),
             )
         return destroyer
 

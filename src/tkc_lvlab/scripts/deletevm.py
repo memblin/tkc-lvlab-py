@@ -44,7 +44,7 @@ from pathlib import Path
 import typer
 
 from .. import __version__
-from ..utils.snapshot_cleanup import delete_all_snapshots
+from ..utils.snapshot_cleanup import undefine_with_snapshot_cleanup
 from ..utils.virsh import VirshError, run_virsh, virsh_snapshot_names, vm_exists
 from .createvm import storage_dir_for
 
@@ -92,30 +92,21 @@ def _domain_has_snapshots(vm_name: str) -> bool:
         return False  # unreachable; _fail raises. Keeps the type checker happy.
 
 
-def _delete_snapshots_or_fail(vm_name: str) -> None:
-    """Delete every snapshot of ``vm_name`` via the shared robust helper.
-
-    Raises:
-        typer.Exit: Snapshot deletion failed.
-    """
-    typer.secho(f"Deleting snapshots for VM '{vm_name}'...", fg=typer.colors.RED)
-    try:
-        delete_all_snapshots(_SYSTEM_URI, vm_name)
-    except VirshError as exc:
-        _fail(f"Failed to delete snapshots for VM '{vm_name}': {exc.stderr or exc}")
-
-
 def _undefine_or_fail(vm_name: str) -> None:
-    """Undefine ``vm_name``; any failure surfaces via :func:`_fail`.
+    """Undefine ``vm_name``, dropping any snapshots in one shot.
 
-    Snapshots are removed before this point (see the tier logic in
-    :func:`deletevm`), so a snapshot-blocked undefine should not occur here.
+    Delegates to
+    :func:`tkc_lvlab.utils.snapshot_cleanup.undefine_with_snapshot_cleanup`,
+    which retries with ``undefine --snapshots-metadata`` when the domain
+    still owns snapshots (issue #96) — no separate snapshot-delete pass.
+    The tier-2 consent in :func:`deletevm` still gates whether we reach
+    this point for a snapshot-bearing VM.
 
     Raises:
         typer.Exit: ``virsh undefine`` failed.
     """
     try:
-        run_virsh(_SYSTEM_URI, ["undefine", vm_name])
+        undefine_with_snapshot_cleanup(_SYSTEM_URI, vm_name)
     except VirshError as exc:
         _fail(f"Failed to undefine VM '{vm_name}': {exc.stderr or exc}")
 
@@ -197,13 +188,17 @@ def deletevm(
     # The domain may already be shut off; ignore a nonzero destroy.
     run_virsh(_SYSTEM_URI, ["destroy", domain_name], check=False)
 
-    # Snapshots must go before undefine — virsh refuses to undefine a domain
-    # that still owns snapshot metadata. We've already obtained consent above
-    # (or the operator passed --force --snapshots-too).
+    # Consent for snapshot removal was obtained above (tier-2, or
+    # --force --snapshots-too). The undefine drops the domain AND all its
+    # snapshot metadata in one shot (issue #96), so there's no separate
+    # snapshot-delete pass.
     if has_snapshots:
-        _delete_snapshots_or_fail(domain_name)
-
-    typer.secho(f"Undefining VM '{domain_name}'...", fg=typer.colors.RED)
+        typer.secho(
+            f"Removing snapshots and undefining VM '{domain_name}'...",
+            fg=typer.colors.RED,
+        )
+    else:
+        typer.secho(f"Undefining VM '{domain_name}'...", fg=typer.colors.RED)
     _undefine_or_fail(domain_name)
 
     # Storage cleanup is best-effort: a one-off VM's dir lives here, but a

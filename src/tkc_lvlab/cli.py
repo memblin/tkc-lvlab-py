@@ -1111,6 +1111,45 @@ def snapshot_delete(
         )
 
 
+@snapshot_app.command("revert")
+def snapshot_revert(
+    vm_name: str,
+    snapshot_name: str,
+    force: bool = typer.Option(False, "--force", help="Skip confirmation prompt."),
+) -> None:
+    """Revert a VM to a named snapshot (EXPERIMENTAL — issue #121).
+
+    The iteration primitive for config-management testing: snapshot a clean
+    base, run your Salt/Ansible, then revert in seconds and re-run instead of
+    a full destroy/up. Reverting discards the domain's current disk + state,
+    so it prompts unless ``--force`` is given.
+    """
+    machine, libvirt_uri = _resolve_existing_machine(vm_name)
+    if machine is None:
+        return
+
+    if not (
+        force
+        or typer.confirm(
+            f"Revert {machine.vm_name} to snapshot {snapshot_name}? "
+            "(discards the VM's current disk + state)"
+        )
+    ):
+        typer.echo(f"Snapshot revert aborted for {machine.vm_name}.")
+        return
+
+    try:
+        machine.revert_snapshot(libvirt_uri, snapshot_name)
+        typer.echo(f"Reverted {machine.vm_name} to snapshot {snapshot_name}")
+    except VirshError as e:
+        logger.error(
+            "Failed to revert %s to snapshot %s: %s",
+            machine.vm_name,
+            snapshot_name,
+            e,
+        )
+
+
 @app.command()
 def status() -> None:
     """Show the status of the environment.

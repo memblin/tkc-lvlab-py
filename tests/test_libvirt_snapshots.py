@@ -285,3 +285,58 @@ def test_delete_snapshot_absent_domain_raises(machine: Machine) -> None:
             machine.delete_snapshot(URI, "snap-1")
 
     run_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# revert (EXPERIMENTAL — issue #121, snapshot-revert prototype)
+# ---------------------------------------------------------------------------
+
+
+def test_revert_snapshot_happy_path_returns_none(machine: Machine) -> None:
+    """Build ``snapshot-revert <name> <snap>`` with ``timeout=120.0``."""
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.virsh_list_all_names",
+            return_value=["web01_lab"],
+        ),
+        mock.patch("tkc_lvlab.utils.libvirt.run_virsh") as run_mock,
+    ):
+        result = machine.revert_snapshot(URI, "base")
+
+    assert result is None
+    run_mock.assert_called_once_with(
+        URI,
+        ["snapshot-revert", "web01_lab", "base"],
+        timeout=120.0,
+    )
+
+
+def test_revert_snapshot_propagates_virsh_error(machine: Machine) -> None:
+    """A ``virsh snapshot-revert`` failure (e.g. snapshot doesn't exist) propagates."""
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.virsh_list_all_names",
+            return_value=["web01_lab"],
+        ),
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.run_virsh",
+            side_effect=VirshError(1, "snapshot not found", ["snapshot-revert"]),
+        ),
+    ):
+        with pytest.raises(VirshError):
+            machine.revert_snapshot(URI, "missing")
+
+
+def test_revert_snapshot_absent_domain_raises(machine: Machine) -> None:
+    """Reverting a domain that isn't defined raises, never silently 'succeeds'."""
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.virsh_list_all_names",
+            return_value=["other_lab"],
+        ),
+        mock.patch("tkc_lvlab.utils.libvirt.run_virsh") as run_mock,
+    ):
+        with pytest.raises(VirshError):
+            machine.revert_snapshot(URI, "base")
+
+    run_mock.assert_not_called()

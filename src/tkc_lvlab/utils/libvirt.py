@@ -247,6 +247,37 @@ class _SnapshotManager:
             timeout=120.0,
         )
 
+    def revert(self, uri: str, snapshot_name: str) -> None:
+        """Revert the domain to a named snapshot via ``virsh snapshot-revert``.
+
+        EXPERIMENTAL (issue #121, candidate "fast reset" loop): restores the
+        domain's disk + state to the snapshot, the iteration primitive for
+        config-management testing — snapshot a clean base, run your CM, revert,
+        re-run.
+
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
+            snapshot_name: Name of the snapshot to revert to.
+
+        Raises:
+            VirshError: When the domain isn't defined at ``uri``, when the
+                named snapshot doesn't exist, or when ``virsh snapshot-revert``
+                itself fails.
+        """
+        if self.libvirt_vm_name not in virsh_list_all_names(uri):
+            logger.warning(VM_DOES_NOT_EXIST_MSG, self.vm_name)
+            raise VirshError(
+                1,
+                f"domain {self.libvirt_vm_name} is not defined at {uri}",
+                ["snapshot-revert", self.libvirt_vm_name, snapshot_name],
+            )
+
+        run_virsh(
+            uri,
+            ["snapshot-revert", self.libvirt_vm_name, snapshot_name],
+            timeout=120.0,
+        )
+
 
 class _DomainDestroyer:
     """The full destroy sequence for a single libvirt domain.
@@ -1181,6 +1212,19 @@ class Machine:
                 port propagates them so callers get a clean signal.
         """
         self._get_snapshots().delete(uri, snapshot_name)
+
+    def revert_snapshot(self, uri: str, snapshot_name: str) -> None:
+        """Revert this machine's domain to a named snapshot (EXPERIMENTAL, #121).
+
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
+            snapshot_name: Name of the snapshot to revert to.
+
+        Raises:
+            VirshError: When the domain isn't defined at ``uri``, the
+                snapshot doesn't exist, or ``virsh snapshot-revert`` fails.
+        """
+        self._get_snapshots().revert(uri, snapshot_name)
 
     def poweron(self, uri: str) -> int:
         """Start the virtual machine if it is currently shut off or crashed.

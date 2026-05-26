@@ -39,25 +39,57 @@ from rich.table import Table
 # env var still wins when the user sets it.
 NON_TTY_WIDTH = 200
 
+# Global colour switch (issue #131). Set from the ``lvlab --no-color`` callback;
+# ``NO_COLOR`` in the environment (https://no-color.org) disables colour too.
+# Rich already strips ANSI when stdout is not a terminal, so pipes/CI are plain
+# without this — the flag covers the TTY-that-can't-render-colour case.
+_NO_COLOR = False
 
-def get_console(*, stderr: bool = False) -> Console:
-    """Return the shared console, widened when stdout is not a TTY.
+
+def set_no_color(value: bool) -> None:
+    """Enable or disable styled (ANSI) output globally.
+
+    Args:
+        value: ``True`` to disable colour for every :func:`get_console`.
+    """
+    global _NO_COLOR
+    _NO_COLOR = value
+
+
+def color_disabled() -> bool:
+    """Return ``True`` when styled output is off (``--no-color`` or ``NO_COLOR``)."""
+    return _NO_COLOR or "NO_COLOR" in os.environ
+
+
+def get_console(*, stderr: bool = False, max_width: int | None = None) -> Console:
+    """Return the shared console — colour-gated, optionally width-capped.
 
     Use for static, human-facing tables. When attached to a terminal the
     terminal's width is honored; otherwise the console is widened to
     :data:`NON_TTY_WIDTH` so a piped/redirected table isn't clipped. A
-    user-set ``COLUMNS`` always wins.
+    user-set ``COLUMNS`` always wins. Colour is suppressed when
+    :func:`color_disabled` is true.
 
     Args:
         stderr: Render to stderr instead of stdout.
+        max_width: Cap the console width at this many columns (e.g. ``80`` so a
+            wide table wraps instead of sprawling, while a small window still
+            fits). ``None`` leaves the width uncapped.
 
     Returns:
         A configured :class:`rich.console.Console`.
     """
-    console = Console(stderr=stderr)
-    if not console.is_terminal and "COLUMNS" not in os.environ:
-        return Console(stderr=stderr, width=NON_TTY_WIDTH)
-    return console
+    no_color = color_disabled()
+    base = Console(stderr=stderr, no_color=no_color)
+    if not base.is_terminal and "COLUMNS" not in os.environ:
+        width = NON_TTY_WIDTH
+    else:
+        width = base.width
+    if max_width is not None:
+        width = min(width, max_width)
+    if width != base.width:
+        return Console(stderr=stderr, no_color=no_color, width=width)
+    return base
 
 
 def is_tty() -> bool:

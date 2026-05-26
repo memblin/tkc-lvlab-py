@@ -60,6 +60,44 @@ def test_get_console_respects_columns_env(monkeypatch) -> None:
     assert console.width == 123
 
 
+def test_get_console_max_width_caps_a_wide_console(monkeypatch) -> None:
+    """``max_width`` caps the rendered width (so a wide table wraps at ~80)."""
+    monkeypatch.delenv("COLUMNS", raising=False)
+    monkeypatch.setattr(output.Console, "is_terminal", property(lambda self: False))
+
+    # Off a terminal the console would widen to NON_TTY_WIDTH (200); the cap
+    # brings it down to 80.
+    assert get_console(max_width=80).width == 80
+
+
+def test_get_console_max_width_does_not_upscale_a_small_window(monkeypatch) -> None:
+    """A window narrower than ``max_width`` keeps its (smaller) width."""
+    monkeypatch.setenv("COLUMNS", "60")
+    monkeypatch.setattr(output.Console, "is_terminal", property(lambda self: True))
+
+    assert get_console(max_width=80).width == 60
+
+
+def test_set_no_color_disables_console_color(monkeypatch) -> None:
+    """``set_no_color(True)`` makes ``get_console`` return a no-colour console."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    try:
+        output.set_no_color(True)
+        assert output.color_disabled() is True
+        assert get_console().no_color is True
+    finally:
+        output.set_no_color(False)
+    assert output.color_disabled() is False
+
+
+def test_color_disabled_honors_no_color_env(monkeypatch) -> None:
+    """The NO_COLOR env var disables colour even without the flag."""
+    output.set_no_color(False)
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert output.color_disabled() is True
+    assert get_console().no_color is True
+
+
 def test_is_tty_reflects_stdout(monkeypatch) -> None:
     """is_tty mirrors sys.stdout.isatty so live views can degrade off a TTY."""
 

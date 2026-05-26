@@ -47,6 +47,7 @@ from .utils.output import (
     is_tty,
     render_one_time_password,
     render_ssh_hint,
+    set_no_color,
     styled_table,
 )
 from .utils.passwords import generate_one_time_password
@@ -154,9 +155,18 @@ def _root(
         "--quiet",
         help="Suppress informational logs (ERROR only). Overrides -v.",
     ),
+    no_color: bool = typer.Option(
+        False,
+        "--no-color",
+        help="Disable colored/styled output (also honors the NO_COLOR env var).",
+    ),
 ) -> None:
     """Top-level callback — configures logging before any subcommand runs."""
     configure_logging(verbosity=verbose, quiet=quiet)
+    if no_color:
+        set_no_color(True)
+        # Make Click/typer.secho honor it too, alongside the Rich consoles.
+        os.environ["NO_COLOR"] = "1"
 
 
 def _load_config() -> ConfigManager:

@@ -58,9 +58,10 @@ logger = get_logger(__name__)
 VM_DOES_NOT_EXIST_MSG = "The virtual machine %s does not exist in this Libvirt URI"
 
 # Maps a ``hosts.{family}.tmpl`` filename to the lowercased ``machine.os``
-# prefixes that should select it. Used by :meth:`Machine._resolve_hosts_template_path`
-# so the manifest-wide /etc/hosts snippet lands in the right cloud-init
-# template path for the guest distro. Extend here to support a new family.
+# prefixes that should select it. Used by
+# :meth:`_CloudInitComposer._resolve_hosts_template_path` so the
+# manifest-wide /etc/hosts snippet lands in the right cloud-init template
+# path for the guest distro. Extend here to support a new family.
 _HOSTS_TEMPLATE_MAPPING: dict[str, list[str]] = {
     "hosts.debian.tmpl": ["debian", "ubuntu"],
     "hosts.redhat.tmpl": [
@@ -114,6 +115,504 @@ def _virt_install_network_arg(iface: dict[str, Any]) -> str:
         "address.type=pci,address.domain=0,address.bus=1,"
         "address.slot=0,address.function=0"
     )
+
+
+class _SnapshotManager:
+    """Snapshot operations for a single libvirt domain.
+
+    A focused collaborator extracted from :class:`Machine` (issue #48). It
+    owns the ``virsh snapshot-*`` interactions for one domain so the
+    :class:`Machine` facade methods ``list_snapshots`` / ``create_snapshot``
+    / ``delete_snapshot`` (and :class:`_DomainDestroyer`'s pre-undefine
+    teardown) can delegate without changing their public contracts. All
+    ``virsh`` work goes
+    through the module-level helpers (``virsh_list_all_names``,
+    ``virsh_snapshot_names``, ``run_virsh``, ``delete_all_snapshots``,
+    ``_xml_tempfile``) so behaviour — including the issue #84
+    cascading-then-metadata teardown — is preserved verbatim.
+
+    Args:
+        libvirt_vm_name: The env-namespaced libvirt domain name (the real
+            domain name, e.g. ``web01_lab``). Every ``virsh`` lookup uses
+            this, never the short ``vm_name``.
+        vm_name: The short manifest name, used only for human-facing log
+            lines (matching the pre-refactor wording).
+    """
+
+    def __init__(self, libvirt_vm_name: str, vm_name: str) -> None:
+        self.libvirt_vm_name = libvirt_vm_name
+        self.vm_name = vm_name
+
+    def list(self, uri: str) -> list[str]:
+        """Return the snapshot names defined for the domain in creation order.
+
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
+
+        Returns:
+            Snapshot names in creation order. ``[]`` when the domain isn't
+            defined or has no snapshots.
+
+        Raises:
+            VirshError: If ``virsh`` itself fails for a reason other than
+                "domain not defined" (e.g. cannot reach the URI).
+        """
+        if self.libvirt_vm_name not in virsh_list_all_names(uri):
+            return []
+
+        try:
+            return virsh_snapshot_names(uri, self.libvirt_vm_name)
+        except VirshError:
+            # The domain disappeared between the list and the snapshot-list
+            # call. Treat as absent — caller wanted snapshot names, there
+            # are none to report.
+            return []
+
+    def create(
+        self,
+        uri: str,
+        snapshot_name: str,
+        snapshot_description: str | None = None,
+    ) -> bool:
+        """Create a snapshot of the domain via ``virsh snapshot-create``.
+
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
+            snapshot_name: Name to assign to the new snapshot.
+            snapshot_description: Optional human-readable description.
+                Defaults to ``"Snapshot of <libvirt_vm_name>"``.
+
+        Returns:
+            ``True`` on success.
+
+        Raises:
+            VirshError: When the domain isn't defined at ``uri`` or when
+                ``virsh snapshot-create`` itself fails.
+        """
+        if self.libvirt_vm_name not in virsh_list_all_names(uri):
+            logger.warning(
+                VM_DOES_NOT_EXIST_MSG,
+                self.vm_name,
+            )
+            raise VirshError(
+                1,
+                f"domain {self.libvirt_vm_name} is not defined at {uri}",
+                ["snapshot-create", self.libvirt_vm_name],
+            )
+
+        if not snapshot_description:
+            snapshot_description = f"Snapshot of {self.libvirt_vm_name}"
+
+        snapshot_xml = (
+            "<domainsnapshot>\n"
+            f"    <name>{snapshot_name}</name>\n"
+            f"    <description>{snapshot_description}</description>\n"
+            "</domainsnapshot>\n"
+        )
+
+        with _xml_tempfile(snapshot_xml) as xml_path:
+            run_virsh(
+                uri,
+                ["snapshot-create", self.libvirt_vm_name, "--xmlfile", xml_path],
+                timeout=120.0,
+            )
+        return True
+
+    def delete(self, uri: str, snapshot_name: str) -> None:
+        """Delete a named snapshot via ``virsh snapshot-delete``.
+
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
+            snapshot_name: Name of the snapshot to delete.
+
+        Raises:
+            VirshError: When the domain isn't defined at ``uri``, when the
+                named snapshot doesn't exist, or when ``virsh
+                snapshot-delete`` itself fails.
+        """
+        if self.libvirt_vm_name not in virsh_list_all_names(uri):
+            logger.warning(
+                VM_DOES_NOT_EXIST_MSG,
+                self.vm_name,
+            )
+            raise VirshError(
+                1,
+                f"domain {self.libvirt_vm_name} is not defined at {uri}",
+                ["snapshot-delete", self.libvirt_vm_name, snapshot_name],
+            )
+
+        run_virsh(
+            uri,
+            ["snapshot-delete", self.libvirt_vm_name, snapshot_name],
+            timeout=120.0,
+        )
+
+    def delete_all(self, uri: str) -> bool:
+        """Delete every snapshot of the domain; required before ``undefine``.
+
+        ``virsh undefine`` refuses when snapshot metadata still exists, so
+        this is mandatory cleanup. Delegates to the shared
+        :func:`tkc_lvlab.utils.snapshot_cleanup.delete_all_snapshots` helper
+        (cascading ``--children`` delete, with the ``--metadata`` fallback
+        for external-children qcow2 chains — issue #84). The no-snapshots
+        case is a no-op inside the helper.
+
+        Args:
+            uri: A libvirt connection URI (e.g. ``qemu:///session``).
+
+        Returns:
+            ``True`` on success (including the no-snapshots case). ``False``
+            if snapshot cleanup raised ``VirshError``.
+        """
+        try:
+            delete_all_snapshots(uri, self.libvirt_vm_name)
+        except VirshError as e:
+            logger.error("Failed to delete snapshots for %s: %s", self.vm_name, e)
+            return False
+        return True
+
+
+class _DomainDestroyer:
+    """The full destroy sequence for a single libvirt domain.
+
+    A focused collaborator extracted from :class:`Machine` (issue #48). It
+    owns the ordered teardown — force-off (if alive) -> snapshot teardown
+    (via :class:`_SnapshotManager`, which routes through the robust issue
+    #84 ``delete_all_snapshots`` util) -> undefine -> on-disk file cleanup
+    — so the :class:`Machine.destroy` facade can delegate without changing
+    its ``bool`` contract or its "stop at the first failed step" behaviour.
+
+    Args:
+        libvirt_vm_name: The env-namespaced libvirt domain name used for
+            every ``virsh`` lookup.
+        vm_name: The short manifest name, used for human-facing log lines.
+        config_fpath: On-disk directory holding the domain's artifacts
+            (qcow2 disks, ``cidata.iso``, rendered cloud-init files); the
+            target of the file-cleanup step.
+        snapshots: The domain's :class:`_SnapshotManager`, used for the
+            pre-undefine snapshot teardown.
+    """
+
+    def __init__(
+        self,
+        libvirt_vm_name: str,
+        vm_name: str,
+        config_fpath: str,
+        snapshots: "_SnapshotManager",
+    ) -> None:
+        self.libvirt_vm_name = libvirt_vm_name
+        self.vm_name = vm_name
+        self.config_fpath = config_fpath
+        self.snapshots = snapshots
+
+    def destroy(self, uri: str) -> bool:
+        """Forcefully power off, undefine, and clean up files for the domain.
+
+        Args:
+            uri: libvirt connection URI (e.g. ``qemu:///session``).
+
+        Returns:
+            ``True`` if the domain was undefined and file cleanup succeeded.
+            ``False`` if the domain was not found, any ``virsh`` call failed,
+            or file cleanup raised.
+        """
+        try:
+            current_vms = virsh_list_all_names(uri)
+        except VirshError as e:
+            logger.error("Failed to list domains at %s: %s", uri, e)
+            return False
+
+        if self.libvirt_vm_name not in current_vms:
+            logger.warning(VM_DOES_NOT_EXIST_MSG, self.vm_name)
+            return False
+
+        try:
+            vm_state = virsh_domstate(uri, self.libvirt_vm_name)
+        except VirshError as e:
+            logger.error("Failed to query state of %s: %s", self.vm_name, e)
+            return False
+
+        vm_state = self._force_off_if_alive(uri, vm_state)
+        if vm_state is None:
+            return False
+
+        # Only proceed with snapshot cleanup + undefine when the domain has
+        # actually reached a dead state. If destroy didn't take effect (state
+        # is still running, in shutdown, etc.) we abort rather than undefining
+        # a live domain.
+        if vm_state not in DEAD_STATES:
+            logger.error(
+                "Machine %s is in state %r; refusing to undefine.",
+                self.vm_name,
+                vm_state,
+            )
+            return False
+
+        if not self.snapshots.delete_all(uri):
+            return False
+        if not self._undefine(uri):
+            return False
+        return self._cleanup_files()
+
+    def _force_off_if_alive(self, uri: str, vm_state: str) -> str | None:
+        """If the domain is still running/paused, force it off and return new state.
+
+        The previous libvirt-python code called ``virsh destroy`` (a
+        power-cord-pull) on RUNNING or PAUSED — the same set
+        :data:`RUNNING_STATES` carries.
+
+        Returns:
+            The post-destroy domain state, or ``vm_state`` unchanged when
+            the domain was already in a non-running state. ``None`` when
+            either the force-off or the follow-up state query failed
+            (error already logged).
+        """
+        if vm_state not in RUNNING_STATES:
+            return vm_state
+        logger.warning("Forcefully shutting down %s", self.vm_name)
+        try:
+            run_virsh(uri, ["destroy", self.libvirt_vm_name])
+        except VirshError as e:
+            logger.error("Failed to forcefully shutdown %s: %s", self.vm_name, e)
+            return None
+        try:
+            return virsh_domstate(uri, self.libvirt_vm_name)
+        except VirshError as e:
+            logger.error(
+                "Failed to query state of %s after destroy: %s", self.vm_name, e
+            )
+            return None
+
+    def _undefine(self, uri: str) -> bool:
+        """Undefine the libvirt domain. Returns False on virsh failure."""
+        logger.info("Undefining %s", self.vm_name)
+        try:
+            run_virsh(uri, ["undefine", self.libvirt_vm_name])
+        except VirshError as e:
+            logger.error(
+                "Failed to undefine (remove from Libvirt) %s: %s", self.vm_name, e
+            )
+            return False
+        return True
+
+    def _cleanup_files(self) -> bool:
+        """Remove on-disk machine files and the (empty) config directory.
+
+        Mirrors the previous behavior: a filesystem error here logs and
+        returns ``False`` even though libvirt state has already been
+        cleaned up by the time we reach this point.
+        """
+        try:
+            for path in glob.glob(os.path.join(self.config_fpath, "*")):
+                if os.path.isfile(path):
+                    logger.info("Removing file %s.", path)
+                    os.remove(path)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error("Exception when removing machine files %s", e)
+            return False
+
+        try:
+            if not os.listdir(self.config_fpath):
+                logger.info("Removing machine directory %s.", self.config_fpath)
+                os.rmdir(self.config_fpath)
+            else:
+                logger.warning("Machine directory %s is not empty.", self.config_fpath)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error("Exception when removing machine files %s", e)
+            return False
+        return True
+
+
+class _CloudInitComposer:
+    """Cloud-init document orchestration for a single :class:`Machine`.
+
+    A focused collaborator extracted from :class:`Machine` (issue #48). It
+    owns rendering the three NoCloud documents (``meta-data``,
+    ``user-data``, ``network-config``) to disk plus the runcmd/defaults
+    merge, the manifest-wide ``/etc/hosts`` injection, and the
+    distro-family hosts-template resolution. The :class:`Machine.cloud_init`
+    facade delegates to :meth:`render`, preserving the ``machines`` param
+    (issue #49) and the top-of-runcmd ``/etc/hosts`` behaviour verbatim.
+
+    Rendering and IO go through the module-level names
+    (``NetworkConfig`` / ``MetaData`` / ``UserData`` / ``parse_config`` /
+    ``generate_hosts``) so existing tests that patch them at the
+    :mod:`tkc_lvlab.utils.libvirt` boundary keep working unchanged.
+
+    Args:
+        machine: The owning :class:`Machine`. The composer reads its
+            identity/state attributes (``environment``, ``vm_name``,
+            ``libvirt_vm_name``, ``hostname``, ``domain``, ``fqdn``, ``os``,
+            ``interfaces``, ``nameservers``, ``cloud_init_config``,
+            ``config_fpath``) rather than copying them, so a constructed
+            :class:`Machine` and its composer never drift.
+    """
+
+    def __init__(self, machine: "Machine") -> None:
+        self.machine = machine
+
+    def render(
+        self,
+        cloud_image: "CloudImage",
+        config_defaults: dict[str, Any],
+        machines: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, str, str]:
+        """Render the three cloud-init documents to disk.
+
+        See :meth:`Machine.cloud_init` for the full contract — this is the
+        body it delegates to.
+
+        Args:
+            cloud_image: The :class:`tkc_lvlab.utils.images.CloudImage` for
+                this machine — its ``network_version`` and
+                ``default_username`` are consulted.
+            config_defaults: The manifest's ``config_defaults`` block.
+            machines: The manifest's ``machines`` list for the ``/etc/hosts``
+                render. ``None`` triggers a one-time :func:`parse_config`
+                fallback.
+
+        Returns:
+            ``(meta_data_path, user_data_path, network_config_path)``.
+
+        Raises:
+            ValueError: When the machine's ``os`` matches no known
+                ``/etc/cloud/templates/hosts.*.tmpl`` distro family.
+            LvlabError: When the config directory cannot be created.
+            ConfigError: On the ``machines is None`` fallback when
+                :func:`parse_config` cannot read the manifest.
+        """
+        machine = self.machine
+        self._ensure_config_dir()
+
+        network_config_fpath = self._render_and_write(
+            NetworkConfig(
+                cloud_image.network_version, machine.interfaces, machine.nameservers
+            ),
+            "network-config",
+        )
+        metadata_config_fpath = self._render_and_write(
+            MetaData(machine.libvirt_vm_name, machine.fqdn),
+            "meta-data",
+        )
+
+        cloud_init_config = self._merge_cloud_init_config(
+            config_defaults.get("cloud_init", {})
+        )
+        # Default the first-boot user to the image's conventional account
+        # (debian/fedora/almalinux/...) when the manifest doesn't set one,
+        # using the same derivation createvm applies. An explicit
+        # cloud_init.user still wins.
+        cloud_init_config.setdefault("user", cloud_image.default_username)
+
+        # The CLI passes the already-parsed machines list so the manifest is
+        # read once per command path. The None fallback re-parses only for
+        # callers that don't hold the list (kept distinct so the common path
+        # never touches disk a second time).
+        if machines is None:
+            try:
+                _, _, _, machines = parse_config()
+            except (ConfigError, TypeError) as exc:
+                logger.error("Could not parse config file.")
+                raise ConfigError("Could not parse config file.") from exc
+
+        hosts_snippet = generate_hosts(
+            machine.environment, config_defaults, machines, heredoc="/etc/hosts"
+        )
+        template_fpath = self._resolve_hosts_template_path()
+        hosts_template_snippet = generate_hosts(
+            machine.environment, config_defaults, machines, heredoc=template_fpath
+        )
+
+        # Prepend the two hosts heredoc snippets so /etc/hosts (and the
+        # cloud-init template) are populated before any runcmd entry that
+        # does DNS-ish work.
+        cloud_init_config["runcmd"] = [
+            hosts_snippet,
+            hosts_template_snippet,
+        ] + cloud_init_config.get("runcmd", [])
+
+        userdata_config_fpath = self._render_and_write(
+            UserData(cloud_init_config, machine.hostname, machine.domain, machine.fqdn),
+            "user-data",
+        )
+
+        return metadata_config_fpath, userdata_config_fpath, network_config_fpath
+
+    def _ensure_config_dir(self) -> None:
+        """Create the machine's ``config_fpath`` if absent.
+
+        Raises:
+            LvlabError: The cloud-init config directory could not be created
+                (e.g. permission denied). Raised as a library exception so
+                this module never imports ``typer``; the CLI boundary
+                (:mod:`tkc_lvlab.cli`) converts it to a ``typer.Exit``.
+        """
+        config_fpath = self.machine.config_fpath
+        if os.path.exists(config_fpath):
+            return
+        try:
+            os.makedirs(config_fpath)
+        except OSError as e:
+            logger.error("Exception creating %s: %s", config_fpath, e)
+            raise LvlabError(
+                f"Could not create cloud-init config directory "
+                f"'{config_fpath}': {e}"
+            ) from e
+
+    def _render_and_write(self, renderable: Any, filename: str) -> str:
+        """Render ``renderable.render_config()`` to ``<config_fpath>/<filename>``.
+
+        Returns the resolved file path.
+        """
+        fpath = os.path.join(self.machine.config_fpath, filename)
+        logger.info("Writing cloud-init %s file %s", filename, fpath)
+        with open(fpath, "w", encoding="utf-8") as fh:
+            fh.write(renderable.render_config())
+        return fpath
+
+    def _merge_cloud_init_config(self, cloud_init_defaults: dict[str, Any]) -> dict:
+        """Merge ``cloud_init_defaults`` and the machine's ``cloud_init_config``.
+
+        Honours the per-machine ``runcmd_ignore_defaults`` opt-out: when
+        truthy, the defaults' ``runcmd`` is dropped before the merge
+        (every other defaults key still applies). Without the opt-out,
+        ``runcmd`` from defaults is prepended to the machine's runcmd.
+        """
+        machine_cloud_init = self.machine.cloud_init_config
+        if machine_cloud_init.get("runcmd_ignore_defaults", False):
+            logger.debug(
+                "Ignoring config_defaults:cloud_init:runcmd for %s",
+                self.machine.vm_name,
+            )
+            filtered_defaults = {
+                k: v for k, v in cloud_init_defaults.items() if k != "runcmd"
+            }
+            return {**filtered_defaults, **machine_cloud_init}
+
+        logger.debug(
+            "Including config_defaults:cloud_init:runcmd for %s", self.machine.vm_name
+        )
+        merged = {**cloud_init_defaults, **machine_cloud_init}
+        if "runcmd" in cloud_init_defaults and "runcmd" in machine_cloud_init:
+            merged["runcmd"] = (
+                cloud_init_defaults["runcmd"] + machine_cloud_init["runcmd"]
+            )
+        elif "runcmd" in cloud_init_defaults:
+            merged["runcmd"] = cloud_init_defaults["runcmd"]
+        return merged
+
+    def _resolve_hosts_template_path(self) -> str:
+        """Return ``/etc/cloud/templates/hosts.<family>.tmpl`` for the machine's OS.
+
+        Raises:
+            ValueError: When the machine's ``os`` matches no entry in
+                :data:`_HOSTS_TEMPLATE_MAPPING`.
+        """
+        os_lower = self.machine.os.lower()
+        for template, distros in _HOSTS_TEMPLATE_MAPPING.items():
+            if any(os_lower.startswith(d) for d in distros):
+                return "/etc/cloud/templates/" + template
+        raise ValueError(f"Could not find a template file for {self.machine.os}")
 
 
 class Machine:
@@ -295,6 +794,15 @@ class Machine:
         self.cloud_init_config = machine.get("cloud_init", {})
         self.config_fpath = config_fpath
 
+        # Focused collaborators the public facade methods delegate to
+        # (issue #48). They read this Machine's resolved identity/state
+        # rather than copying it, so they never drift from the facade.
+        self._snapshots = _SnapshotManager(self.libvirt_vm_name, self.vm_name)
+        self._destroyer = _DomainDestroyer(
+            self.libvirt_vm_name, self.vm_name, self.config_fpath, self._snapshots
+        )
+        self._cloud_init_composer = _CloudInitComposer(self)
+
     def cloud_init(
         self,
         cloud_image: "CloudImage",
@@ -343,132 +851,19 @@ class Machine:
                 structurally invalid). The CLI boundary converts it to a
                 ``typer.Exit``.
         """
-        self._ensure_config_dir()
+        return self._composer().render(cloud_image, config_defaults, machines)
 
-        network_config_fpath = self._render_and_write(
-            NetworkConfig(
-                cloud_image.network_version, self.interfaces, self.nameservers
-            ),
-            "network-config",
-        )
-        metadata_config_fpath = self._render_and_write(
-            MetaData(self.libvirt_vm_name, self.fqdn),
-            "meta-data",
-        )
+    def _composer(self) -> _CloudInitComposer:
+        """Return this machine's cloud-init composer, building one if absent.
 
-        cloud_init_config = self._merge_cloud_init_config(
-            config_defaults.get("cloud_init", {})
-        )
-        # Default the first-boot user to the image's conventional account
-        # (debian/fedora/almalinux/...) when the manifest doesn't set one,
-        # using the same derivation createvm applies. An explicit
-        # cloud_init.user still wins.
-        cloud_init_config.setdefault("user", cloud_image.default_username)
-
-        # The CLI passes the already-parsed machines list so the manifest is
-        # read once per command path. The None fallback re-parses only for
-        # callers that don't hold the list (kept distinct so the common path
-        # never touches disk a second time).
-        if machines is None:
-            try:
-                _, _, _, machines = parse_config()
-            except (ConfigError, TypeError) as exc:
-                logger.error("Could not parse config file.")
-                raise ConfigError("Could not parse config file.") from exc
-
-        hosts_snippet = generate_hosts(
-            self.environment, config_defaults, machines, heredoc="/etc/hosts"
-        )
-        template_fpath = self._resolve_hosts_template_path()
-        hosts_template_snippet = generate_hosts(
-            self.environment, config_defaults, machines, heredoc=template_fpath
-        )
-
-        # Prepend the two hosts heredoc snippets so /etc/hosts (and the
-        # cloud-init template) are populated before any runcmd entry that
-        # does DNS-ish work.
-        cloud_init_config["runcmd"] = [
-            hosts_snippet,
-            hosts_template_snippet,
-        ] + cloud_init_config.get("runcmd", [])
-
-        userdata_config_fpath = self._render_and_write(
-            UserData(cloud_init_config, self.hostname, self.domain, self.fqdn),
-            "user-data",
-        )
-
-        return metadata_config_fpath, userdata_config_fpath, network_config_fpath
-
-    def _ensure_config_dir(self) -> None:
-        """Create :attr:`config_fpath` if absent.
-
-        Raises:
-            LvlabError: The cloud-init config directory could not be created
-                (e.g. permission denied). Raised as a library exception so
-                this module never imports ``typer``; the CLI boundary
-                (:mod:`tkc_lvlab.cli`) converts it to a ``typer.Exit``.
+        Constructed in ``__init__`` for normally-built machines; rebuilt
+        on demand for test stubs created via ``object.__new__`` (which set
+        the state attributes the composer reads but skip ``__init__``).
         """
-        if os.path.exists(self.config_fpath):
-            return
-        try:
-            os.makedirs(self.config_fpath)
-        except OSError as e:
-            logger.error("Exception creating %s: %s", self.config_fpath, e)
-            raise LvlabError(
-                f"Could not create cloud-init config directory "
-                f"'{self.config_fpath}': {e}"
-            ) from e
-
-    def _render_and_write(self, renderable: Any, filename: str) -> str:
-        """Render ``renderable.render_config()`` to ``<config_fpath>/<filename>``.
-
-        Returns the resolved file path.
-        """
-        fpath = os.path.join(self.config_fpath, filename)
-        logger.info("Writing cloud-init %s file %s", filename, fpath)
-        with open(fpath, "w", encoding="utf-8") as fh:
-            fh.write(renderable.render_config())
-        return fpath
-
-    def _merge_cloud_init_config(self, cloud_init_defaults: dict[str, Any]) -> dict:
-        """Merge ``cloud_init_defaults`` and :attr:`cloud_init_config`.
-
-        Honours the per-machine ``runcmd_ignore_defaults`` opt-out: when
-        truthy, the defaults' ``runcmd`` is dropped before the merge
-        (every other defaults key still applies). Without the opt-out,
-        ``runcmd`` from defaults is prepended to the machine's runcmd.
-        """
-        if self.cloud_init_config.get("runcmd_ignore_defaults", False):
-            logger.debug(
-                "Ignoring config_defaults:cloud_init:runcmd for %s", self.vm_name
-            )
-            filtered_defaults = {
-                k: v for k, v in cloud_init_defaults.items() if k != "runcmd"
-            }
-            return {**filtered_defaults, **self.cloud_init_config}
-
-        logger.debug("Including config_defaults:cloud_init:runcmd for %s", self.vm_name)
-        merged = {**cloud_init_defaults, **self.cloud_init_config}
-        if "runcmd" in cloud_init_defaults and "runcmd" in self.cloud_init_config:
-            merged["runcmd"] = (
-                cloud_init_defaults["runcmd"] + self.cloud_init_config["runcmd"]
-            )
-        elif "runcmd" in cloud_init_defaults:
-            merged["runcmd"] = cloud_init_defaults["runcmd"]
-        return merged
-
-    def _resolve_hosts_template_path(self) -> str:
-        """Return ``/etc/cloud/templates/hosts.<family>.tmpl`` for :attr:`os`.
-
-        Raises:
-            ValueError: When :attr:`os` matches no entry in
-                :data:`_HOSTS_TEMPLATE_MAPPING`.
-        """
-        os_lower = self.os.lower()
-        for template, distros in _HOSTS_TEMPLATE_MAPPING.items():
-            if any(os_lower.startswith(d) for d in distros):
-                return "/etc/cloud/templates/" + template
-        raise ValueError(f"Could not find a template file for {self.os}")
+        composer = getattr(self, "_cloud_init_composer", None)
+        if composer is None:
+            composer = _CloudInitComposer(self)
+        return composer
 
     def create_vdisks(
         self,
@@ -647,135 +1042,25 @@ class Machine:
             ``False`` if the domain was not found, any ``virsh`` call failed,
             or file cleanup raised.
         """
-        try:
-            current_vms = virsh_list_all_names(uri)
-        except VirshError as e:
-            logger.error("Failed to list domains at %s: %s", uri, e)
-            return False
+        return self._get_destroyer().destroy(uri)
 
-        if self.libvirt_vm_name not in current_vms:
-            logger.warning(VM_DOES_NOT_EXIST_MSG, self.vm_name)
-            return False
+    def _get_destroyer(self) -> _DomainDestroyer:
+        """Return this machine's destroyer, building one if absent.
 
-        try:
-            vm_state = virsh_domstate(uri, self.libvirt_vm_name)
-        except VirshError as e:
-            logger.error("Failed to query state of %s: %s", self.vm_name, e)
-            return False
-
-        vm_state = self._force_off_if_alive(uri, vm_state)
-        if vm_state is None:
-            return False
-
-        # Only proceed with snapshot cleanup + undefine when the domain has
-        # actually reached a dead state. If destroy didn't take effect (state
-        # is still running, in shutdown, etc.) we abort rather than undefining
-        # a live domain.
-        if vm_state not in DEAD_STATES:
-            logger.error(
-                "Machine %s is in state %r; refusing to undefine.",
+        Constructed in ``__init__`` for normally-built machines; rebuilt on
+        demand for test stubs created via ``object.__new__`` (which set
+        ``libvirt_vm_name`` / ``vm_name`` / ``config_fpath`` but skip
+        ``__init__``).
+        """
+        destroyer = getattr(self, "_destroyer", None)
+        if destroyer is None:
+            destroyer = _DomainDestroyer(
+                self.libvirt_vm_name,
                 self.vm_name,
-                vm_state,
+                self.config_fpath,
+                self._get_snapshots(),
             )
-            return False
-
-        if not self._delete_all_snapshots(uri):
-            return False
-        if not self._undefine(uri):
-            return False
-        return self._cleanup_files()
-
-    def _force_off_if_alive(self, uri: str, vm_state: str) -> str | None:
-        """If the domain is still running/paused, force it off and return new state.
-
-        The previous libvirt-python code called ``virsh destroy`` (a
-        power-cord-pull) on RUNNING or PAUSED — the same set
-        :data:`RUNNING_STATES` carries.
-
-        Returns:
-            The post-destroy domain state, or ``vm_state`` unchanged when
-            the domain was already in a non-running state. ``None`` when
-            either the force-off or the follow-up state query failed
-            (error already logged).
-        """
-        if vm_state not in RUNNING_STATES:
-            return vm_state
-        logger.warning("Forcefully shutting down %s", self.vm_name)
-        try:
-            run_virsh(uri, ["destroy", self.libvirt_vm_name])
-        except VirshError as e:
-            logger.error("Failed to forcefully shutdown %s: %s", self.vm_name, e)
-            return None
-        try:
-            return virsh_domstate(uri, self.libvirt_vm_name)
-        except VirshError as e:
-            logger.error(
-                "Failed to query state of %s after destroy: %s", self.vm_name, e
-            )
-            return None
-
-    def _delete_all_snapshots(self, uri: str) -> bool:
-        """Delete every snapshot of this machine; required before ``undefine``.
-
-        ``virsh undefine`` refuses when snapshot metadata still exists,
-        so this is mandatory cleanup, not a courtesy. Delegates to the
-        shared :func:`tkc_lvlab.utils.snapshot_cleanup.delete_all_snapshots`
-        helper, which prefers a cascading ``--children`` delete and falls
-        back to ``--metadata`` on the "external children" failure mode of
-        backing-file qcow2 chains — the weaker raw ``snapshot-delete`` this
-        method used to do silently choked on those chains (issue #84). The
-        no-snapshots case is a no-op inside the helper.
-
-        Returns:
-            ``True`` on success (including the no-snapshots case).
-            ``False`` if snapshot cleanup raised ``VirshError`` (a deletion
-            failed for a non-external-children reason, or progress stalled).
-        """
-        try:
-            delete_all_snapshots(uri, self.libvirt_vm_name)
-        except VirshError as e:
-            logger.error("Failed to delete snapshots for %s: %s", self.vm_name, e)
-            return False
-        return True
-
-    def _undefine(self, uri: str) -> bool:
-        """Undefine the libvirt domain. Returns False on virsh failure."""
-        logger.info("Undefining %s", self.vm_name)
-        try:
-            run_virsh(uri, ["undefine", self.libvirt_vm_name])
-        except VirshError as e:
-            logger.error(
-                "Failed to undefine (remove from Libvirt) %s: %s", self.vm_name, e
-            )
-            return False
-        return True
-
-    def _cleanup_files(self) -> bool:
-        """Remove on-disk machine files and the (empty) config directory.
-
-        Mirrors the previous behavior: a filesystem error here logs and
-        returns ``False`` even though libvirt state has already been
-        cleaned up by the time we reach this point.
-        """
-        try:
-            for path in glob.glob(os.path.join(self.config_fpath, "*")):
-                if os.path.isfile(path):
-                    logger.info("Removing file %s.", path)
-                    os.remove(path)
-        except Exception as e:  # pylint: disable=broad-except
-            logger.error("Exception when removing machine files %s", e)
-            return False
-
-        try:
-            if not os.listdir(self.config_fpath):
-                logger.info("Removing machine directory %s.", self.config_fpath)
-                os.rmdir(self.config_fpath)
-            else:
-                logger.warning("Machine directory %s is not empty.", self.config_fpath)
-        except Exception as e:  # pylint: disable=broad-except
-            logger.error("Exception when removing machine files %s", e)
-            return False
-        return True
+        return destroyer
 
     def exists_in_libvirt(self, uri: str) -> tuple[bool, str, str]:
         """Check whether this machine is defined in libvirt and report its state.
@@ -807,6 +1092,18 @@ class Machine:
 
         return True, state, reason
 
+    def _get_snapshots(self) -> _SnapshotManager:
+        """Return this machine's snapshot manager, building one if absent.
+
+        Constructed in ``__init__`` for normally-built machines; rebuilt on
+        demand for test stubs created via ``object.__new__`` (which set
+        ``libvirt_vm_name`` / ``vm_name`` but skip ``__init__``).
+        """
+        snapshots = getattr(self, "_snapshots", None)
+        if snapshots is None:
+            snapshots = _SnapshotManager(self.libvirt_vm_name, self.vm_name)
+        return snapshots
+
     def list_snapshots(self, uri: str) -> list[str]:
         """Return the snapshot names defined for this machine's domain.
 
@@ -827,16 +1124,7 @@ class Machine:
             VirshError: If ``virsh`` itself fails for a reason other than
                 "domain not defined" (e.g. cannot reach the URI).
         """
-        if self.libvirt_vm_name not in virsh_list_all_names(uri):
-            return []
-
-        try:
-            return virsh_snapshot_names(uri, self.libvirt_vm_name)
-        except VirshError:
-            # The domain disappeared between the list and the snapshot-list
-            # call. Treat as absent — caller wanted snapshot names, there
-            # are none to report.
-            return []
+        return self._get_snapshots().list(uri)
 
     def create_snapshot(
         self,
@@ -868,34 +1156,7 @@ class Machine:
                 ``virsh snapshot-create`` itself fails (timeout, malformed
                 XML, libvirt error, etc.).
         """
-        if self.libvirt_vm_name not in virsh_list_all_names(uri):
-            logger.warning(
-                VM_DOES_NOT_EXIST_MSG,
-                self.vm_name,
-            )
-            raise VirshError(
-                1,
-                f"domain {self.libvirt_vm_name} is not defined at {uri}",
-                ["snapshot-create", self.libvirt_vm_name],
-            )
-
-        if not snapshot_description:
-            snapshot_description = f"Snapshot of {self.libvirt_vm_name}"
-
-        snapshot_xml = (
-            "<domainsnapshot>\n"
-            f"    <name>{snapshot_name}</name>\n"
-            f"    <description>{snapshot_description}</description>\n"
-            "</domainsnapshot>\n"
-        )
-
-        with _xml_tempfile(snapshot_xml) as xml_path:
-            run_virsh(
-                uri,
-                ["snapshot-create", self.libvirt_vm_name, "--xmlfile", xml_path],
-                timeout=120.0,
-            )
-        return True
+        return self._get_snapshots().create(uri, snapshot_name, snapshot_description)
 
     def delete_snapshot(self, uri: str, snapshot_name: str) -> None:
         """Delete a named snapshot from this machine's domain.
@@ -911,22 +1172,7 @@ class Machine:
                 implementation swallowed errors in a ``finally`` block; this
                 port propagates them so callers get a clean signal.
         """
-        if self.libvirt_vm_name not in virsh_list_all_names(uri):
-            logger.warning(
-                VM_DOES_NOT_EXIST_MSG,
-                self.vm_name,
-            )
-            raise VirshError(
-                1,
-                f"domain {self.libvirt_vm_name} is not defined at {uri}",
-                ["snapshot-delete", self.libvirt_vm_name, snapshot_name],
-            )
-
-        run_virsh(
-            uri,
-            ["snapshot-delete", self.libvirt_vm_name, snapshot_name],
-            timeout=120.0,
-        )
+        self._get_snapshots().delete(uri, snapshot_name)
 
     def poweron(self, uri: str) -> int:
         """Start the virtual machine if it is currently shut off or crashed.

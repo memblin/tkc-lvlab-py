@@ -47,7 +47,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install the release wheel directly — grab the URL for the latest version
 # from https://github.com/memblin/tkc-lvlab-py/releases
-uv tool install https://github.com/memblin/tkc-lvlab-py/releases/download/0.3.0/tkc_lvlab-0.3.0-py3-none-any.whl
+uv tool install https://github.com/memblin/tkc-lvlab-py/releases/download/0.4.0/tkc_lvlab-0.4.0-py3-none-any.whl
 ```
 
 The wheel installs three console scripts on your `PATH`: `lvlab` (manifest

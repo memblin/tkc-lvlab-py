@@ -39,7 +39,7 @@ exact apt/dnf package list per supported host.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install the release wheel directly
-uv tool install https://github.com/memblin/tkc-lvlab-py/releases/download/0.3.0/tkc_lvlab-0.3.0-py3-none-any.whl
+uv tool install https://github.com/memblin/tkc-lvlab-py/releases/download/0.4.0/tkc_lvlab-0.4.0-py3-none-any.whl
 
 # lvlab should be ready for use
 lvlab up salt.local

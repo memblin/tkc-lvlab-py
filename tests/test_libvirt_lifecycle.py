@@ -55,7 +55,13 @@ def machine(tmp_path) -> Machine:
 def test_destroy_running_vm_calls_destroy_then_undefine(machine: Machine) -> None:
     """A running domain gets ``virsh destroy`` first, then (no snapshots)
     ``virsh undefine``. Ordering matters: undefining a running domain fails
-    on real libvirt, so the destroy must come first."""
+    on real libvirt, so the destroy must come first.
+
+    The undefine routes through ``undefine_with_snapshot_cleanup`` (whose
+    own ``run_virsh`` lives in the snapshot_cleanup module), so both
+    modules' ``run_virsh`` are funneled into one mock to capture ordering.
+    """
+    run_mock = mock.Mock()
     with (
         mock.patch(
             "tkc_lvlab.utils.libvirt.virsh_list_all_names",
@@ -65,66 +71,82 @@ def test_destroy_running_vm_calls_destroy_then_undefine(machine: Machine) -> Non
             "tkc_lvlab.utils.libvirt.virsh_domstate",
             side_effect=["running", "shut off"],
         ),
-        mock.patch("tkc_lvlab.utils.libvirt.delete_all_snapshots"),
-        mock.patch("tkc_lvlab.utils.libvirt.run_virsh") as run_mock,
+        mock.patch("tkc_lvlab.utils.libvirt.run_virsh", run_mock),
+        mock.patch("tkc_lvlab.utils.snapshot_cleanup.run_virsh", run_mock),
     ):
         result = machine.destroy(URI)
 
     assert result is True
-    # Order: destroy, then undefine. No snapshot-delete because there were none.
-    called_subcommands = [call.args[1][0] for call in run_mock.call_args_list]
-    assert called_subcommands == ["destroy", "undefine"]
-    run_mock.assert_any_call(URI, ["destroy", "web01_lab"])
-    run_mock.assert_any_call(URI, ["undefine", "web01_lab"])
+    # Order: destroy, then undefine. No --snapshots-metadata since the plain
+    # undefine succeeds (no snapshots).
+    calls = [call.args[1] for call in run_mock.call_args_list]
+    assert calls == [["destroy", "web01_lab"], ["undefine", "web01_lab"]]
 
 
 def test_destroy_already_shut_off_skips_destroy(machine: Machine) -> None:
     """A domain that is already ``shut off`` must NOT have ``virsh destroy``
     invoked against it — that's an error on a stopped domain. The method
-    should go straight to snapshot cleanup + undefine."""
+    should go straight to undefine."""
+    run_mock = mock.Mock()
     with (
         mock.patch(
             "tkc_lvlab.utils.libvirt.virsh_list_all_names",
             return_value=["web01_lab"],
         ),
         mock.patch("tkc_lvlab.utils.libvirt.virsh_domstate", return_value="shut off"),
-        mock.patch("tkc_lvlab.utils.libvirt.delete_all_snapshots"),
-        mock.patch("tkc_lvlab.utils.libvirt.run_virsh") as run_mock,
+        mock.patch("tkc_lvlab.utils.libvirt.run_virsh", run_mock),
+        mock.patch("tkc_lvlab.utils.snapshot_cleanup.run_virsh", run_mock),
     ):
         result = machine.destroy(URI)
 
     assert result is True
-    called_subcommands = [call.args[1][0] for call in run_mock.call_args_list]
-    assert "destroy" not in called_subcommands
-    assert called_subcommands == ["undefine"]
-
-
-def test_destroy_routes_snapshot_teardown_through_shared_util(
-    machine: Machine,
-) -> None:
-    """``Machine.destroy`` must route snapshot teardown through the robust
-    shared :func:`utils.snapshot_cleanup.delete_all_snapshots` helper rather
-    than the old weaker raw ``snapshot-delete`` reimplementation (issue #84
-    drift fix). The shared util gets the libvirt domain name (not ``vm_name``),
-    and the undefine must come after — virsh refuses to undefine a domain that
-    still owns snapshot metadata."""
-    with (
-        mock.patch(
-            "tkc_lvlab.utils.libvirt.virsh_list_all_names",
-            return_value=["web01_lab"],
-        ),
-        mock.patch("tkc_lvlab.utils.libvirt.virsh_domstate", return_value="shut off"),
-        mock.patch("tkc_lvlab.utils.libvirt.delete_all_snapshots") as cleanup_mock,
-        mock.patch("tkc_lvlab.utils.libvirt.run_virsh") as run_mock,
-    ):
-        result = machine.destroy(URI)
-
-    assert result is True
-    cleanup_mock.assert_called_once_with(URI, "web01_lab")
-    # The only run_virsh call left in this path is the undefine — snapshot
-    # deletion now lives entirely inside the shared util.
     calls = [call.args[1] for call in run_mock.call_args_list]
     assert calls == [["undefine", "web01_lab"]]
+
+
+def test_destroy_undefine_drops_snapshots_in_one_shot(
+    machine: Machine,
+) -> None:
+    """``Machine.destroy`` routes undefine through the one-shot teardown
+    (issue #96): a snapshot-blocked undefine retries with
+    ``--snapshots-metadata`` rather than looping ``snapshot-delete``. The
+    undefine still comes after the force-off."""
+    run_mock = mock.Mock(
+        side_effect=lambda uri, args, **kw: (
+            _raise_snapshot_block()
+            if args == ["undefine", "web01_lab"]
+            else mock.DEFAULT
+        )
+    )
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.libvirt.virsh_list_all_names",
+            return_value=["web01_lab"],
+        ),
+        mock.patch("tkc_lvlab.utils.libvirt.virsh_domstate", return_value="shut off"),
+        mock.patch("tkc_lvlab.utils.libvirt.run_virsh", run_mock),
+        mock.patch("tkc_lvlab.utils.snapshot_cleanup.run_virsh", run_mock),
+    ):
+        result = machine.destroy(URI)
+
+    assert result is True
+    calls = [call.args[1] for call in run_mock.call_args_list]
+    # Plain undefine (snapshot-blocked) -> retry with --snapshots-metadata.
+    assert calls == [
+        ["undefine", "web01_lab"],
+        ["undefine", "web01_lab", "--snapshots-metadata"],
+    ]
+
+
+def _raise_snapshot_block():
+    """Raise the snapshot-blocked undefine VirshError (test helper)."""
+    from tkc_lvlab.utils.virsh import VirshError
+
+    raise VirshError(
+        1,
+        "error: cannot delete inactive domain with 2 snapshots",
+        ["undefine"],
+    )
 
 
 def test_destroy_absent_domain_returns_false(machine: Machine) -> None:
@@ -162,10 +184,10 @@ def test_destroy_destroy_failure_skips_undefine(machine: Machine) -> None:
             return_value=["web01_lab"],
         ),
         mock.patch("tkc_lvlab.utils.libvirt.virsh_domstate", return_value="running"),
-        mock.patch("tkc_lvlab.utils.libvirt.delete_all_snapshots"),
         mock.patch(
             "tkc_lvlab.utils.libvirt.run_virsh", side_effect=fake_run
         ) as run_mock,
+        mock.patch("tkc_lvlab.utils.snapshot_cleanup.run_virsh", side_effect=fake_run),
     ):
         result = machine.destroy(URI)
 
@@ -196,8 +218,8 @@ def test_destroy_undefine_failure_skips_file_cleanup(
             return_value=["web01_lab"],
         ),
         mock.patch("tkc_lvlab.utils.libvirt.virsh_domstate", return_value="shut off"),
-        mock.patch("tkc_lvlab.utils.libvirt.delete_all_snapshots"),
         mock.patch("tkc_lvlab.utils.libvirt.run_virsh", side_effect=fake_run),
+        mock.patch("tkc_lvlab.utils.snapshot_cleanup.run_virsh", side_effect=fake_run),
     ):
         result = machine.destroy(URI)
 
@@ -205,28 +227,10 @@ def test_destroy_undefine_failure_skips_file_cleanup(
     assert sentinel.exists(), "file cleanup must not run when undefine failed"
 
 
-def test_destroy_snapshot_cleanup_failure_skips_undefine(machine: Machine) -> None:
-    """A ``VirshError`` from the shared snapshot-cleanup util (e.g. a stalled
-    teardown) aborts the flow before undefining; the domain would refuse
-    undefine anyway, and proceeding could mask a real error mid-cleanup. The
-    method returns False and never calls ``virsh undefine``."""
-    with (
-        mock.patch(
-            "tkc_lvlab.utils.libvirt.virsh_list_all_names",
-            return_value=["web01_lab"],
-        ),
-        mock.patch("tkc_lvlab.utils.libvirt.virsh_domstate", return_value="shut off"),
-        mock.patch(
-            "tkc_lvlab.utils.libvirt.delete_all_snapshots",
-            side_effect=VirshError(1, "snapshot busy", ["snapshot-delete"]),
-        ),
-        mock.patch("tkc_lvlab.utils.libvirt.run_virsh") as run_mock,
-    ):
-        result = machine.destroy(URI)
-
-    assert result is False
-    called_subcommands = [call.args[1][0] for call in run_mock.call_args_list]
-    assert "undefine" not in called_subcommands
+# (The former ``test_destroy_snapshot_cleanup_failure_skips_undefine`` is gone:
+# issue #96 folded snapshot teardown into the one-shot undefine, so there is no
+# longer a separate pre-undefine snapshot step that can fail independently. A
+# failing one-shot undefine is covered by the undefine-failure test above.)
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@ from typer.testing import CliRunner
 
 from tkc_lvlab.scripts import deletevm as dv_mod
 from tkc_lvlab.scripts.deletevm import run
+from tkc_lvlab.utils import snapshot_cleanup as sc_mod
 from tkc_lvlab.utils.virsh import VirshError
 
 
@@ -50,12 +51,14 @@ def stub(monkeypatch: pytest.MonkeyPatch) -> dict:
         ),
         "vm_exists": mock.Mock(return_value=True),
         "virsh_snapshot_names": mock.Mock(return_value=[]),
-        "delete_all_snapshots": mock.Mock(),
     }
     monkeypatch.setattr(dv_mod, "run_virsh", mocks["run_virsh"])
     monkeypatch.setattr(dv_mod, "vm_exists", mocks["vm_exists"])
     monkeypatch.setattr(dv_mod, "virsh_snapshot_names", mocks["virsh_snapshot_names"])
-    monkeypatch.setattr(dv_mod, "delete_all_snapshots", mocks["delete_all_snapshots"])
+    # The one-shot undefine (issue #96) routes through snapshot_cleanup's
+    # run_virsh; funnel it into the same mock so `_virsh_calls(stub, "undefine")`
+    # captures it.
+    monkeypatch.setattr(sc_mod, "run_virsh", mocks["run_virsh"])
     return mocks
 
 
@@ -140,8 +143,8 @@ def test_confirmation_no_aborts(stub: dict, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Snapshot tier matrix. Snapshot presence is detected UP FRONT via
 # virsh_snapshot_names, so the prompts branch on it before any mutation.
-# Ordering invariant for the snapshot path: destroy -> delete_all_snapshots
-# -> undefine (virsh refuses to undefine a domain that still owns snapshots).
+# Ordering invariant for the snapshot path: destroy -> undefine (the undefine
+# drops any snapshots in one shot via --snapshots-metadata, issue #96).
 # ---------------------------------------------------------------------------
 
 
@@ -165,10 +168,8 @@ def test_no_force_tier1_then_tier2_deletes_snapshots(
     assert result.exit_code == 0, result.output
     assert "Are you sure?" in result.output  # tier-1
     assert "snapshots" in result.output.lower()  # tier-2
-    stub["delete_all_snapshots"].assert_called_once_with(
-        dv_mod._SYSTEM_URI, "testvm.local"
-    )
-    # Ordering: destroy precedes delete_all_snapshots precedes undefine.
+    # Ordering: destroy precedes undefine (which drops snapshots in one shot,
+    # issue #96).
     assert _virsh_calls(stub, "destroy")
     assert _virsh_calls(stub, "undefine")
     assert not vm_dir.exists()
@@ -187,7 +188,6 @@ def test_no_force_tier1_declined_aborts_before_snapshot_check(
     )
     assert result.exit_code == 0, result.output
     assert "Aborted." in result.output
-    stub["delete_all_snapshots"].assert_not_called()
     assert _virsh_calls(stub, "destroy") == []
     assert _virsh_calls(stub, "undefine") == []
     assert vm_dir.exists()
@@ -204,7 +204,6 @@ def test_no_force_tier2_declined_fails(stub: dict, tmp_path: Path) -> None:
     )
     assert result.exit_code != 0
     assert "Aborted: snapshots were not deleted" in result.output
-    stub["delete_all_snapshots"].assert_not_called()
     # We refuse before undefining a snapshot-bearing domain.
     assert _virsh_calls(stub, "undefine") == []
     assert vm_dir.exists()
@@ -221,7 +220,6 @@ def test_force_no_snapshots_is_fully_noninteractive(stub: dict, tmp_path: Path) 
     )
     assert result.exit_code == 0, result.output
     assert "Are you sure?" not in result.output
-    stub["delete_all_snapshots"].assert_not_called()
     assert not vm_dir.exists()
 
 
@@ -243,7 +241,7 @@ def test_force_with_snapshots_still_fires_tier2(stub: dict, tmp_path: Path) -> N
     assert result.exit_code == 0, result.output
     assert "Are you sure?" not in result.output  # tier-1 skipped by --force
     assert "snapshots" in result.output.lower()  # tier-2 still fired
-    stub["delete_all_snapshots"].assert_called_once()
+    assert _virsh_calls(stub, "undefine")
     assert not vm_dir.exists()
 
 
@@ -260,7 +258,6 @@ def test_force_with_snapshots_tier2_declined_fails(stub: dict, tmp_path: Path) -
     )
     assert result.exit_code != 0
     assert "Aborted: snapshots were not deleted" in result.output
-    stub["delete_all_snapshots"].assert_not_called()
     assert _virsh_calls(stub, "undefine") == []
     assert vm_dir.exists()
 
@@ -281,9 +278,7 @@ def test_force_snapshots_too_is_fully_noninteractive(
     assert result.exit_code == 0, result.output
     assert "Are you sure?" not in result.output
     assert "Delete all VM snapshots" not in result.output
-    stub["delete_all_snapshots"].assert_called_once_with(
-        dv_mod._SYSTEM_URI, "testvm.local"
-    )
+    assert _virsh_calls(stub, "undefine")
     assert not vm_dir.exists()
 
 
@@ -307,7 +302,7 @@ def test_snapshots_too_without_force_still_prompts_tier2(
     assert result.exit_code == 0, result.output
     assert "Are you sure?" in result.output  # tier-1 still fired (no --force)
     assert "snapshots" in result.output.lower()  # tier-2 still fired
-    stub["delete_all_snapshots"].assert_called_once()
+    assert _virsh_calls(stub, "undefine")
 
 
 def test_snapshot_list_failure_aborts_before_mutation(
@@ -330,12 +325,21 @@ def test_snapshot_list_failure_aborts_before_mutation(
     assert vm_dir.exists()
 
 
-def test_snapshot_deletion_failure_fails(stub: dict, tmp_path: Path) -> None:
-    """If delete_all_snapshots raises, deletevm fails and leaves the dir."""
+def test_undefine_failure_fails_and_leaves_dir(stub: dict, tmp_path: Path) -> None:
+    """If the one-shot undefine raises, deletevm fails and leaves the dir.
+
+    With snapshots present, the undefine retries with --snapshots-metadata;
+    if even that fails, the error surfaces and storage is left for
+    inspection (issue #96 folded snapshot teardown into undefine).
+    """
     stub["virsh_snapshot_names"].return_value = ["snap-a"]
-    stub["delete_all_snapshots"].side_effect = VirshError(
-        1, "snapshot cleanup stalled", ["snapshot-cleanup"]
-    )
+
+    def fake_run(uri, args, **kwargs):
+        if args[0] == "undefine":
+            raise VirshError(1, "error: undefine failed somehow", args)
+        return CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    stub["run_virsh"].side_effect = fake_run
     vm_dir = tmp_path / "testvm.local"
     vm_dir.mkdir()
 
@@ -344,9 +348,8 @@ def test_snapshot_deletion_failure_fails(stub: dict, tmp_path: Path) -> None:
         ["testvm.local", "--force", "--snapshots-too", "--storage-root", str(tmp_path)],
     )
     assert result.exit_code != 0
-    assert "Failed to delete snapshots" in result.output
-    # Failure is before undefine; the dir survives for inspection.
-    assert _virsh_calls(stub, "undefine") == []
+    assert "Failed to undefine" in result.output
+    # Undefine failed before file cleanup; the dir survives for inspection.
     assert vm_dir.exists()
 
 

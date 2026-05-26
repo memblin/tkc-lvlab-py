@@ -43,6 +43,7 @@ from .config import (
     parse_hosts_file,
 )
 from .exceptions import ConfigError, LvlabError
+from .smoke import OutputFormat, SmokeError, run_smoke
 from .utils.cloud_init import CloudInitIso
 from .utils.libvirt import (
     get_machine_by_vm_name,
@@ -877,6 +878,57 @@ def status() -> None:
         )
 
     typer.echo()
+
+
+@app.command()
+def smoke(
+    config: str = typer.Option(
+        "Lvlab.yml",
+        "--config",
+        "-c",
+        help="Manifest to drive the smoke run (default: ./Lvlab.yml).",
+    ),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--format",
+        "-f",
+        help="Output format: text (default), json, or yaml.",
+    ),
+    batch_size: int = typer.Option(
+        2,
+        "--batch-size",
+        help="How many VMs to boot concurrently per batch.",
+    ),
+    skip_preflight: bool = typer.Option(
+        False,
+        "--skip-preflight",
+        help="Skip the preflight checks (debugging only).",
+    ),
+) -> None:
+    """Boot every manifest VM, SSH-verify it, then tear it down (manual only).
+
+    For each machine in the manifest: `lvlab up` -> resolve its IP (static
+    from the manifest, else the DHCP lease for its pinned MAC) -> SSH in as
+    the image's default user and run `id -un`/`hostname` -> `lvlab down` ->
+    `lvlab destroy --force`. Runs a preflight gate first (cached images, free
+    static addresses, SSH key present) and prints the batch plan before
+    booting anything.
+
+    This boots REAL qemu:///system VMs and is never wired into CI — run it
+    only on a libvirt host with no developer VMs at risk. Exit code is 0 when
+    every machine passes, 1 on any failure (for every output format).
+    """
+    try:
+        code = run_smoke(
+            config,
+            fmt=output_format,
+            batch_size=batch_size,
+            skip_preflight=skip_preflight,
+        )
+    except SmokeError as exc:
+        typer.secho(f"smoke: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=code)
 
 
 def _up_start_existing(

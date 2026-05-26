@@ -63,3 +63,10 @@ integration:
 # createvm/deletevm matrix only; subset via LVLAB_TEST_DISTROS / LVLAB_TEST_MODES.
 integration-createvm:
     LVLAB_INTEGRATION=1 uv run pytest tests/test_integration_createvm.py -v
+
+# Manifest-path smoke test: lvlab up/down/destroy + SSH-verify every machine in
+# docs-extra/smoke/Lvlab.yml. Manual only — boots real qemu:///system VMs, never
+# in CI. Run `lvlab init` in that dir first. Pass flags via ARGS, e.g.
+# `just smoke ARGS="--format json --batch-size 4"`.
+smoke args="":
+    cd docs-extra/smoke && uv run lvlab smoke {{args}}

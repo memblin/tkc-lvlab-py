@@ -185,6 +185,18 @@ def test_parse_ip4_rejects_empty_segments() -> None:
         parse_ip4_option(",192.168.122.50", "default")
 
 
+@pytest.mark.parametrize("sentinel", ["dhcp", "default", "auto", "DHCP", "Auto"])
+def test_parse_ip4_bare_dhcp_sentinel_means_dhcp(sentinel: str) -> None:
+    """A bare DHCP sentinel resolves the IP to None (DHCP) on the default network."""
+    assert parse_ip4_option(sentinel, "default") == ("default", None)
+
+
+@pytest.mark.parametrize("sentinel", ["dhcp", "default", "auto"])
+def test_parse_ip4_network_comma_dhcp_sentinel_keeps_network(sentinel: str) -> None:
+    """'NETWORK,dhcp' keeps the chosen network but takes the DHCP path (IP None)."""
+    assert parse_ip4_option(f"vlan10,{sentinel}", "default") == ("vlan10", None)
+
+
 def test_ensure_cidr_appends_and_preserves() -> None:
     """ensure_cidr appends the netmask only when the IP lacks one."""
     assert ensure_cidr("192.168.122.50", "24") == "192.168.122.50/24"
@@ -513,6 +525,45 @@ def test_ip4_in_dhcp_range_errors(all_external_mocked: dict, tmp_path: Path) -> 
     result = _invoke(["testvm.local", "debian12", "--ip4", "192.168.122.100"], tmp_path)
     assert result.exit_code != 0
     assert "DHCP range" in result.output
+
+
+def test_ip4_default_sentinel_launches_dhcp_vm(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """`--ip4 default` takes the DHCP path: no static validation, dhcp4 network-config."""
+    result = _invoke(["testvm.local", "debian12", "--ip4", "default"], tmp_path)
+    assert result.exit_code == 0, result.output
+    # DHCP path skips static-IP validation entirely.
+    all_external_mocked["validate_static_ip"].assert_not_called()
+    network_config = (tmp_path / "testvm.local" / "network-config").read_text()
+    assert "dhcp4: true" in network_config
+    # The sentinel must never be mangled into an address.
+    assert "default/24" not in network_config
+
+
+def test_ip4_dhcp_sentinel_launches_dhcp_vm(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """`--ip4 dhcp` is equivalent to omitting the flag."""
+    result = _invoke(["testvm.local", "debian12", "--ip4", "dhcp"], tmp_path)
+    assert result.exit_code == 0, result.output
+    all_external_mocked["validate_static_ip"].assert_not_called()
+    assert "dhcp4: true" in (tmp_path / "testvm.local" / "network-config").read_text()
+
+
+def test_ip4_invalid_address_gives_clean_actionable_error(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """A genuinely invalid --ip4 yields an actionable message, not the stdlib one."""
+    result = _invoke(["testvm.local", "debian12", "--ip4", "not-an-ip"], tmp_path)
+    assert result.exit_code != 0
+    out = result.output
+    # Actionable: names the bad value, suggests an example + the DHCP path.
+    assert "not a valid IPv4 address" in out
+    assert "--ip4 dhcp" in out
+    # Must NOT leak the stdlib message nor echo the netmask-mangled form.
+    assert "does not appear to be an" not in out
+    assert "not-an-ip/24" not in out
 
 
 def test_virt_install_failure_cleans_up_vm_dir(

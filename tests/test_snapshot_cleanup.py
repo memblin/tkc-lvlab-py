@@ -155,25 +155,41 @@ def test_delete_all_snapshots_uses_children_flag_by_default(
     assert deleted == ["a", "b", "c"]
 
 
+# Real ``virsh snapshot-delete --children`` stderr seen in the wild. libvirt
+# 12.0.0 emits BOTH of these on one host depending on the snapshot's position
+# in the chain, and the exact phrasing has shifted across versions — so the
+# detector must match the family, not one fixed phrase (issue #95).
+_EXTERNAL_SNAPSHOT_WORDINGS = [
+    # Parent-with-children (matched the pre-#95 exact-string marker).
+    "error: unsupported configuration: external children disk snapshots not supported",
+    # Leaf / newer wording (the one that aborted teardown on the user's host).
+    "error: unsupported configuration: "
+    "deletion of external disk snapshots with children not supported",
+]
+
+
+@pytest.mark.parametrize("stderr_msg", _EXTERNAL_SNAPSHOT_WORDINGS)
 def test_delete_all_snapshots_falls_back_to_metadata_on_external_children(
     monkeypatch: pytest.MonkeyPatch,
+    stderr_msg: str,
 ) -> None:
-    """--children failure with the 'external children' message → retry with --metadata."""
+    """A --children failure naming an unsupported external snapshot → retry with --metadata.
+
+    Regression for issue #95: the fallback must fire for every libvirt
+    wording of the external-snapshot limitation, not just the one phrase
+    the original exact-substring marker happened to carry.
+    """
     snap_lists = [["only-snap"], []]
     snap_names = mock.Mock(side_effect=snap_lists)
     monkeypatch.setattr(sc_mod, "virsh_snapshot_names", snap_names)
 
-    external_children_err = VirshError(
-        1,
-        "error: unsupported configuration: external children disk snapshots not supported",
-        ["snapshot-delete"],
-    )
+    external_children_err = VirshError(1, stderr_msg, ["snapshot-delete"])
 
     calls: list[list[str]] = []
 
     def fake_run(uri: str, args: list[str], **kwargs):
         calls.append(args)
-        # First call (--children): fail with external-children message.
+        # First call (--children): fail with external-snapshot message.
         # Second call (--metadata): succeed.
         if args[-1] == "--children":
             raise external_children_err

@@ -11,9 +11,12 @@ Two helpers live here:
 - :func:`delete_all_snapshots` walks the snapshot list and deletes each
     one, falling back from ``--children`` (cascading delete) to
     ``--metadata`` (orphan metadata so undefine can proceed) when the
-    upstream qcow2 chain prevents the cleaner cascading delete. Includes
-    progress detection: if the same snapshot list comes back twice in a
-    row, the function refuses to loop forever.
+    upstream qcow2 chain prevents the cleaner cascading delete. The
+    "external snapshot" failure is detected by semantic tokens, not a
+    fixed phrase, because the wording varies across libvirt versions and
+    snapshot positions (issue #95). Includes progress detection: if the
+    same snapshot list comes back twice in a row, the function refuses to
+    loop forever.
 - :func:`undefine_with_snapshot_cleanup` tries ``virsh undefine`` first,
     detects the snapshot-related failure mode by stderr matching, and
     calls into :func:`delete_all_snapshots` before retrying. Other
@@ -31,7 +34,15 @@ from .virsh import VirshError, run_virsh, virsh_snapshot_names
 
 _SNAPSHOT_UNDEFINE_MARKER = "cannot delete inactive domain"
 _SNAPSHOT_KEYWORD = "snapshot"
-_EXTERNAL_CHILDREN_MARKER = "external children disk snapshots not supported"
+# Tokens that together identify libvirt's "can't --children-delete an external
+# snapshot" family. The exact phrasing varies by libvirt version *and* by the
+# snapshot's position in the chain — a single host (libvirt 12.0.0) emits both
+# "external children disk snapshots not supported" (deleting a parent) and
+# "external disk snapshots with children not supported" (deleting a leaf). An
+# exact-substring match on one phrasing missed the other and aborted the whole
+# teardown (issue #95); match the semantic tokens instead.
+_EXTERNAL_SNAPSHOT_TOKENS = ("external", "snapshot")
+_UNSUPPORTED_TOKENS = ("not supported", "unsupported")
 
 
 def _is_snapshot_undefine_error(stderr: str) -> bool:
@@ -51,17 +62,30 @@ def _is_snapshot_undefine_error(stderr: str) -> bool:
 
 
 def _is_external_children_error(stderr: str) -> bool:
-    """Return True when ``virsh snapshot-delete --children`` reports external children.
+    """Return True when ``virsh snapshot-delete --children`` can't delete an external snapshot.
+
+    libvirt refuses ``--children`` (cascading) deletes for external disk
+    snapshots, but the exact wording is not stable: it varies across
+    libvirt versions and even across the snapshot's position in the chain
+    on a single host (see :data:`_EXTERNAL_SNAPSHOT_TOKENS`). Rather than
+    pin one phrasing — which silently missed the other and aborted the
+    teardown (issue #95) — match the semantic tokens: the message names
+    an ``external`` ``snapshot`` and says the operation is ``unsupported``
+    / ``not supported``. In that case ``--metadata`` is the right
+    fallback. Unrelated failures (no ``external``/``snapshot`` mention)
+    do not match and propagate.
 
     Args:
         stderr: Captured stderr text from a failed ``snapshot-delete``.
 
     Returns:
-        True iff the stderr names the "external children disk snapshots
-        not supported" condition, in which case ``--metadata`` is the
-        right fallback.
+        True iff the stderr names an unsupported external-snapshot
+        operation, in which case ``--metadata`` is the right fallback.
     """
-    return _EXTERNAL_CHILDREN_MARKER in stderr.lower()
+    s = stderr.lower()
+    return all(t in s for t in _EXTERNAL_SNAPSHOT_TOKENS) and any(
+        t in s for t in _UNSUPPORTED_TOKENS
+    )
 
 
 def delete_all_snapshots(uri: str, domain_name: str) -> None:

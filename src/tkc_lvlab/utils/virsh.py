@@ -17,35 +17,10 @@ import subprocess
 import tempfile
 from typing import Iterator
 
-
-class VirshError(RuntimeError):
-    """Raised when a ``virsh`` invocation fails.
-
-    Attributes:
-        returncode: Exit code from ``virsh`` (or ``-1`` for timeouts, ``127``
-            when the binary is missing).
-        stderr: Captured stderr text (stripped). Empty if not available.
-        args: The argument list passed to ``virsh`` (without the leading
-            ``virsh -c <uri>``).
-    """
-
-    def __init__(self, returncode: int, stderr: str, args: list[str]):
-        self.returncode = returncode
-        self.stderr = (stderr or "").strip()
-        # NB: ``BaseException.__init__`` would overwrite ``self.args`` with
-        # the tuple of positional args passed to it. We want ``self.args`` to
-        # expose the failing virsh argv (per Phase 2 design §1), so we
-        # bypass super().__init__'s args-handling by passing nothing and then
-        # storing our own value. ``__str__`` is overridden to build the
-        # formatted message lazily.
-        super().__init__()
-        self.args = list(args)
-
-    def __str__(self) -> str:
-        return (
-            f"virsh {' '.join(self.args)} failed (rc={self.returncode}): "
-            f"{self.stderr or '<no stderr>'}"
-        )
+# Re-export so existing imports (``from tkc_lvlab.utils.virsh import
+# VirshError``) and isinstance checks keep working after the class definition
+# moved to the centralized hierarchy in :mod:`tkc_lvlab.exceptions`.
+from ..exceptions import VirshError
 
 
 def run_virsh(

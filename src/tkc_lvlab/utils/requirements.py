@@ -27,6 +27,10 @@ from pathlib import Path
 import shlex
 import shutil
 
+# Re-export so existing imports and isinstance checks keep working after the
+# class definition moved to :mod:`tkc_lvlab.exceptions`.
+from ..exceptions import DependencyError
+
 
 _OS_RELEASE_PATH: Path = Path("/etc/os-release")
 """Filesystem path read to classify the local package manager.
@@ -49,15 +53,6 @@ Reduced from lvscripts' set (which also required ``cp`` and an ISO builder
 like ``genisoimage``/``mkisofs``). See the module docstring for why those
 two are dropped.
 """
-
-
-class DependencyError(RuntimeError):
-    """Raised when one or more required host binaries are unavailable.
-
-    The message string carries the per-binary breakdown and the
-    package-manager-specific install command (when the OS family is
-    recognized).
-    """
 
 
 def check_createvm_tooling() -> None:

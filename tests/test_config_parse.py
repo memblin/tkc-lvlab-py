@@ -6,8 +6,10 @@ Locked-in behaviors:
 - It picks ``environment[0]`` when the manifest has a list (the manifest schema
     is a single-element list today, but the slicing is the contract).
 - ``config_defaults`` defaults to ``{}`` when missing.
-- A missing file returns ``None`` (legacy soft behavior; a future hard-fail
-    would be a deliberate change — this test pins today's contract).
+- A missing file returns ``None`` (legacy soft behavior; kept distinct from
+    a structural error — this test pins today's contract).
+- A structurally invalid manifest (not a mapping, missing ``environment`` or
+    ``images``) raises ``ConfigError``.
 - Malformed YAML raises ``yaml.YAMLError``.
 - ``parse_file_from_url`` is just ``basename(urlparse(url).path)`` — strips
     query strings and fragments, returns empty when no path.
@@ -21,6 +23,7 @@ import pytest
 import yaml
 
 from tkc_lvlab.config import parse_config, parse_file_from_url
+from tkc_lvlab.exceptions import ConfigError, LvlabError
 
 
 SAMPLE_MANIFEST = """---
@@ -60,11 +63,42 @@ def test_parse_config_happy_returns_four_tuple(tmp_path: Path) -> None:
 def test_parse_config_missing_file_returns_none(tmp_path: Path) -> None:
     """Legacy soft behavior: pointing at a non-existent file returns None.
 
-    Regression guard. If this ever changes to raise, callers in cli.py
-    that rely on a TypeError-on-unpack will need updating in the same PR.
+    Regression guard. A *missing* file is deliberately NOT a ``ConfigError``
+    — it returns ``None`` and callers translate the resulting unpack
+    ``TypeError`` into a parse-error message. A *present-but-broken* manifest
+    raises ``ConfigError`` instead (see the structural tests below).
     """
     missing = tmp_path / "Definitely-Not-Here.yml"
     assert parse_config(str(missing)) is None
+
+
+def test_parse_config_not_a_mapping_raises_configerror(tmp_path: Path) -> None:
+    """A manifest that parses to a non-mapping (e.g. a bare list) raises ConfigError."""
+    manifest = tmp_path / "Lvlab.yml"
+    manifest.write_text("- just\n- a\n- list\n")
+    with pytest.raises(ConfigError, match="not a mapping"):
+        parse_config(str(manifest))
+
+
+def test_parse_config_missing_environment_raises_configerror(tmp_path: Path) -> None:
+    """A manifest without a non-empty ``environment`` list raises ConfigError."""
+    manifest = tmp_path / "Lvlab.yml"
+    manifest.write_text("environment: []\nimages: {}\n")
+    with pytest.raises(ConfigError, match="non-empty 'environment' list"):
+        parse_config(str(manifest))
+
+
+def test_parse_config_missing_images_raises_configerror(tmp_path: Path) -> None:
+    """A manifest without an ``images`` section raises ConfigError.
+
+    ConfigError is an LvlabError so a single boundary ``except LvlabError``
+    catches it.
+    """
+    manifest = tmp_path / "Lvlab.yml"
+    manifest.write_text("environment:\n  - name: demo\n")
+    with pytest.raises(ConfigError, match="missing the 'images' section"):
+        parse_config(str(manifest))
+    assert issubclass(ConfigError, LvlabError)
 
 
 def test_parse_config_bad_yaml_raises(tmp_path: Path) -> None:

@@ -34,7 +34,8 @@ import ipaddress
 import secrets
 import xml.etree.ElementTree as ET
 
-from .virsh import VirshError, run_virsh
+from ..exceptions import LibvirtNetworkError, VirshError
+from .virsh import run_virsh
 
 
 # QEMU/KVM's registered OUI. libvirt assigns guest NICs MACs from this
@@ -71,21 +72,6 @@ def generate_mac() -> str:
 # user-mode and are rejected at the manifest/CLI boundary.
 NETWORK_TYPES: tuple[str, ...] = ("network", "user", "passt")
 USER_MODE_NETWORK_TYPES: frozenset[str] = frozenset({"user", "passt"})
-
-
-class LibvirtNetworkError(RuntimeError):
-    """Raised when libvirt network information cannot be resolved or validated.
-
-    Wraps two error surfaces:
-
-    - **Discovery failure** — ``virsh net-dumpxml`` failed, the output was
-        not parseable XML, or the named network does not exist.
-    - **Policy failure** — a bridge network was used without explicit
-        gateway/DNS, or the forward mode is one we don't support.
-
-    Both are operator-actionable errors; the message names the specific
-    failure.
-    """
 
 
 @dataclass(frozen=True)

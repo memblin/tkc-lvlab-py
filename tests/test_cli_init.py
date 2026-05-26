@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 from tkc_lvlab import cli
 from tkc_lvlab.cli import app
+from tkc_lvlab.exceptions import ConfigError
 
 
 def _mock_image(name: str, *, has_gpg: bool, has_checksum: bool) -> mock.MagicMock:
@@ -136,7 +137,12 @@ def test_init_logs_error_when_image_download_fails() -> None:
 
 
 def test_init_handles_parse_failure_via_typeerror() -> None:
-    """``parse_config`` raising TypeError → logger.error then sys.exit()."""
+    """``parse_config`` raising TypeError (missing-file unpack) → error + exit 1.
+
+    The bare ``sys.exit()`` (exit 0) ``init`` used to call on a parse failure
+    was standardized to ``typer.Exit(code=1)`` so the shell sees a nonzero
+    status — matching every other lvlab subcommand.
+    """
     runner = CliRunner()
     with (
         mock.patch.object(cli, "parse_config", side_effect=TypeError),
@@ -144,5 +150,18 @@ def test_init_handles_parse_failure_via_typeerror() -> None:
     ):
         result = runner.invoke(app, ["init"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 1
+    mocked_logger.error.assert_called_with("Could not parse config file.")
+
+
+def test_init_handles_parse_failure_via_configerror() -> None:
+    """``parse_config`` raising ConfigError (bad structure) → error + exit 1."""
+    runner = CliRunner()
+    with (
+        mock.patch.object(cli, "parse_config", side_effect=ConfigError("boom")),
+        mock.patch.object(cli, "logger") as mocked_logger,
+    ):
+        result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
     mocked_logger.error.assert_called_with("Could not parse config file.")

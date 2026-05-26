@@ -32,6 +32,9 @@ import re
 import subprocess
 from functools import lru_cache
 
+# Re-export so existing imports and isinstance checks keep working after the
+# class definition moved to :mod:`tkc_lvlab.exceptions`.
+from ..exceptions import OsInfoLookupError
 from .subprocess_env import system_first_env
 
 
@@ -41,10 +44,6 @@ _FAMILY_PATTERN = re.compile(r"^([a-zA-Z]+)(\d+(?:\.\d+)?)$")
 
 _GENERIC_FALLBACKS = ("linux-current", "generic")
 """Last-resort os-variants tried after family-specific options are exhausted."""
-
-
-class OsInfoLookupError(RuntimeError):
-    """Raised when virt-install can't be consulted for available os-variants."""
 
 
 @lru_cache(maxsize=1)

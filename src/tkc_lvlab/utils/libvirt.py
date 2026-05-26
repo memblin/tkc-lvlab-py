@@ -21,11 +21,11 @@ from __future__ import annotations
 import glob
 import os
 import subprocess
-import sys
 from typing import TYPE_CHECKING, Any
 
 from .._logging import get_logger
 from ..config import parse_config, generate_hosts
+from ..exceptions import ConfigError, LvlabError
 from .osinfo import OsInfoLookupError, resolve_os_variant
 from .subprocess_env import system_first_env
 from .vdisk import VirtualDisk
@@ -328,10 +328,11 @@ class Machine:
             ValueError: When :attr:`os` does not match a known
                 ``/etc/cloud/templates/hosts.*.tmpl`` distro family.
                 Extend :data:`_HOSTS_TEMPLATE_MAPPING` to add a new family.
-            SystemExit: When :attr:`config_fpath` cannot be created or
-                when ``parse_config`` returns ``None``. This preserves
-                the historical "log + exit" behavior — future cleanup
-                may replace it with a raised exception.
+            LvlabError: When :attr:`config_fpath` cannot be created
+                (raised by :meth:`_ensure_config_dir`).
+            ConfigError: When ``parse_config`` cannot read the manifest
+                (missing or structurally invalid). The CLI boundary
+                converts both to a ``typer.Exit``.
         """
         self._ensure_config_dir()
 
@@ -357,9 +358,9 @@ class Machine:
 
         try:
             _, _, _, machines = parse_config()
-        except TypeError:
+        except (ConfigError, TypeError) as exc:
             logger.error("Could not parse config file.")
-            sys.exit()
+            raise ConfigError("Could not parse config file.") from exc
 
         hosts_snippet = generate_hosts(
             self.environment, config_defaults, machines, heredoc="/etc/hosts"
@@ -385,14 +386,24 @@ class Machine:
         return metadata_config_fpath, userdata_config_fpath, network_config_fpath
 
     def _ensure_config_dir(self) -> None:
-        """Create :attr:`config_fpath` if absent. Log + exit on failure."""
+        """Create :attr:`config_fpath` if absent.
+
+        Raises:
+            LvlabError: The cloud-init config directory could not be created
+                (e.g. permission denied). Raised as a library exception so
+                this module never imports ``typer``; the CLI boundary
+                (:mod:`tkc_lvlab.cli`) converts it to a ``typer.Exit``.
+        """
         if os.path.exists(self.config_fpath):
             return
         try:
             os.makedirs(self.config_fpath)
-        except Exception as e:  # pylint: disable=broad-except
+        except OSError as e:
             logger.error("Exception creating %s: %s", self.config_fpath, e)
-            sys.exit(1)
+            raise LvlabError(
+                f"Could not create cloud-init config directory "
+                f"'{self.config_fpath}': {e}"
+            ) from e
 
     def _render_and_write(self, renderable: Any, filename: str) -> str:
         """Render ``renderable.render_config()`` to ``<config_fpath>/<filename>``.

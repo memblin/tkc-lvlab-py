@@ -21,6 +21,8 @@ from urllib.parse import urlparse
 from jinja2 import Environment, PackageLoader, select_autoescape
 import yaml
 
+from .exceptions import ConfigError
+
 
 def generate_hosts_entries(
     config_defaults: dict[str, Any], machines: list[dict[str, Any]]
@@ -163,27 +165,45 @@ def parse_config(
     Returns:
         ``(environment, images, config_defaults, machines)`` on success.
         ``None`` if the file does not exist — legacy soft-fail behavior
-        that callers rely on. Raises :class:`yaml.YAMLError` on malformed
-        YAML.
+        that callers rely on, kept distinct from a structural error.
 
     Raises:
         yaml.YAMLError: The manifest content was not valid YAML.
+        ConfigError: The manifest exists and parsed, but is structurally
+            invalid — it is not a mapping, lacks a non-empty ``environment``
+            list, or lacks an ``images`` section. (A *missing* file is not a
+            ``ConfigError``; it returns ``None``.)
     """
     if fpath is None:
         fpath = "Lvlab.yml"
 
-    if os.path.isfile(fpath):
-        with open(fpath, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
+    if not os.path.isfile(fpath):
+        return None
 
-        environment = config["environment"][0]
-        images = config["images"]
-        config_defaults = environment.get("config_defaults", {})
-        machines = environment.get("machines", {})
+    with open(fpath, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
 
-        return (environment, images, config_defaults, machines)
+    if not isinstance(config, dict):
+        raise ConfigError(
+            f"Manifest '{fpath}' is not a mapping; expected top-level "
+            "'environment' and 'images' keys."
+        )
 
-    return None
+    environments = config.get("environment")
+    if not isinstance(environments, list) or not environments:
+        raise ConfigError(
+            f"Manifest '{fpath}' must define a non-empty 'environment' list."
+        )
+
+    if "images" not in config:
+        raise ConfigError(f"Manifest '{fpath}' is missing the 'images' section.")
+
+    environment = environments[0]
+    images = config["images"]
+    config_defaults = environment.get("config_defaults", {})
+    machines = environment.get("machines", {})
+
+    return (environment, images, config_defaults, machines)
 
 
 def parse_file_from_url(url: str) -> str:

@@ -23,6 +23,13 @@ import os
 from pathlib import Path
 import pwd
 
+# Re-export so existing imports and isinstance checks keep working after the
+# class definition moved to :mod:`tkc_lvlab.exceptions`. ``PublicKeyError``
+# still subclasses ``ValueError`` there, so callers that catch ``ValueError``
+# (e.g. createvm) and the discovery walk's ``except PublicKeyError`` are
+# unaffected.
+from ..exceptions import PublicKeyError
+
 
 SUPPORTED_KEY_TYPES: frozenset[str] = frozenset(
     {
@@ -42,10 +49,6 @@ and the two NIST hardware ECDSA variants. DSA (``ssh-dss``) is deliberately
 excluded — it's been deprecated by OpenSSH since 7.0 and dropped by
 default since 9.x.
 """
-
-
-class PublicKeyError(ValueError):
-    """Raised when an SSH public key cannot be validated."""
 
 
 def discover_default_public_keys() -> list[str]:

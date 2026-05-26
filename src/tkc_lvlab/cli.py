@@ -30,7 +30,6 @@ module does not flow through them.
 from __future__ import annotations
 
 import os
-import sys
 
 import typer
 
@@ -41,6 +40,7 @@ from .config import (
     generate_hosts_entries,
     parse_hosts_file,
 )
+from .exceptions import ConfigError, LvlabError
 from .utils.cloud_init import CloudInitIso
 from .utils.libvirt import (
     get_machine_by_vm_name,
@@ -122,12 +122,14 @@ def _resolve_existing_machine(vm_name: str) -> tuple[Machine | None, str | None]
         non-fatal failure (caller should just return early).
 
     Raises:
-        typer.Exit: With code 1 if ``parse_config()`` raises ``TypeError``.
-            Matches the long-standing parse-failure behaviour.
+        typer.Exit: With code 1 when ``parse_config()`` cannot read the
+            manifest — either a missing file (``None`` unpack ``TypeError``)
+            or a structurally invalid one (:class:`ConfigError`). Matches the
+            long-standing parse-failure behaviour.
     """
     try:
         environment, _, config_defaults, machines = parse_config()
-    except TypeError:
+    except (ConfigError, TypeError):
         logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
@@ -198,7 +200,7 @@ def cloudinit(vm_name: str) -> None:
     """Render cloud-init files for a manifest VM without starting it."""
     try:
         environment, images, config_defaults, machines = parse_config()
-    except TypeError:
+    except (ConfigError, TypeError):
         logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
@@ -210,7 +212,11 @@ def cloudinit(vm_name: str) -> None:
         image_config = _resolve_image_config(images, machine.os, machine.vm_name)
         cloud_image = CloudImage(machine.os, image_config, environment, config_defaults)
         # Render and write cloud-init config
-        _, _, _ = machine.cloud_init(cloud_image, config_defaults)
+        try:
+            _, _, _ = machine.cloud_init(cloud_image, config_defaults)
+        except LvlabError as exc:
+            logger.error("%s", exc)
+            raise typer.Exit(code=1)
 
 
 @app.command()
@@ -242,7 +248,7 @@ def down(vm_name: str) -> None:
     """Gracefully shut down a manifest VM."""
     try:
         environment, _, config_defaults, machines = parse_config()
-    except TypeError:
+    except (ConfigError, TypeError):
         logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
@@ -377,9 +383,9 @@ def hosts(
     """
     try:
         environment, _, config_defaults, machines = parse_config()
-    except TypeError:
+    except (ConfigError, TypeError):
         logger.error(CONFIG_PARSE_ERROR_MSG)
-        sys.exit()
+        raise typer.Exit(code=1)
 
     if append:
         _hosts_run_append(environment, config_defaults, machines)
@@ -553,9 +559,9 @@ def init() -> None:
     """Initialize the environment: download and verify cloud images."""
     try:
         environment, images, config_defaults, _ = parse_config()
-    except TypeError:
+    except (ConfigError, TypeError):
         logger.error(CONFIG_PARSE_ERROR_MSG)
-        sys.exit()
+        raise typer.Exit(code=1)
 
     typer.echo()
     typer.echo(f'Initializing Libvirt Lab Environment: {environment["name"]}\n')
@@ -593,7 +599,7 @@ def snapshot_create(
     """Create a snapshot for a given VM."""
     try:
         environment, _, config_defaults, machines = parse_config()
-    except TypeError:
+    except (ConfigError, TypeError):
         logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
@@ -679,7 +685,7 @@ def status() -> None:
     """
     try:
         environment, images, _, machines = parse_config()
-    except TypeError:
+    except (ConfigError, TypeError):
         logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 
@@ -739,9 +745,13 @@ def _up_build_cloud_init_iso(
     machine: Machine, cloud_image: CloudImage, config_defaults: dict
 ) -> None:
     """Render cloud-init files, pack them into cidata.iso, exit on failure."""
-    metadata_config_fpath, userdata_config_fpath, network_config_fpath = (
-        machine.cloud_init(cloud_image, config_defaults)
-    )
+    try:
+        metadata_config_fpath, userdata_config_fpath, network_config_fpath = (
+            machine.cloud_init(cloud_image, config_defaults)
+        )
+    except LvlabError as exc:
+        logger.error("%s", exc)
+        raise typer.Exit(code=1)
     iso = CloudInitIso(
         metadata_config_fpath,
         userdata_config_fpath,
@@ -791,7 +801,7 @@ def up(vm_name: str) -> None:
     """
     try:
         environment, images, config_defaults, machines = parse_config()
-    except TypeError:
+    except (ConfigError, TypeError):
         logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
 

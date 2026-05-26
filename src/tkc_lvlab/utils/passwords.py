@@ -25,6 +25,10 @@ from __future__ import annotations
 import secrets
 import subprocess
 
+# Re-export so existing imports and isinstance checks keep working after the
+# class definition moved to :mod:`tkc_lvlab.exceptions`.
+from ..exceptions import PasswordHashError
+
 
 WORD_LIST: list[str] = [
     "amber",
@@ -108,16 +112,6 @@ ephemeral lab VMs.
 _SHA512_CRYPT_SALT_CHARS: str = (
     "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
-
-
-class PasswordHashError(RuntimeError):
-    """Raised when a password hash cannot be generated.
-
-    The wrapped reason is either a missing ``openssl`` binary
-    (``FileNotFoundError``) or a non-zero exit from ``openssl passwd``.
-    Either way the message names the actual failure so the operator
-    doesn't have to guess.
-    """
 
 
 def generate_password_phrase(word_count: int = 4) -> str:

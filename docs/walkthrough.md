@@ -380,18 +380,6 @@ paused, snapshotted, or polled for live CPU/disk/network stats.
 socket, permission denied, daemon not running) is printed as a dim note and
 skipped; the remaining connections are still shown.
 
-## capabilities
-
-Print the hypervisor's raw `capabilities` XML for `qemu:///session`.
-
-```bash
-lvlab capabilities
-```
-
-This is a thin wrapper over `virsh -c qemu:///session capabilities` —
-useful for confirming that `virsh` is reachable from your shell and that
-the user is in the `libvirt` group. Not used elsewhere in the application.
-
 ## Network types (`network_type`)
 
 `interfaces.network_type` picks how each guest attaches to the network in

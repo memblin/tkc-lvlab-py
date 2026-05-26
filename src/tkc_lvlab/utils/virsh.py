@@ -351,12 +351,6 @@ def virsh_snapshot_names(uri: str, name: str) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def virsh_capabilities(uri: str) -> str:
-    """Return the raw XML output of ``virsh capabilities``."""
-    result = run_virsh(uri, ["capabilities"])
-    return result.stdout
-
-
 # ---------------------------------------------------------------------------
 # Tempfile helper for XML handoff to ``virsh snapshot-create --xmlfile``.
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ via [mkdocstrings](https://mkdocstrings.github.io/).
 
 ### `tkc_lvlab.utils`
 
-- [`tkc_lvlab.utils.virsh`](utils/virsh.md) — `virsh` subprocess wrapper, `VirshError`, lifecycle/snapshot/capabilities helpers.
+- [`tkc_lvlab.utils.virsh`](utils/virsh.md) — `virsh` subprocess wrapper, `VirshError`, lifecycle/snapshot helpers.
 - [`tkc_lvlab.utils.ssh_keys`](utils/ssh_keys.md) — SSH public-key discovery + validation.
 - [`tkc_lvlab.utils.passwords`](utils/passwords.md) — password phrase generator + SHA-512-crypt hashing.
 - [`tkc_lvlab.utils.requirements`](utils/requirements.md) — `createvm` host-binary dependency check.

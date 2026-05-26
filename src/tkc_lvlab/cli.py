@@ -67,7 +67,6 @@ from .utils.virsh import (
     DOMSTATE_RUNNING,
     DomInfo,
     VirshError,
-    virsh_capabilities,
     virsh_dominfo,
     virsh_domstate,
     virsh_list_all_names,
@@ -355,17 +354,6 @@ def _resolve_image_config(images: dict, machine_os: str, vm_name: str) -> dict:
         )
         raise typer.Exit(code=1)
     return image_config
-
-
-@app.command()
-def capabilities() -> None:
-    """Print the raw hypervisor capabilities XML for qemu:///session."""
-    try:
-        caps = virsh_capabilities(DEFAULT_LIBVIRT_URI)
-    except VirshError as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1)
-    typer.echo("Capabilities:\n" + caps)
 
 
 @app.command()

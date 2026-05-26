@@ -172,6 +172,12 @@ cython_debug/
 .sonar
 .envrc
 
+# Local working manifest. The canonical, tracked example lives at
+# docs/Lvlab.example.yml; a root-level Lvlab.yml is a developer's own
+# working copy and should not be committed (root-anchored so the tracked
+# docs/ and docs-extra/smoke/ manifests are unaffected).
+/Lvlab.yml
+
 # Claude
 .claude/settings.local.json
 .claude/worktrees

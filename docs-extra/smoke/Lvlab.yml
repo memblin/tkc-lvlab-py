@@ -15,7 +15,11 @@ environment:
       # Fallback only — each machine pins its own minimized per-distro memory
       # below (smallest reliable footprint per distro's documented floor,
       # never under 512 MiB). Debian 512 / Ubuntu 1024 / AlmaLinux 1536 /
-      # Fedora 2048. See the retest footprint plan.
+      # Fedora 2048. These are the documented floors in
+      # src/tkc_lvlab/footprints.py (MEMORY_FLOOR_MIB_BY_FAMILY) — the single
+      # source of truth the smoke scheduler and createvm integration matrix
+      # share. YAML can't import Python, so keep the per-machine values below
+      # in lockstep with that module by hand. See the retest footprint plan.
       memory: 1024
       disks:
         - name: primary

@@ -895,9 +895,19 @@ def smoke(
         help="Output format: text (default), json, or yaml.",
     ),
     batch_size: int = typer.Option(
-        2,
+        None,
         "--batch-size",
-        help="How many VMs to boot concurrently per batch.",
+        help="Explicit concurrent VMs per batch; overrides memory packing.",
+    ),
+    max_memory: int = typer.Option(
+        None,
+        "--max-memory",
+        help="Cap the memory budget (MiB) the scheduler packs batches under.",
+    ),
+    reserve: int = typer.Option(
+        2048,
+        "--reserve",
+        help="Memory (MiB) held back from available RAM for host + qemu slack.",
     ),
     skip_preflight: bool = typer.Option(
         False,
@@ -911,8 +921,11 @@ def smoke(
     from the manifest, else the DHCP lease for its pinned MAC) -> SSH in as
     the image's default user and run `id -un`/`hostname` -> `lvlab down` ->
     `lvlab destroy --force`. Runs a preflight gate first (cached images, free
-    static addresses, SSH key present) and prints the batch plan before
-    booting anything.
+    static addresses, SSH key present), then detects host memory + vCPUs and
+    bin-packs the machines into concurrent batches under a memory budget,
+    printing the computed plan before booting anything. Use `--batch-size` to
+    pin an explicit concurrency, or `--max-memory`/`--reserve` to tune the
+    budget.
 
     This boots REAL qemu:///system VMs and is never wired into CI — run it
     only on a libvirt host with no developer VMs at risk. Exit code is 0 when
@@ -923,6 +936,8 @@ def smoke(
             config,
             fmt=output_format,
             batch_size=batch_size,
+            max_memory_mib=max_memory,
+            reserve_mib=reserve,
             skip_preflight=skip_preflight,
         )
     except SmokeError as exc:

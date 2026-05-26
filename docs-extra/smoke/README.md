@@ -116,5 +116,6 @@ is kept in lockstep by the `refresh-cloud-images` skill (alongside
 When a default distro is **added or removed**, add/remove its
 `*-static` + `*-dhcp` machine pair here (pick a free static IP outside
 the DHCP range). The per-machine `memory:` values are hand-maintained to
-match the documented per-distro floors (Debian 512 / Ubuntu 1024 /
-AlmaLinux 1536 / Fedora 2048 MiB); keep them in sync.
+match the documented per-distro floors in `src/tkc_lvlab/footprints.py`
+(`MEMORY_FLOOR_MIB_BY_FAMILY`) — the single source of truth the smoke
+scheduler and the createvm integration matrix share; keep them in sync.

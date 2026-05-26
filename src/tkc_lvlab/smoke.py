@@ -18,8 +18,9 @@ For each machine the runner drives the full lifecycle:
 Two layers, deliberately separated so the logic is unit-testable without
 booting a single VM:
 
-- **Pure logic** — preflight checks (:func:`run_preflight`), the batch
-  scheduler (:func:`plan_batches`), and structured/text emission
+- **Pure logic** — preflight checks (:func:`run_preflight`), host-resource
+  detection + the bin-packing scheduler (:func:`detect_host_resources`,
+  :func:`plan_batches`), and structured/text emission
   (:func:`render_results`). None of these touch ``virsh``, ``virt-install``,
   or the network. They are what the unit tests exercise.
 - **VM lifecycle** — :func:`run_smoke`, :func:`_run_case`, and the helpers
@@ -27,6 +28,12 @@ booting a single VM:
   ``qemu:///system`` VMs and is therefore **manual only** — it must never run
   under ``uv run pytest``. The Typer command (:func:`tkc_lvlab.cli.smoke`)
   is the only entrypoint into it.
+
+The scheduler (issue #90) detects host memory + vCPUs at startup and bin-packs
+the machines into concurrent batches under a memory budget, holding back a
+configurable reserve. Per-VM memory comes from the parsed manifest — the
+authoritative source — plus a per-distro overhead allowance from
+:mod:`tkc_lvlab.footprints`.
 """
 
 from __future__ import annotations
@@ -46,6 +53,7 @@ import yaml
 
 from ._logging import get_logger
 from .config import parse_config
+from .footprints import overhead_mib_for_os
 from .utils.catalog import derive_username
 from .utils.images import CloudImage
 from .utils.libvirt import Machine
@@ -58,9 +66,13 @@ logger = get_logger(__name__)
 DEFAULT_CONFIG = "Lvlab.yml"
 DEFAULT_LIBVIRT_URI = "qemu:///system"
 
-# Default concurrency: VMs are run two at a time, matching the bash runner's
-# historical footprint. Issue #90 replaces this with a resource-aware budget.
-DEFAULT_BATCH_SIZE = 2
+# Memory held back from the host's available RAM for the host OS, the harness,
+# and qemu slack. The scheduler packs batches under (available - reserve).
+DEFAULT_RESERVE_MIB = 2048
+
+# Conservative fallbacks if `free`/`nproc` cannot be read on an unusual host —
+# enough to still produce a (small) one-or-two-at-a-time plan.
+_FALLBACK_MEMORY_MIB = 2048
 
 # SSH probe tuning. Matches run-smoke.sh: a short connect timeout, retried for
 # roughly the time first-boot cloud-init needs to add the key.
@@ -166,14 +178,32 @@ class CaseResult:
 
 
 @dataclass(frozen=True)
+class HostResources:
+    """Detected host capacity used by the scheduler.
+
+    Attributes:
+        total_memory_mib: Total host RAM in MiB.
+        available_memory_mib: Currently-available host RAM in MiB (``free``'s
+            ``available`` column when present).
+        vcpus: Host logical CPU count (``nproc``).
+    """
+
+    total_memory_mib: int
+    available_memory_mib: int
+    vcpus: int
+
+
+@dataclass(frozen=True)
 class Batch:
-    """One concurrently-run group of cases.
+    """One concurrently-run group of cases plus its memory cost.
 
     Attributes:
         cases: The cases that run together in this batch.
+        memory_mib: Sum of per-case (guest memory + overhead) for the batch.
     """
 
     cases: tuple[SmokeCase, ...]
+    memory_mib: int = 0
 
 
 @dataclass(frozen=True)
@@ -182,11 +212,18 @@ class SmokePlan:
 
     Attributes:
         batches: The ordered batches to run.
-        batch_size: The concurrency width used.
+        resources: The detected host resources the plan was sized against.
+        budget_mib: The memory budget batches were packed under.
+        reserve_mib: The safety reserve held back from available memory.
+        batch_size_override: The explicit ``--batch-size`` if one was given,
+            else ``None`` (memory-driven packing was used).
     """
 
     batches: tuple[Batch, ...]
-    batch_size: int
+    resources: HostResources
+    budget_mib: int
+    reserve_mib: int
+    batch_size_override: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -460,37 +497,178 @@ def run_preflight(
 
 
 # ---------------------------------------------------------------------------
-# Batch scheduler (pure)
+# Resource detection + bin-packing scheduler (pure; issue #90)
 # ---------------------------------------------------------------------------
+
+
+def detect_host_resources() -> HostResources:
+    """Detect host memory + vCPU capacity via ``free`` and ``nproc``.
+
+    Falls back to conservative values when either tool is unavailable so the
+    scheduler can still produce a (small) plan on an unusual host.
+
+    Returns:
+        A :class:`HostResources` snapshot.
+    """
+    total_mib = _FALLBACK_MEMORY_MIB
+    available_mib = _FALLBACK_MEMORY_MIB
+    try:
+        out = subprocess.run(
+            ["free", "-m"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+            env={**os.environ, "LC_ALL": "C"},
+        ).stdout
+        total_mib, available_mib = _parse_free_m(out)
+    except (OSError, ValueError):
+        pass
+
+    vcpus = os.cpu_count() or 1
+    try:
+        out = subprocess.run(
+            ["nproc"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if out:
+            vcpus = int(out)
+    except (OSError, ValueError):
+        pass
+
+    return HostResources(
+        total_memory_mib=total_mib,
+        available_memory_mib=available_mib,
+        vcpus=vcpus,
+    )
+
+
+def _parse_free_m(free_output: str) -> tuple[int, int]:
+    """Parse ``free -m`` output into ``(total_mib, available_mib)``.
+
+    Reads the ``Mem:`` line. ``available`` is the 7th column on modern
+    ``procps`` (``total used free shared buff/cache available``); when that
+    column is absent (very old ``free``), ``free`` (4th column) is used.
+
+    Args:
+        free_output: stdout of ``free -m`` (locale forced to ``C``).
+
+    Returns:
+        ``(total_mib, available_mib)``.
+
+    Raises:
+        ValueError: No parseable ``Mem:`` line was found.
+    """
+    for line in free_output.splitlines():
+        if line.lower().startswith("mem:"):
+            parts = line.split()
+            total = int(parts[1])
+            available = int(parts[6]) if len(parts) >= 7 else int(parts[3])
+            return total, available
+    raise ValueError("no 'Mem:' line in free output")
+
+
+def case_cost_mib(case: SmokeCase) -> int:
+    """Return the budgeted memory for one case (guest RAM + qemu overhead)."""
+    return case.memory_mib + overhead_mib_for_os(case.os)
 
 
 def plan_batches(
     cases: Sequence[SmokeCase],
+    resources: HostResources,
     *,
-    batch_size: int = DEFAULT_BATCH_SIZE,
+    batch_size: int | None = None,
+    max_memory_mib: int | None = None,
+    reserve_mib: int = DEFAULT_RESERVE_MIB,
 ) -> SmokePlan:
-    """Chunk cases into fixed-size concurrent batches in manifest order.
+    """Bin-pack cases into concurrent batches under a memory budget.
 
-    Issue #90 replaces this fixed sizing with a resource-aware memory budget;
-    until then the default mirrors the bash runner's two-at-a-time footprint.
+    The budget is ``min(available_memory, max_memory) - reserve``. Cases are
+    packed first-fit-decreasing by per-case cost (guest RAM + per-distro
+    overhead from :mod:`tkc_lvlab.footprints`), which naturally pairs a heavy
+    guest with light ones in the same batch rather than clustering all the
+    heavy guests — minimizing wall-clock.
+
+    An explicit ``batch_size`` overrides the memory packing entirely (for CI
+    pinning / debugging / tiny boxes): cases are chunked into fixed-size groups
+    in manifest order.
+
+    A single case heavier than the whole budget still gets its own batch (the
+    runner must attempt every machine); that batch reports over budget.
 
     Args:
         cases: The resolved cases to schedule.
-        batch_size: Number of cases to run concurrently per batch.
+        resources: Detected host resources.
+        batch_size: Explicit concurrent-count override, or ``None`` to pack by
+            memory.
+        max_memory_mib: Cap the budget at this many MiB, or ``None`` for no cap
+            beyond available memory.
+        reserve_mib: Memory held back for the host + harness + qemu slack.
 
     Returns:
-        A :class:`SmokePlan` with the computed batches.
+        A :class:`SmokePlan` with the computed batches and the budget used.
 
     Raises:
-        ValueError: ``batch_size`` is < 1.
+        ValueError: ``batch_size`` is given and is < 1.
     """
-    if batch_size < 1:
-        raise ValueError("--batch-size must be >= 1")
+    budget = resources.available_memory_mib - reserve_mib
+    if max_memory_mib is not None:
+        budget = min(budget, max_memory_mib - reserve_mib)
+    budget = max(budget, 0)
+
+    if batch_size is not None:
+        if batch_size < 1:
+            raise ValueError("--batch-size must be >= 1")
+        batches = _chunk_fixed(cases, batch_size)
+        return SmokePlan(
+            batches=tuple(batches),
+            resources=resources,
+            budget_mib=budget,
+            reserve_mib=reserve_mib,
+            batch_size_override=batch_size,
+        )
+
+    ordered = sorted(cases, key=case_cost_mib, reverse=True)
+    bins: list[list[SmokeCase]] = []
+    bin_costs: list[int] = []
+    for case in ordered:
+        cost = case_cost_mib(case)
+        placed = False
+        for idx, used in enumerate(bin_costs):
+            if used + cost <= budget:
+                bins[idx].append(case)
+                bin_costs[idx] = used + cost
+                placed = True
+                break
+        if not placed:
+            # New bin. A case larger than the whole budget still gets its own
+            # bin so the runner attempts it (it'll report over budget).
+            bins.append([case])
+            bin_costs.append(cost)
+
     batches = tuple(
-        Batch(cases=tuple(cases[i : i + batch_size]))
-        for i in range(0, len(cases), batch_size)
+        Batch(cases=tuple(group), memory_mib=cost)
+        for group, cost in zip(bins, bin_costs)
     )
-    return SmokePlan(batches=batches, batch_size=batch_size)
+    return SmokePlan(
+        batches=batches,
+        resources=resources,
+        budget_mib=budget,
+        reserve_mib=reserve_mib,
+        batch_size_override=None,
+    )
+
+
+def _chunk_fixed(cases: Sequence[SmokeCase], size: int) -> list[Batch]:
+    """Chunk cases into fixed-size batches in manifest order."""
+    out: list[Batch] = []
+    for i in range(0, len(cases), size):
+        group = tuple(cases[i : i + size])
+        out.append(Batch(cases=group, memory_mib=sum(case_cost_mib(c) for c in group)))
+    return out
 
 
 def format_plan(plan: SmokePlan) -> str:
@@ -500,12 +678,28 @@ def format_plan(plan: SmokePlan) -> str:
         plan: The plan to describe.
 
     Returns:
-        A multi-line string: the concurrency width and each batch's members.
+        A multi-line string: detected resources, the budget, and each batch's
+        members + memory cost.
     """
-    lines = [f"Concurrency: {plan.batch_size} VM(s) at a time"]
+    res = plan.resources
+    lines = [
+        f"Host: {res.vcpus} vCPU, {res.available_memory_mib} MiB available "
+        f"(of {res.total_memory_mib} MiB total)"
+    ]
+    if plan.batch_size_override is not None:
+        lines.append(
+            f"Concurrency: fixed --batch-size={plan.batch_size_override} "
+            f"(memory budget {plan.budget_mib} MiB, reserve {plan.reserve_mib} MiB)"
+        )
+    else:
+        lines.append(
+            f"Concurrency: memory-packed under {plan.budget_mib} MiB "
+            f"(available - {plan.reserve_mib} MiB reserve)"
+        )
     for i, batch in enumerate(plan.batches, start=1):
         members = ", ".join(c.vm_name for c in batch.cases)
-        lines.append(f"  Batch {i}: {members}")
+        over = " [OVER BUDGET]" if batch.memory_mib > plan.budget_mib else ""
+        lines.append(f"  Batch {i} ({batch.memory_mib} MiB){over}: {members}")
     total = sum(len(b.cases) for b in plan.batches)
     lines.append(f"Total: {total} VM(s) in {len(plan.batches)} batch(es)")
     return "\n".join(lines)
@@ -670,10 +864,14 @@ def _ssh_probe(
 ) -> tuple[bool, str]:  # pragma: no cover - VM lifecycle
     """Retry an SSH login, running ``id -un``/``hostname`` once it connects."""
     opts = [
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
     ]
     if key_path:
         opts = ["-i", key_path, *opts]
@@ -755,8 +953,10 @@ def _run_case(
         _teardown(case, lvlab=lvlab, uri=uri)
         return result
 
-    ip = case.static_ip if case.mode == "static" else _resolve_dhcp_ip(
-        case, network_name, uri
+    ip = (
+        case.static_ip
+        if case.mode == "static"
+        else _resolve_dhcp_ip(case, network_name, uri)
     )
     result.resolved_ip = ip
 
@@ -779,20 +979,24 @@ def run_smoke(
     config_path: str,
     *,
     fmt: OutputFormat = OutputFormat.TEXT,
-    batch_size: int = DEFAULT_BATCH_SIZE,
+    batch_size: int | None = None,
+    max_memory_mib: int | None = None,
+    reserve_mib: int = DEFAULT_RESERVE_MIB,
     skip_preflight: bool = False,
 ) -> int:  # pragma: no cover - VM lifecycle
     """Run the manifest-driven smoke suite. **Boots real VMs.**
 
     This is the manual-only entrypoint behind ``lvlab smoke``. It parses the
-    manifest, runs preflight, prints the concurrency plan, drives every case
-    through the lifecycle in concurrent batches, then emits results in the
-    requested format.
+    manifest, runs preflight, detects host resources, prints the computed
+    concurrency plan, drives every case through the lifecycle in resource-aware
+    concurrent batches, then emits results in the requested format.
 
     Args:
         config_path: Path to the manifest (``Lvlab.yml``).
         fmt: Output format.
-        batch_size: Number of VMs to run concurrently per batch.
+        batch_size: Explicit concurrency override (else memory-packed).
+        max_memory_mib: Cap the memory budget at this many MiB.
+        reserve_mib: Safety reserve held back from available memory.
         skip_preflight: Skip the preflight gate (debugging only).
 
     Returns:
@@ -831,7 +1035,14 @@ def run_smoke(
         if any(not c.ok for c in checks):
             raise SmokeError("Preflight failed; refusing to boot VMs.")
 
-    plan = plan_batches(cases, batch_size=batch_size)
+    resources = detect_host_resources()
+    plan = plan_batches(
+        cases,
+        resources,
+        batch_size=batch_size,
+        max_memory_mib=max_memory_mib,
+        reserve_mib=reserve_mib,
+    )
     print(format_plan(plan))
     print()
 

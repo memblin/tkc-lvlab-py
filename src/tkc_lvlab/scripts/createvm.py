@@ -89,6 +89,10 @@ from ..utils.virsh import VirshError, run_virsh, vm_exists
 _SYSTEM_URI = "qemu:///system"
 DEFAULT_NETWORK = "default"
 DEFAULT_NETMASK = "24"
+# Values for ``--ip4`` that mean "no static IP — use DHCP", equivalent to
+# omitting the flag. None of these are valid IPv4 addresses, so there's no
+# ambiguity with a real address (issue #105).
+_DHCP_SENTINELS = frozenset({"dhcp", "default", "auto"})
 DEFAULT_DISK_SIZE = "35G"
 DEFAULT_CPU = "2"
 DEFAULT_MEMORY = "2048"
@@ -167,18 +171,22 @@ def storage_dir_for(vm_name: str, root: Path = _ONEOFF_STORAGE_ROOT) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def parse_ip4_option(value: str, default_network: str) -> tuple[str, str]:
-    """Split a ``--ip4`` argument into ``(network_name, raw_ip)``.
+def parse_ip4_option(value: str, default_network: str) -> tuple[str, str | None]:
+    """Split a ``--ip4`` argument into ``(network_name, raw_ip_or_None)``.
 
-    Accepts either bare ``"IP"`` (uses ``default_network``) or
-    ``"NETWORK,IP"``.
+    Accepts a bare ``"IP"`` (uses ``default_network``), a ``"NETWORK,IP"``
+    pair, or a DHCP sentinel (``dhcp`` / ``default`` / ``auto``,
+    case-insensitive) in the IP slot of either form. A sentinel resolves
+    the raw IP to ``None`` — i.e. DHCP, the same as omitting ``--ip4`` —
+    so ``--ip4 default`` launches a DHCP VM instead of being mangled into
+    the invalid address ``default/<netmask>`` (issue #105).
 
     Args:
         value: The raw value from ``--ip4``.
         default_network: Network to assume when ``value`` is bare.
 
     Returns:
-        ``(network_name, raw_ip)``.
+        ``(network_name, raw_ip)`` where ``raw_ip`` is ``None`` for DHCP.
 
     Raises:
         ValueError: ``value`` has a comma but either side is empty.
@@ -191,8 +199,13 @@ def parse_ip4_option(value: str, default_network: str) -> tuple[str, str]:
             raise ValueError(
                 f"Invalid --ip4 value '{value}'. Expected IP or NETWORK,IP."
             )
+        if raw_ip.lower() in _DHCP_SENTINELS:
+            return network, None
         return network, raw_ip
-    return default_network, value.strip()
+    raw_ip = value.strip()
+    if raw_ip.lower() in _DHCP_SENTINELS:
+        return default_network, None
+    return default_network, raw_ip
 
 
 def ensure_cidr(ip: str, netmask: str) -> str:
@@ -406,10 +419,27 @@ def _resolve_network_and_ip(
 def _resolve_static_vm_ip(
     *, raw_ip: str | None, netmask: str, network_info: LibvirtNetworkInfo
 ) -> str | None:
-    """Return the validated static CIDR for ``raw_ip``, or ``None`` for DHCP."""
+    """Return the validated static CIDR for ``raw_ip``, or ``None`` for DHCP.
+
+    A ``raw_ip`` of ``None`` means DHCP (the caller already mapped the
+    DHCP sentinels and an omitted ``--ip4`` to ``None``). A non-``None``
+    value that isn't a parseable IPv4 address raises a clean, actionable
+    ``ValueError`` — *not* the stdlib ``ipaddress`` message that echoes
+    the netmask-mangled ``<value>/<netmask>`` form the user never typed
+    (issue #105). The subnet / DHCP-range checks in
+    :func:`validate_static_ip` keep their own specific messages.
+    """
     if raw_ip is None:
         return None
     vm_ip = ensure_cidr(raw_ip, netmask)
+    try:
+        ipaddress.ip_interface(vm_ip)
+    except ValueError as exc:
+        raise ValueError(
+            f"--ip4 value {raw_ip!r} is not a valid IPv4 address. Pass an "
+            "address like 192.168.122.50 (or NETWORK,192.168.122.50), or use "
+            "--ip4 dhcp (or omit --ip4) for DHCP."
+        ) from exc
     validate_static_ip(vm_ip, network_info)
     return vm_ip
 
@@ -998,7 +1028,10 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     ip4: str | None = typer.Option(
         None,
         "--ip4",
-        help="Static IPv4 address: IP or NETWORK,IP. Omit to use DHCP.",
+        help=(
+            "Static IPv4 address: IP or NETWORK,IP. Use 'dhcp' (or 'default'/"
+            "'auto'), or omit the flag, for DHCP."
+        ),
     ),
     netmask: str = typer.Option(
         DEFAULT_NETMASK, help="CIDR netmask to append if the IP lacks one."

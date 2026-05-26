@@ -71,6 +71,14 @@ no need to duplicate images for multiple environments. Unreferenced
 images can be removed with [`lvlab images clean`](#images-clean) (dry-run
 by default).
 
+Downloads tolerate flaky mirrors (connect/read timeouts, retry, and
+resume via a `.partial` file). If a download still fails — a 404, a
+refused connection, or a mirror that simply won't serve a file — `init`
+stops with a clear message instead of a traceback and tells you the
+exact cache path to drop the file at manually, then re-run. (This also
+handles gzip-served sidecars like Fedora's GPG key, which previously
+tripped a false "incomplete transfer".)
+
 ### Image Naming
 
 Custom images, and multiple versions of the same OS, need to follow a

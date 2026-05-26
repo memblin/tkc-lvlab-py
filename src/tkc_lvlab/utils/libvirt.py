@@ -31,6 +31,7 @@ from .subprocess_env import system_first_env
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
 from .network import NETWORK_TYPES, USER_MODE_NETWORK_TYPES, generate_mac
+from .snapshot_cleanup import delete_all_snapshots
 from .virsh import (
     DEAD_STATES,
     RUNNING_STATES,
@@ -704,34 +705,24 @@ class Machine:
         """Delete every snapshot of this machine; required before ``undefine``.
 
         ``virsh undefine`` refuses when snapshot metadata still exists,
-        so this is mandatory cleanup, not a courtesy.
+        so this is mandatory cleanup, not a courtesy. Delegates to the
+        shared :func:`tkc_lvlab.utils.snapshot_cleanup.delete_all_snapshots`
+        helper, which prefers a cascading ``--children`` delete and falls
+        back to ``--metadata`` on the "external children" failure mode of
+        backing-file qcow2 chains — the weaker raw ``snapshot-delete`` this
+        method used to do silently choked on those chains (issue #84). The
+        no-snapshots case is a no-op inside the helper.
 
         Returns:
             ``True`` on success (including the no-snapshots case).
-            ``False`` if any ``virsh snapshot-delete`` call failed.
+            ``False`` if snapshot cleanup raised ``VirshError`` (a deletion
+            failed for a non-external-children reason, or progress stalled).
         """
         try:
-            snapshots = virsh_snapshot_names(uri, self.libvirt_vm_name)
+            delete_all_snapshots(uri, self.libvirt_vm_name)
         except VirshError as e:
-            logger.error("Failed to list snapshots for %s: %s", self.vm_name, e)
+            logger.error("Failed to delete snapshots for %s: %s", self.vm_name, e)
             return False
-
-        if not snapshots:
-            return True
-
-        logger.warning("Deleting all snapshots for %s", self.vm_name)
-        for snap in snapshots:
-            logger.info("Deleting snapshot %s", snap)
-            try:
-                run_virsh(uri, ["snapshot-delete", self.libvirt_vm_name, snap])
-            except VirshError as e:
-                logger.error(
-                    "Failed to delete snapshot %s of %s: %s",
-                    snap,
-                    self.vm_name,
-                    e,
-                )
-                return False
         return True
 
     def _undefine(self, uri: str) -> bool:

@@ -7,9 +7,20 @@ behavioral difference: ``deletevm`` acts purely on the **raw libvirt
 domain name**.
 
 It looks up exactly the name you pass, force-offs it, undefines it
-(prompting before deleting any blocking snapshots), and then removes the
-per-VM storage directory under the one-off root **if one exists**. The
-storage directory is not required — undefine is the operative effect.
+(deleting any blocking snapshots first, under the confirmation tiers
+below), and then removes the per-VM storage directory under the one-off
+root **if one exists**. The storage directory is not required — undefine
+is the operative effect.
+
+Snapshot presence is detected **up front** so the confirmation tiers can
+branch on it:
+
+- No ``--force``: tier-1 prompt ("irreversible") → if snapshots exist, a
+  tier-2 prompt ("snapshots present; remove them?") → cleanup.
+- ``--force`` alone: tier-1 is skipped only when there are no snapshots; if
+  snapshots exist, tier-2 still fires.
+- ``--force --snapshots-too``: fully non-interactive (NEW flag, a deliberate
+  divergence from the lvscripts-py parity port — ref #84).
 
 ``deletevm`` does NOT read ``Lvlab.yml`` and does no name translation: a
 short manifest name like ``web01`` won't resolve (the real domain is
@@ -34,7 +45,7 @@ import typer
 
 from .. import __version__
 from ..utils.snapshot_cleanup import delete_all_snapshots
-from ..utils.virsh import VirshError, run_virsh, vm_exists
+from ..utils.virsh import VirshError, run_virsh, virsh_snapshot_names, vm_exists
 from .createvm import storage_dir_for
 
 
@@ -62,57 +73,69 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-def _is_snapshot_undefine_error(stderr: str) -> bool:
-    """Return True when ``virsh undefine`` failed because the domain has snapshots."""
-    combined = (stderr or "").lower()
-    return "cannot delete inactive domain" in combined and "snapshot" in combined
+def _domain_has_snapshots(vm_name: str) -> bool:
+    """Return True when ``vm_name`` currently owns one or more snapshots.
 
-
-def _undefine_with_snapshot_prompt(vm_name: str) -> None:
-    """Undefine ``vm_name``, prompting before deleting any blocking snapshots.
-
-    Tries ``virsh undefine`` directly. On the snapshot-related failure, asks
-    the operator for confirmation, deletes all snapshots via
-    :func:`tkc_lvlab.utils.snapshot_cleanup.delete_all_snapshots`, then
-    retries. Any other failure surfaces via :func:`_fail`.
+    Detection is done UP FRONT (``virsh snapshot-list <domain> --name``) so
+    the confirmation-tier logic can branch on snapshot presence before any
+    destructive step — rather than discovering snapshots lazily from a
+    failed ``undefine``. A failed snapshot query is fatal: we refuse to
+    proceed when we cannot tell whether snapshots exist.
 
     Raises:
-        typer.Exit: Undefine (or snapshot deletion) failed, or the operator
-            declined to delete snapshots.
+        typer.Exit: The ``virsh snapshot-list`` query failed.
     """
     try:
-        run_virsh(_SYSTEM_URI, ["undefine", vm_name])
-        return
+        return bool(virsh_snapshot_names(_SYSTEM_URI, vm_name))
     except VirshError as exc:
-        if not _is_snapshot_undefine_error(exc.stderr):
-            _fail(f"Failed to undefine VM '{vm_name}': {exc.stderr or exc}")
+        _fail(f"Failed to list snapshots for VM '{vm_name}': {exc.stderr or exc}")
+        return False  # unreachable; _fail raises. Keeps the type checker happy.
 
-    typer.secho(
-        f"VM '{vm_name}' has snapshots and cannot be undefined until they are removed.",
-        fg=typer.colors.YELLOW,
-    )
-    if not typer.confirm("Delete all VM snapshots and continue?"):
-        _fail("Aborted: snapshots were not deleted, so VM removal cannot continue.")
 
+def _delete_snapshots_or_fail(vm_name: str) -> None:
+    """Delete every snapshot of ``vm_name`` via the shared robust helper.
+
+    Raises:
+        typer.Exit: Snapshot deletion failed.
+    """
     typer.secho(f"Deleting snapshots for VM '{vm_name}'...", fg=typer.colors.RED)
     try:
         delete_all_snapshots(_SYSTEM_URI, vm_name)
     except VirshError as exc:
         _fail(f"Failed to delete snapshots for VM '{vm_name}': {exc.stderr or exc}")
 
+
+def _undefine_or_fail(vm_name: str) -> None:
+    """Undefine ``vm_name``; any failure surfaces via :func:`_fail`.
+
+    Snapshots are removed before this point (see the tier logic in
+    :func:`deletevm`), so a snapshot-blocked undefine should not occur here.
+
+    Raises:
+        typer.Exit: ``virsh undefine`` failed.
+    """
     try:
         run_virsh(_SYSTEM_URI, ["undefine", vm_name])
     except VirshError as exc:
-        _fail(
-            f"Failed to undefine VM '{vm_name}' after deleting snapshots: "
-            f"{exc.stderr or exc}"
-        )
+        _fail(f"Failed to undefine VM '{vm_name}': {exc.stderr or exc}")
 
 
 @app.command()
 def deletevm(
     vm_name: str = typer.Argument(..., help="VM name to destroy and remove."),
     force: bool = typer.Option(False, "--force", help="Skip confirmation prompt."),
+    # --snapshots-too is a deliberate divergence from the lvscripts-py
+    # deletevm parity port (ref #84): it pairs with --force to make a
+    # snapshot-bearing teardown fully non-interactive (skips the tier-2
+    # "snapshots present" prompt). lvscripts-py has no such flag.
+    snapshots_too: bool = typer.Option(
+        False,
+        "--snapshots-too",
+        help=(
+            "With --force, also delete the VM's snapshots without prompting. "
+            "Has no effect without --force."
+        ),
+    ),
     storage_root: Path = typer.Option(
         _ONEOFF_STORAGE_ROOT,
         "--storage-root",
@@ -129,13 +152,27 @@ def deletevm(
         help="Show the installed tkc-lvlab package version and exit.",
     ),
 ) -> None:
-    """Destroy, undefine, and remove a libvirt VM by its raw domain name."""
+    """Destroy, undefine, and remove a libvirt VM by its raw domain name.
+
+    Confirmation tiers (snapshot presence is detected up front so the prompts
+    can branch on it before any state is touched):
+
+    - No ``--force``: tier-1 prompt ("irreversible, all data lost"), then —
+      if snapshots exist — a tier-2 prompt ("snapshots present; remove them?").
+    - ``--force`` alone: tier-1 is skipped ONLY when there are no snapshots; if
+      snapshots exist, tier-2 still fires (deleting snapshots is extra-destructive
+      and ``--force`` by itself does not consent to it).
+    - ``--force --snapshots-too``: fully non-interactive (both tiers skipped).
+    """
     domain_name = vm_name
     vm_dir = storage_dir_for(vm_name, root=storage_root)
 
     if not vm_exists(_SYSTEM_URI, domain_name):
         _fail(f"VM '{domain_name}' is not defined at {_SYSTEM_URI}.")
 
+    has_snapshots = _domain_has_snapshots(domain_name)
+
+    # Tier 1: the always-irreversible warning. --force skips it.
     if not force:
         typer.secho(
             f"This will destroy, undefine, and remove all data for VM '{domain_name}'.",
@@ -145,12 +182,29 @@ def deletevm(
             typer.secho("Aborted.", fg=typer.colors.YELLOW)
             raise typer.Exit(code=0)
 
+    # Tier 2: snapshot consent. Fires whenever snapshots exist UNLESS the
+    # operator opted in non-interactively with --force --snapshots-too.
+    if has_snapshots and not (force and snapshots_too):
+        typer.secho(
+            f"VM '{domain_name}' has snapshots and cannot be undefined until they "
+            "are removed.",
+            fg=typer.colors.YELLOW,
+        )
+        if not typer.confirm("Delete all VM snapshots and continue? (irreversible)"):
+            _fail("Aborted: snapshots were not deleted, so VM removal cannot continue.")
+
     typer.secho(f"Destroying VM '{domain_name}'...", fg=typer.colors.RED)
     # The domain may already be shut off; ignore a nonzero destroy.
     run_virsh(_SYSTEM_URI, ["destroy", domain_name], check=False)
 
+    # Snapshots must go before undefine — virsh refuses to undefine a domain
+    # that still owns snapshot metadata. We've already obtained consent above
+    # (or the operator passed --force --snapshots-too).
+    if has_snapshots:
+        _delete_snapshots_or_fail(domain_name)
+
     typer.secho(f"Undefining VM '{domain_name}'...", fg=typer.colors.RED)
-    _undefine_with_snapshot_prompt(domain_name)
+    _undefine_or_fail(domain_name)
 
     # Storage cleanup is best-effort: a one-off VM's dir lives here, but a
     # manifest VM removed by its raw domain name keeps its disks elsewhere,

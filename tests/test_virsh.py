@@ -25,7 +25,6 @@ from tkc_lvlab.utils.virsh import (
     _xml_tempfile,
     humanize_state,
     run_virsh,
-    virsh_capabilities,
     virsh_dominfo,
     virsh_domstate,
     virsh_domstate_reason,
@@ -414,17 +413,6 @@ def test_virsh_snapshot_names_parses(stdout, expected):
     assert call_args[0] == ["virsh", "-c", URI, "snapshot-list", "vm1", "--name"]
 
 
-def test_virsh_capabilities_returns_raw_stdout():
-    xml = "<capabilities>\n  <host/>\n</capabilities>\n"
-    with mock.patch(
-        "tkc_lvlab.utils.virsh.subprocess.run", return_value=_completed(stdout=xml)
-    ) as run:
-        result = virsh_capabilities(URI)
-    assert result == xml
-    call_args, _ = run.call_args
-    assert call_args[0] == ["virsh", "-c", URI, "capabilities"]
-
-
 # ---------------------------------------------------------------------------
 # virsh_dominfo — parse a real ``virsh dominfo`` capture.
 # ---------------------------------------------------------------------------
@@ -548,6 +536,5 @@ def test_module_exports_public_names():
         "virsh_dominfo",
         "DomInfo",
         "virsh_snapshot_names",
-        "virsh_capabilities",
     ]:
         assert hasattr(virsh, name), f"virsh module missing public name {name!r}"

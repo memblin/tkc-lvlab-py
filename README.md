@@ -111,7 +111,6 @@ Options:
   -h, --help     Show this message and exit.
 
 Commands:
-  capabilities  Print the raw hypervisor capabilities XML for qemu:///session.
   cloudinit     Render cloud-init files for a manifest VM without starting it.
   destroy       Destroy a manifest VM: force-off, undefine, remove files.
   down          Gracefully shut down a manifest VM.

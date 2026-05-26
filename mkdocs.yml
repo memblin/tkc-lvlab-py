@@ -76,6 +76,7 @@ nav:
       - Why lvlab: why.md
       - Walkthrough: walkthrough.md
       - Example manifest: example-manifest.md
+      - One-off VMs: one-off-vms.md
       - Cloud-init examples: cloud-init-examples.md
       - Libvirt notes: libvirt-notes.md
   - API Reference:

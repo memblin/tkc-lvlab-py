@@ -106,16 +106,26 @@ Usage: lvlab [OPTIONS] COMMAND [ARGS]...
   A command-line tool for managing VMs.
 
 Options:
-  -h, --help  Show this message and exit.
+  -v, --verbose  Increase log verbosity (-v for INFO, -vv for DEBUG).
+  -q, --quiet    Suppress informational logs (ERROR only). Overrides -v.
+  -h, --help     Show this message and exit.
 
 Commands:
-  capabilities  Hypervisor Capabilities
-  cloudinit     Render the cloud-init template for a machine defined in...
-  destroy       Destroy a Virtual machine listed in the LvLab manifest
-  down          Shutdown a machine defined in the Lvlab.yml manifest.
-  hosts         Provide /etc/hosts support
-  init          Initialize the environment.
-  snapshot      Snapshot management commands.
+  capabilities  Print the raw hypervisor capabilities XML for qemu:///session.
+  cloudinit     Render cloud-init files for a manifest VM without starting it.
+  destroy       Destroy a manifest VM: force-off, undefine, remove files.
+  down          Gracefully shut down a manifest VM.
+  hosts         Render a /etc/hosts snippet for the manifest's machines.
+  ssh-config    Print ~/.ssh/config snippet(s) for machines in the manifest.
+  init          Initialize the environment: download and verify cloud images.
   status        Show the status of the environment.
+  smoke         Boot every manifest VM, SSH-verify it, then tear it down (manual only).
   up            Start a machine defined in the Lvlab.yml manifest.
+  snapshot      Snapshot management commands.
+  global        Hypervisor-wide commands not scoped to a single Lvlab.yml machine.
+  images        Cloud-image cache management commands.
 ```
+
+Verbosity flags go on the `lvlab` group, before the subcommand
+(e.g. `lvlab -vv up salt.local`). See the
+[Walkthrough](docs/walkthrough.md) for what each command does.

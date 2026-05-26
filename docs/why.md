@@ -1,52 +1,40 @@
-# TKC Labs : Libvirt Labs - Why?
+# Why lvlab?
 
-Heavily opinionated intro...
+`lvlab` exists to make libvirt+QEMU-KVM a low-friction target for **local
+integration testing of configuration-management code** — Salt, Ansible, and
+the like — on a Linux workstation. It replaces a drawer full of ad-hoc
+`qemu-img`, `genisoimage`, and cloud-init snippets with one declarative
+`Lvlab.yml`.
 
-Libvirt with QEMU-KVM has been my go-to for testing infrastructure automation
-when Podman, Docker, or Kubernetes won't fit the bill for various reasons.
-However, it can be cumbersome for new users to get familiar with the Libvirt
-toolset. Options like Vagrant exist and can often get you testing faster in
-MacOS and windows environments.
+## The workflow it replaces
 
-Vagrant, generally easy to use and multi-platform, is an excellent option.
-Most of the projects I see using Vagrant also use the VirtualBox provider. It
-works well yet I dislike needing to use Virtualbox if I have a Linux
-workstation or Development VM available to work from. This is because for me,
-VirtualBox VMs on Linux specifically seem sluggish to me when compared to a
-Libvirt QEMU-KVM VMs.
+Libvirt with QEMU-KVM is a fast, capable hypervisor for testing infrastructure
+automation when containers (Podman, Docker, Kubernetes) don't fit the bill.
+The cost is the on-ramp: once you've learned `virsh`, `qemu-img`, and
+cloud-init well enough to script VM creation, you tend to accumulate a
+collection of scripts, snippets, and gists to drive the toolkit — and managing
+that collection gets cumbersome as it grows. This project started from a pile
+of 20+ `qemu-img` / `genisoimage` / cloud-init template variations that were
+mixed and matched by hand to stand up test VMs.
 
-I've tried using Vagrant with the Libvirt provider and it does work but the
-projects I've seen that use Vagrant also normally use an off-the-shelf
-Vagrant Box that is only available for the VirtualBox provider. That means
-building and publishing an identical box of your own for the Libvirt provider
-or possibly even building for both providers so the image is exactly the same.
-That's an additional difficulty for me using Vagrant with Libvirt. If those
-things were easier or not applicable in-project then Vagrant is an awesome
-solution.
+## Why not Vagrant?
 
-## Hurdles with Libvirt and the goal of Libvirt Labs
+Vagrant is an excellent, easy, multi-platform option — and on macOS/Windows
+it's often the faster path. Two things push it out of the way here:
 
-The biggest hurdle; if you're not on Linux, FreeBSD, or MacOS I don't think
-Libvirt is an option for you. I've never tried to run it on MacOS, on Mac I
-normally go for Vagrant and VirtualBox. Libvirt and QEMU do show as available
-via brew, would love to know how well it works.
+- **VirtualBox feels sluggish on Linux** compared to libvirt QEMU-KVM, and
+    VirtualBox and libvirt can't run VMs at the same time — a problem when you
+    need companion service VMs running alongside guests that don't test well
+    under VirtualBox.
+- **The libvirt provider needs libvirt-format boxes.** Most published Vagrant
+    boxes target the VirtualBox provider only, so using Vagrant with libvirt
+    usually means building and publishing your own box (or building for both
+    providers to keep the image identical). That's friction `lvlab` avoids by
+    provisioning directly from upstream cloud images.
 
-If it is an option for you and you acquire the foundational knowledge of tools
-such as `virsh`, `qemu-img`, and cloud-init configs you might find yourself
-with a collection of scripts, snippets, and gists to facilitate automating
-the toolkit. Managing that collection can become cumbersome and time consuming
-as the collection grows.
+## Scope
 
-This utility aims to create a more functional and efficient approach to using
-Libvirt for local testing needs.
-
-## Yeah, but why?
-
-Vagrant networking gets in the way of a few of the host types I currently need
-to test with. Due to that I need to be able to test in Libvirt.
-
-Libvirt and VirtualBox can't run VMs at the same time and I often need to test
-multiple companion service VMs alongside the VMs that don't test well in VBox.
-
-I found myself with over 20 variations of qemu-img, genisoimage, and cloud-init
-templates that I was using to mix and match to create VMs for local testing.
+Libvirt is a Linux/FreeBSD (and, in theory, macOS-via-Homebrew) tool — if
+that's not your platform, `lvlab` isn't for you, and Vagrant is the better
+call. Where libvirt *is* available, `lvlab` aims to be the functional,
+efficient front-end for spinning lab VMs up and down.

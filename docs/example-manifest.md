@@ -1,6 +1,6 @@
 # Example manifest
 
-A complete `Lvlab.yml` covering each supported host OS. Copy
+A complete, annotated `Lvlab.yml`. Copy
 [`Lvlab.example.yml`](Lvlab.example.yml) verbatim as a starting point
 and edit in place — every section is annotated, and the comments call
 out the gotchas that bite first-time users.
@@ -11,17 +11,19 @@ out the gotchas that bite first-time users.
     as the libvirt URI.
 - **`config_defaults`** that apply to every machine — CPU, memory,
     one default disk, one default interface, cloud-init credentials.
-- **Five machines** spanning every supported guest OS in the
-    validated matrix: Debian 12, Debian 13 (static + DHCP), AlmaLinux
-    10, Fedora 44.
-- **Cross-distro interface matching.** Each interface is keyed `eth0` in
-    the manifest (a netplan label). The v2 (netplan) network-config
-    template matches the NIC by its MAC address (`lvlab` pins one per
-    interface and passes the same address to `virt-install`) and configures
-    it under its distro-assigned name — no rename — so the same manifest
-    works on every distro without guessing `enp1s0` vs `eth0`. MAC matching
-    is the only selector cloud-init honours on both its netplan and
-    NetworkManager renderers.
+- **Six machines** exercising a representative spread: Debian 12
+    (static), Debian 13 (static and DHCP), AlmaLinux 10 (static),
+    Fedora 44 (static), and one user-mode VM.
+- **An `images:` block cataloguing all eight supported cloud images** —
+    Debian 11/12/13, AlmaLinux 9/10, Ubuntu 22.04/24.04, and Fedora 44 —
+    plus two custom intranet examples. A machine only needs an entry for
+    the image its `os:` names; the rest are there to copy from.
+- **Cross-distro interface matching.** Each interface is keyed `eth0` (a
+    netplan label) and bound by MAC address, so the same manifest works on
+    every distro without guessing `enp1s0` vs `eth0`. See
+    [Cloud-init examples](cloud-init-examples.md#network-config-v2-netplan)
+    for why MAC matching — not driver or device-name matching — is what
+    makes this portable.
 - **One user-mode-networking VM** (`rootless.local`) for use on
     `qemu:///session` where rootless libvirt can't manage a NAT
     network.

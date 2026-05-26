@@ -379,9 +379,11 @@ working tree. Our flow is commit-locally-then-push via git.
 Claude authenticates via a **fine-grained PAT** (the same token backs `gh` and
 the MCP server) with the minimum scopes for its work. Current scope set:
 `contents:write`, `pull-requests:write`, `issues:write` (Claude files and edits
-issues). Document scope changes here so they're reviewable at rotation time. **If
-an operation fails for lack of a scope, ask the maintainer to extend the token**
-rather than working around it.
+issues), and `workflow` (added 2026-05-26 so Claude can push changes under
+`.github/workflows/` — GitHub rejects a PAT-authored push that touches a
+workflow file without it). Document scope changes here so they're reviewable at
+rotation time. **If an operation fails for lack of a scope, ask the maintainer
+to extend the token** rather than working around it.
 
 ### Pushes — allowed only when asked
 

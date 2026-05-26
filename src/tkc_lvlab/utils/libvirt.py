@@ -936,6 +936,19 @@ class Machine:
                 logger.info("Virtual Disk: %s exists at %s", vdisk.name, vdisk.fpath)
             else:
                 logger.info("Creating Virtual Disk: %s at %s", vdisk.fpath, vdisk.size)
+                if vdisk.strategy == "backing":
+                    # Backing-file disks depend on the shared cloud-images cache
+                    # (issue #99). Warn loudly so the operator knows not to run
+                    # `lvlab images clean` / wipe the cache while this VM exists.
+                    logger.warning(
+                        "Disk %s uses backing-file mode: it depends on the "
+                        "cached base image %s. Do NOT clean/wipe the "
+                        "cloud-images cache while this VM exists, or the disk "
+                        "will break. Use the default 'copy' strategy to avoid "
+                        "this.",
+                        vdisk.fpath,
+                        vdisk.backing_image_fpath,
+                    )
                 if vdisk.create():
                     if vdisk.exists():
                         logger.info("Virtual Disk Created Successfully")

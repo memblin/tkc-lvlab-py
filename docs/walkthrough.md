@@ -127,8 +127,11 @@ If the VM already exists in libvirt:
 
 If the VM does not yet exist:
 
-1. Create the primary qcow2 vdisk via `qemu-img create -b <cloud_image>`
-    (backing-file mode — fast, low disk usage).
+1. Create the primary qcow2 vdisk. By default this is a **standalone
+    copy** of the cloud image, so the disk has no dependency on the shared
+    `cloud-images/` cache and [`images clean`](#images-clean) can never
+    break a running VM. Backing-file mode is available as an opt-in — see
+    "Disk strategy" below.
 1. Render `meta-data`, `user-data`, and `network-config` from the
     Jinja2 templates in `tkc_lvlab/templates/`.
 1. Pack the three files into `cidata.iso` in-process with `pycdlib`
@@ -150,6 +153,26 @@ primary access path. To use your own password set `cloud_init.passwd`
 `cloud_init.password: false`. The password only takes effect at
 first-boot cloud-init, so re-running `up` on an existing VM doesn't
 change it.
+
+### Disk strategy
+
+Each VM disk is created with one of two strategies:
+
+- **`copy`** (default) — a standalone copy of the cloud image. The disk
+    is self-contained, so the shared `cloud-images/` cache can be pruned
+    or re-initialized without breaking the VM. Disks cost more space (a
+    full image each), but qcow2 copies are sparse and grow with use —
+    fine for a handful of lab VMs.
+- **`backing`** (opt-in) — a thin qcow2 overlay on the cached cloud image
+    (`qemu-img create -b`). Lower disk usage, but every such disk has a
+    hard dependency on the cached base image: **do not run
+    [`images clean`](#images-clean) or wipe the cache while a backing-mode
+    VM exists**, or its disk breaks. `up` logs a warning each time it
+    creates a backing-mode disk.
+
+Set it manifest-wide under `config_defaults.disk_strategy: copy|backing`,
+or per disk with `disks[*].strategy`. (`createvm` always uses a standalone
+copy.)
 
 ## status
 

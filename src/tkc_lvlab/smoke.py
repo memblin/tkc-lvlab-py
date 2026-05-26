@@ -46,6 +46,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -764,7 +765,13 @@ def render_results(results: Sequence[CaseResult], fmt: OutputFormat) -> str:
 
 
 def _render_text(results: Sequence[CaseResult], summary: dict[str, Any]) -> str:
-    """Render the concise PASS/FAIL-per-machine text report + summary."""
+    """Render the concise PASS/FAIL-per-machine text report + summary.
+
+    The full report (the ``===`` table plus the closing summary). Used for the
+    non-TTY / piped TEXT path, where no live table was drawn. On a terminal the
+    live phase table already shows the per-VM grid, so only the closing summary
+    (:func:`_render_text_summary`) is printed under it (issue #126).
+    """
     lines: list[str] = []
     lines.append("=" * 66)
     lines.append(f"  {'vm':<20} {'mode':<7} {'ip':<16} result")
@@ -774,6 +781,25 @@ def _render_text(results: Sequence[CaseResult], summary: dict[str, Any]) -> str:
         verdict = "PASS" if r.result == "pass" else "FAIL"
         lines.append(f"  {r.vm_name:<20} {r.mode:<7} {ip:<16} {verdict}")
     lines.append("=" * 66)
+    lines.append(_render_text_summary(results, summary))
+    return "\n".join(lines)
+
+
+def _render_text_summary(results: Sequence[CaseResult], summary: dict[str, Any]) -> str:
+    """Render the closing lines: per-failure details + the SMOKE RESULT verdict.
+
+    This is everything in the TEXT report *except* the per-VM ``===`` table,
+    so it can be printed under the live phase table without duplicating the
+    grid the live table already showed (issue #126).
+
+    Args:
+        results: The per-case outcomes.
+        summary: The :func:`summarize` dict (for the total/failed counts).
+
+    Returns:
+        The failure-detail lines (if any) followed by the one-line verdict.
+    """
+    lines: list[str] = []
     for r in results:
         if r.result != "pass" and r.detail:
             lines.append(f"  {r.vm_name}: {r.detail}")
@@ -1291,13 +1317,20 @@ def run_smoke(
     except Exception:  # noqa: BLE001 - any network read failure -> soft skip
         network_info = None
 
+    # Diagnostic / human-facing output (preflight, plan, status) goes to stdout
+    # for TEXT, but to stderr for the machine formats so a `--json`/`--yaml`
+    # stdout stays pure and pipeable (e.g. `lvlab smoke --json | jq`). Only the
+    # final render_results(json|yaml) is written to stdout in those modes
+    # (issue #126).
+    diag = sys.stdout if fmt is OutputFormat.TEXT else sys.stderr
+
     if not skip_preflight:
         checks = run_preflight(
             images, cases, environment, config_defaults, network_info
         )
         for check in checks:
             mark = "ok  " if check.ok else "FAIL"
-            print(f"[preflight {mark}] {check.name}: {check.message}")
+            print(f"[preflight {mark}] {check.name}: {check.message}", file=diag)
         if any(not c.ok for c in checks):
             raise SmokeError("Preflight failed; refusing to boot VMs.")
 
@@ -1309,15 +1342,23 @@ def run_smoke(
         max_memory_mib=max_memory_mib,
         reserve_mib=reserve_mib,
     )
-    print(format_plan(plan))
-    print()
+    print(format_plan(plan), file=diag)
+    print(file=diag)
 
     lvlab = _lvlab_bin()
     key_path = _ssh_private_key(config_defaults)
     progress = SmokeProgress(cases)
     # Live phase table only for the human-facing TEXT format on a terminal
-    # (issue #101); JSON/YAML and piped output stay exactly as before.
+    # (issue #101); JSON/YAML and piped output stay exactly as before. For the
+    # machine formats there is no live table, so leave a one-line "in progress"
+    # notice on stderr — visible to the human without touching the stdout pipe.
     live = fmt is OutputFormat.TEXT and is_tty()
+    if fmt is not OutputFormat.TEXT:
+        print(
+            f"smoke: running {len(cases)} case(s) across {len(plan.batches)} "
+            f"batch(es); {fmt.value} results print on completion…",
+            file=sys.stderr,
+        )
     results = _run_batches(
         plan,
         progress,
@@ -1332,10 +1373,18 @@ def run_smoke(
 
     # Every case tore its VM down; reap the now-empty environment storage
     # directory smoke created (issue #100). No-op if a teardown left files.
-    if cleanup_empty_env_dir(config_defaults, environment) and fmt is OutputFormat.TEXT:
+    if cleanup_empty_env_dir(config_defaults, environment):
         print(
-            f"Removed empty environment directory {smoke_env_dir(config_defaults, environment)}"
+            f"Removed empty environment directory {smoke_env_dir(config_defaults, environment)}",
+            file=diag,
         )
 
-    print(render_results(results, fmt))
+    # Final output. The machine formats write only their payload to stdout. For
+    # TEXT on a terminal the live phase table already rendered the per-VM grid,
+    # so print just the closing summary (no redundant ``===`` re-print, issue
+    # #126); piped TEXT (no live table) still gets the full report.
+    if fmt is OutputFormat.TEXT and live:
+        print(_render_text_summary(results, summarize(results)))
+    else:
+        print(render_results(results, fmt))
     return 0 if all(r.result == "pass" for r in results) else 1

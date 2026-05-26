@@ -373,6 +373,37 @@ def test_render_text_all_pass_summary():
     assert "ALL 2 CASES PASSED" in out
 
 
+def test_render_text_summary_omits_the_table_grid():
+    # The closing summary printed under the live table (issue #126): the
+    # verdict + failure details, but NOT the per-VM ``===`` grid the live
+    # table already showed.
+    results = [_result("good"), _result("bad", result="fail")]
+    summary = summarize(results)
+    out = smoke._render_text_summary(results, summary)
+    assert "1 of 2 FAILED" in out
+    assert "bad: no SSH" in out  # failing case's detail is kept
+    assert "=" * 10 not in out  # no ``===`` table rule
+    assert "result" not in out  # no table header
+    # The good case is not re-listed (only failures get a detail line).
+    assert "good" not in out
+
+
+def test_render_text_summary_all_pass_is_just_the_verdict():
+    results = [_result("a"), _result("b")]
+    out = smoke._render_text_summary(results, summarize(results))
+    assert out == "SMOKE RESULT: ALL 2 CASES PASSED"
+
+
+def test_render_text_still_includes_table_and_summary():
+    # The full report (non-TTY / piped TEXT path) keeps the grid AND the
+    # summary, unchanged by the #126 split.
+    results = [_result("a"), _result("b", result="fail")]
+    out = render_results(results, OutputFormat.TEXT)
+    assert "=" * 66 in out  # table rule present
+    assert "result" in out  # table header present
+    assert "1 of 2 FAILED" in out  # summary present
+
+
 # ---------------------------------------------------------------------------
 # Case construction
 # ---------------------------------------------------------------------------

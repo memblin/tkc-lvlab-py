@@ -185,6 +185,28 @@ def test_parse_free_m_reads_available_column():
     assert available == 11000
 
 
+def test_parse_domifaddr_lease_extracts_ipv4():
+    # Real `virsh domifaddr <domain> --source lease` output shape.
+    out = (
+        " Name       MAC address          Protocol     Address\n"
+        "-------------------------------------------------------------------\n"
+        " vnet3      52:54:00:1a:2b:3c    ipv4         192.168.122.123/24\n"
+    )
+    assert smoke._parse_domifaddr_lease(out) == "192.168.122.123"
+
+
+def test_parse_domifaddr_lease_ignores_ipv6_only_and_header():
+    # An IPv6-only lease (or header/empty output) yields no IPv4 address —
+    # the runner keeps polling rather than locking onto a v6 address.
+    out = (
+        " Name       MAC address          Protocol     Address\n"
+        "-------------------------------------------------------------------\n"
+        " vnet3      52:54:00:1a:2b:3c    ipv6         fe80::5054:ff:fe1a:2b3c/64\n"
+    )
+    assert smoke._parse_domifaddr_lease(out) is None
+    assert smoke._parse_domifaddr_lease("") is None
+
+
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------

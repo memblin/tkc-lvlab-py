@@ -11,7 +11,7 @@ For each machine the runner drives the full lifecycle:
 
 1. ``lvlab up <vm_name>`` (via the same ``Machine`` deploy path the CLI uses).
 2. Resolve the guest IP — a static address from the manifest, otherwise poll
-   the libvirt DHCP lease for the machine's pinned MAC.
+   libvirt for the running domain's DHCP lease (``virsh domifaddr``).
 3. SSH-verify as the catalog default user (``id -un`` / ``hostname``).
 4. ``lvlab down`` then ``lvlab destroy --force`` to tear the VM back down.
 
@@ -43,6 +43,7 @@ import dataclasses
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import threading
@@ -127,8 +128,9 @@ class SmokeCase:
             else ``"dhcp"``.
         static_ip: Bare static IP (CIDR stripped) for ``static`` mode, else
             ``None``.
-        mac: The pinned MAC of the first interface — used to match the DHCP
-            lease for ``dhcp`` mode.
+        mac: The pinned MAC of the first interface (informational only; DHCP
+            lease resolution looks the address up by the running domain via
+            ``virsh domifaddr``, not by this MAC — see issue #125).
         ssh_user: The catalog default first-boot username to SSH in as.
         memory_mib: Per-VM memory from the manifest (drives the scheduler).
         vcpus: Per-VM vCPU count from the manifest.
@@ -838,27 +840,59 @@ def _ssh_private_key(config_defaults: dict[str, Any]) -> str | None:
     return path[:-4] if path.endswith(".pub") else path
 
 
-def _resolve_dhcp_ip(
-    case: SmokeCase, network_name: str, uri: str
-) -> str | None:  # pragma: no cover - VM lifecycle
-    """Poll ``virsh net-dhcp-leases`` for the case's pinned MAC."""
-    import re
+_DOMIFADDR_IPV4 = re.compile(r"\bipv4\s+(?P<ip>\d{1,3}(?:\.\d{1,3}){3})/\d+")
 
-    pattern = re.compile(
-        r"(?P<mac>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})\s+ipv4\s+"
-        r"(?P<ip>\d+\.\d+\.\d+\.\d+)/\d+"
-    )
-    target = (case.mac or "").lower()
+
+def _parse_domifaddr_lease(output: str) -> str | None:
+    """Extract the first IPv4 address from ``virsh domifaddr --source lease`` output.
+
+    ``virsh domifaddr <domain> --source lease`` prints one row per interface
+    address::
+
+         Name       MAC address          Protocol     Address
+        -------------------------------------------------------------------
+         vnet3      52:54:00:1a:2b:3c    ipv4         192.168.122.123/24
+
+    Args:
+        output: Raw stdout from the ``virsh domifaddr`` call.
+
+    Returns:
+        The dotted-quad IPv4 address of the first ``ipv4`` row, or ``None``
+        when the output carries no IPv4 lease line (header-only, empty, or
+        IPv6-only).
+    """
+    for line in output.splitlines():
+        match = _DOMIFADDR_IPV4.search(line)
+        if match:
+            return match.group("ip")
+    return None
+
+
+def _resolve_dhcp_ip(
+    case: SmokeCase, uri: str
+) -> str | None:  # pragma: no cover - VM lifecycle
+    """Poll libvirt for the running domain's DHCP-leased IPv4 address.
+
+    Uses ``virsh domifaddr <domain> --source lease``, which resolves the
+    address by the *running domain's* own interface. That is correct
+    regardless of the per-interface MAC the launching ``lvlab up`` generated:
+    ``generate_mac`` is random per ``Machine`` construction, so matching
+    ``net-dhcp-leases`` against a MAC this process pinned independently never
+    matched the VM's actual MAC and failed every DHCP case (issue #125).
+    """
     for _ in range(DHCP_POLL_RETRIES):
         try:
-            result = run_virsh(uri, ["net-dhcp-leases", network_name], check=False)
+            result = run_virsh(
+                uri,
+                ["domifaddr", case.libvirt_domain, "--source", "lease"],
+                check=False,
+            )
         except VirshError:
             result = None
         if result is not None and result.returncode == 0:
-            for line in result.stdout.splitlines():
-                m = pattern.search(line)
-                if m and m.group("mac").lower() == target:
-                    return m.group("ip")
+            ip = _parse_domifaddr_lease(result.stdout)
+            if ip:
+                return ip
         time.sleep(DHCP_POLL_INTERVAL)
     return None
 
@@ -1036,7 +1070,6 @@ def _run_case(
     *,
     lvlab: str,
     uri: str,
-    network_name: str,
     key_path: str | None,
     progress: "SmokeProgress | None" = None,
 ) -> CaseResult:  # pragma: no cover - VM lifecycle
@@ -1076,11 +1109,7 @@ def _run_case(
         return result
 
     phase(SmokePhase.BOOTING)
-    ip = (
-        case.static_ip
-        if case.mode == "static"
-        else _resolve_dhcp_ip(case, network_name, uri)
-    )
+    ip = case.static_ip if case.mode == "static" else _resolve_dhcp_ip(case, uri)
     result.resolved_ip = ip
     if progress is not None and ip:
         progress.set_ip(case.vm_name, ip)
@@ -1109,7 +1138,6 @@ def _run_batches(
     *,
     lvlab: str,
     uri: str,
-    network_name: str,
     key_path: str | None,
     live: bool,
 ) -> list[CaseResult]:  # pragma: no cover - VM lifecycle
@@ -1141,7 +1169,6 @@ def _run_batches(
                         case,
                         lvlab=lvlab,
                         uri=uri,
-                        network_name=network_name,
                         key_path=key_path,
                         progress=progress,
                     )
@@ -1296,7 +1323,6 @@ def run_smoke(
         progress,
         lvlab=lvlab,
         uri=uri,
-        network_name=network_name,
         key_path=key_path,
         live=live,
     )

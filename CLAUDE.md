@@ -298,6 +298,12 @@ Alternatively the orchestrator can hand the agent the current `main` HEAD SHA in
 
 For short, single-file changes that don't need a separate branch, prefer spawning the agent without `isolation: "worktree"` so it works directly on `main` — same risk profile as the orchestrator working on `main`, no stale-base trap.
 
+## GitHub interactions (MCP vs. git/gh)
+
+A **GitHub MCP server** is installed (the `github` plugin; tools are `mcp__plugin_github_github__*`). It authenticates as the repo owner. **Prefer the MCP tools for GitHub *data* operations** — reading/creating/editing issues and PRs, comments, labels, reviews, code/issue search, release/tag lookups. They're typed and don't trigger Bash permission prompts, so they're cleaner than shelling out to `gh`. `gh` is a fine fallback if a needed operation isn't exposed as an MCP tool, or if the MCP server is unavailable in a given session (it's a plugin, not guaranteed present).
+
+**Local-repo git operations still go through git (and `gh` where noted), not the MCP.** Our flow is *commit locally, then push* — the MCP's `push_files` / `create_or_update_file` commit *through the API* (a different, server-side model that bypasses local pre-commit and the local working tree), so do **not** use them for normal work. Pushing local commits, fetches, and tags all use the git HTTPS-PAT paths below. The push/tag gates in "Git pushes" apply regardless of which tool could perform the write — e.g. don't open/merge/close PRs or push tags via the MCP just because it *can*; the same "only when explicitly asked" rule binds.
+
 ## Git pushes
 
 **Pushes via `gh`'s authenticated PAT are allowed when the user has asked for them**, scoped to the PAT's `contents:write` + `pull-requests:write`. The user normally pushes themselves from their own terminal (via the SSH remote); if the user asks you to push, use the HTTPS PAT path.

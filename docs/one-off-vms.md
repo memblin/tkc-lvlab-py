@@ -60,21 +60,24 @@ and must be given together.
 
 ### Flags
 
-| Flag                     | Purpose                                                                                                                                                                                                                                                               |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `VM_NAME` (positional)   | FQDN / domain name for the VM. Required together with `VM_DISTRO`.                                                                                                                                                                                                    |
-| `VM_DISTRO` (positional) | Image key, matched case-insensitively against the built-in catalog (`debian11`, `debian12`, `debian13`, `almalinux9`, `almalinux10`, `ubuntu2204`, `ubuntu2404`, `fedora44`) merged with any `images:` in a cwd `Lvlab.yml`. Required together with `VM_NAME`.        |
-| `--ip4`                  | Optional static IPv4. Accepts `IP` (uses `--network`) or `NETWORK,IP`. Validated against the network's subnet AND DHCP range, then rendered into the guest's cloud-init network-config. For DHCP, pass `dhcp` (or `default` / `auto`) or omit the flag.               |
-| `--netmask`              | CIDR prefix appended to `--ip4` when it lacks one. Default `24`.                                                                                                                                                                                                      |
-| `--disk-size`            | qcow2 disk size. Default `35G`.                                                                                                                                                                                                                                       |
-| `--cpu`                  | vCPU count. Default `2`.                                                                                                                                                                                                                                              |
-| `--memory`               | RAM, optional unit suffix (`2048`, `2G`, `512M`). Default `2048` (MiB).                                                                                                                                                                                               |
-| `--network`              | libvirt network name. Default `default` (the stock NAT).                                                                                                                                                                                                              |
-| `--public-key`           | Optional extra SSH public key file (appended after discovered defaults).                                                                                                                                                                                              |
-| `--init-cloud-images`    | **Deprecated** — prefer `lvlab init` (the single image-init path; it initializes the built-in defaults with no `Lvlab.yml`). Still works: downloads every catalog image that isn't cached. With no positional args, exits after; with them, pre-fetches then creates. |
-| `--config`               | Path to a specific `Lvlab.yml` whose `images:` are merged into the catalog, instead of the cwd lookup.                                                                                                                                                                |
-| `--no-color`             | Disable colored output. Also honors the `NO_COLOR` environment variable. Useful on terminals that render ANSI poorly, or to keep captured logs clean.                                                                                                                 |
-| `--version` / `-V`       | Print the installed `tkc-lvlab` version and exit.                                                                                                                                                                                                                     |
+| Flag                     | Purpose                                                                                                                                                                                                                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `VM_NAME` (positional)   | FQDN / domain name for the VM. Required together with `VM_DISTRO`.                                                                                                                                                                                                                                     |
+| `VM_DISTRO` (positional) | Image key, matched case-insensitively against the built-in catalog (`debian11`, `debian12`, `debian13`, `almalinux9`, `almalinux10`, `ubuntu2204`, `ubuntu2404`, `fedora44`) merged with any `images:` in a cwd `Lvlab.yml`. Required together with `VM_NAME`.                                         |
+| `--ip4`                  | Optional static IPv4. Accepts `IP` (uses `--network`), `NETWORK,IP`, or a bare `NETWORK` name (DHCP on that network). Validated against the network's subnet AND DHCP range, then rendered into the guest's cloud-init network-config. For DHCP, pass `dhcp` (or `default` / `auto`) or omit the flag. |
+| `--netmask`              | CIDR prefix appended to `--ip4` when it lacks one. Default `24`.                                                                                                                                                                                                                                       |
+| `--disk-size`            | qcow2 disk size. Default `35G`.                                                                                                                                                                                                                                                                        |
+| `--cpu`                  | vCPU count. Default `2`.                                                                                                                                                                                                                                                                               |
+| `--memory`               | RAM, optional unit suffix (`2048`, `2G`, `512M`). Default `2048` (MiB).                                                                                                                                                                                                                                |
+| `--network`              | libvirt network name. Falls back to the config `default_network`, then the stock NAT `default`.                                                                                                                                                                                                        |
+| `--gateway`              | Gateway IP for a static `--ip4` on a **bridge** network. Required (with `--dns`) for a bridge unless a `networks:` entry supplies it; ignored for NAT (self-derived).                                                                                                                                  |
+| `--dns`                  | Comma-separated DNS server(s) for a static `--ip4` on a **bridge** network. Required (with `--gateway`) for a bridge unless a `networks:` entry supplies it; ignored for NAT.                                                                                                                          |
+| `--search-domain`        | Comma-separated DNS search domain(s). Honored on both NAT and bridge.                                                                                                                                                                                                                                  |
+| `--public-key`           | Optional extra SSH public key file (appended after discovered defaults).                                                                                                                                                                                                                               |
+| `--init-cloud-images`    | **Deprecated** — prefer `lvlab init` (the single image-init path; it initializes the built-in defaults with no `Lvlab.yml`). Still works: downloads every catalog image that isn't cached. With no positional args, exits after; with them, pre-fetches then creates.                                  |
+| `--config`               | Path to a specific `Lvlab.yml` layered on top of the cwd `./Lvlab.yml`, the per-user `~/.Lvlab.yml`, and host-wide `/etc/Lvlab.yml` (see *Host-wide config* below). Its `images:`, `networks:`, and `default_network` win on a clash.                                                                  |
+| `--no-color`             | Disable colored output. Also honors the `NO_COLOR` environment variable. Useful on terminals that render ANSI poorly, or to keep captured logs clean.                                                                                                                                                  |
+| `--version` / `-V`       | Print the installed `tkc-lvlab` version and exit.                                                                                                                                                                                                                                                      |
 
 `createvm` attaches the guest to a managed libvirt network
 (`--network network=<name>,model=virtio`), defaulting to the stock NAT
@@ -82,6 +85,51 @@ and must be given together.
 static address (plus the NAT gateway as resolver) into the guest's
 network-config; without it the guest uses DHCP and `createvm` waits up to
 20s for the NAT lease, then prints the discovered SSH target.
+
+### Host-wide config (`/etc/Lvlab.yml`)
+
+A static `--ip4` on a **bridge** network needs an explicit gateway and DNS
+(a bridge has no libvirt-managed values to self-derive). Rather than retype
+`--gateway`/`--dns` on every run, declare per-network defaults once. `createvm`
+reads config from four layers, lowest precedence first — `/etc/Lvlab.yml`
+(host-wide), then `~/.Lvlab.yml` (your per-user defaults), then `./Lvlab.yml`
+(current directory), then any `--config` path — deep-merged so a higher layer
+overrides a single nested field while inheriting the rest. So a per-host bridge
+map can live in `/etc`, your personal default network in `~/.Lvlab.yml`, and a
+project override in the directory you run from.
+
+```yaml
+# /etc/Lvlab.yml — host-wide defaults for every createvm run on this host
+# (the same schema works in ~/.Lvlab.yml and a project ./Lvlab.yml)
+default_network: vlan10            # used when --network / --ip4 NETWORK is omitted
+networks:
+  vlan10:
+    gateway: 100.64.10.1
+    dns: [100.64.10.10, 100.64.10.11]
+    search: [tkclabs.io]
+  vlan20:
+    gateway: 100.64.20.1
+    dns: [100.64.20.10]
+```
+
+With that in place, a static IP on the `vlan10` bridge needs no networking
+flags:
+
+```bash
+sudo createvm web01.tkclabs.io ubuntu2404 --ip4 vlan10,100.64.10.50
+```
+
+Resolution precedence per value:
+
+- **Network name** — `--ip4 NETWORK,IP` → `--network` → config `default_network`
+    → the built-in `default`.
+- **gateway / dns / search** — the matching flag → the resolved network's
+    `networks:` entry → NAT self-derivation → otherwise the "bridge needs
+    gateway+dns" error. So a configured bridge just works; an unconfigured one
+    still fails clearly.
+
+(`images:` layers the same way — host-wide image keys merge with a project
+manifest's, the higher layer winning on a name clash.)
 
 ### SSH keys
 

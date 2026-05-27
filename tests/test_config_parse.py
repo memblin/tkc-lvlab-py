@@ -22,7 +22,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tkc_lvlab.config import ConfigManager, parse_config, parse_file_from_url
+from tkc_lvlab.config import (
+    ConfigManager,
+    HostConfig,
+    NetworkDefaults,
+    deep_merge,
+    load_host_config,
+    parse_config,
+    parse_file_from_url,
+    parse_networks,
+)
 from tkc_lvlab.exceptions import ConfigError, LvlabError
 
 
@@ -268,3 +277,207 @@ def test_config_manager_from_parsed_wraps_without_rereading(tmp_path: Path) -> N
     soft = ConfigManager.from_parsed(None)
     assert soft.loaded is False
     assert soft.machines == []
+
+
+# ---------------------------------------------------------------------------
+# Layered host config + networks (#138)
+# ---------------------------------------------------------------------------
+
+
+def _layered_dirs(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Return ``(system_dir, home_dir, cwd)`` test seams (each an empty dir).
+
+    All three are passed to :func:`load_host_config` so the tests never touch
+    the real ``/etc`` or the developer's own ``~/.Lvlab.yml``.
+    """
+    system_dir = tmp_path / "etc"
+    home_dir = tmp_path / "home"
+    cwd = tmp_path / "cwd"
+    system_dir.mkdir()
+    home_dir.mkdir()
+    cwd.mkdir()
+    return system_dir, home_dir, cwd
+
+
+def test_deep_merge_recurses_dicts_and_replaces_scalars() -> None:
+    """Nested mappings merge; scalars/lists from the overlay replace wholesale."""
+    base = {"a": {"x": 1, "y": 2}, "b": [1, 2], "c": "base"}
+    overlay = {"a": {"y": 99, "z": 3}, "b": [9], "d": "new"}
+    merged = deep_merge(base, overlay)
+
+    assert merged == {
+        "a": {"x": 1, "y": 99, "z": 3},  # nested dict merged, y overridden
+        "b": [9],  # list replaced wholesale, not concatenated
+        "c": "base",  # untouched key survives
+        "d": "new",  # overlay-only key added
+    }
+    # Inputs are not mutated.
+    assert base["a"] == {"x": 1, "y": 2}
+
+
+def test_parse_networks_normalizes_scalar_and_list() -> None:
+    """``dns``/``search`` accept a scalar or a list; gateway is a scalar."""
+    networks = parse_networks(
+        {
+            "vlan10": {
+                "gateway": "100.64.10.1",
+                "dns": "100.64.10.10",  # scalar -> single-element list
+                "search": ["a.example", "b.example"],
+            },
+            "vlan20": None,  # null entry -> empty defaults placeholder
+        }
+    )
+    assert networks["vlan10"] == NetworkDefaults(
+        gateway="100.64.10.1",
+        dns=["100.64.10.10"],
+        search=["a.example", "b.example"],
+    )
+    assert networks["vlan20"] == NetworkDefaults()
+
+
+def test_parse_networks_rejects_non_mapping() -> None:
+    """A ``networks:`` value that isn't a mapping is a clean ValueError."""
+    with pytest.raises(ValueError, match="'networks' section must be a mapping"):
+        parse_networks(["vlan10", "vlan20"])
+
+
+def test_parse_networks_rejects_bad_dns_type() -> None:
+    """A ``dns`` value that's neither string nor list-of-strings errors."""
+    with pytest.raises(ValueError, match="networks.vlan10.dns"):
+        parse_networks({"vlan10": {"dns": {"not": "a list"}}})
+
+
+def test_load_host_config_no_files_is_empty(tmp_path: Path) -> None:
+    """With neither /etc nor CWD config present, every section is empty."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+    assert config == HostConfig()
+    assert config.images == {}
+    assert config.networks == {}
+    assert config.default_network is None
+
+
+def test_load_host_config_layers_cwd_over_etc(tmp_path: Path) -> None:
+    """A CWD ``Lvlab.yml`` wins per key over the host-wide ``/etc`` base."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (system_dir / "Lvlab.yml").write_text(
+        "default_network: vlan10\n"
+        "networks:\n"
+        "  vlan10:\n"
+        "    gateway: 100.64.10.1\n"
+        "    dns: [100.64.10.10]\n"
+    )
+    (cwd / "Lvlab.yml").write_text("default_network: vlan20\n")
+
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+
+    # CWD overrode the scalar default_network ...
+    assert config.default_network == "vlan20"
+    # ... while the /etc-only networks map survives (nothing overrode it).
+    assert config.networks["vlan10"].gateway == "100.64.10.1"
+
+
+def test_load_host_config_user_layer_between_etc_and_cwd(tmp_path: Path) -> None:
+    """``~/.Lvlab.yml`` overrides ``/etc`` but is overridden by the CWD project.
+
+    Precedence (lowest first): /etc -> ~/.Lvlab.yml -> ./Lvlab.yml. Each key is
+    resolved to the highest layer that sets it.
+    """
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (system_dir / "Lvlab.yml").write_text(
+        "default_network: etc-net\ndefault_vm_username: etcuser\n"
+    )
+    # Per-user dotfile: overrides /etc, and adds a key /etc didn't set.
+    (home_dir / ".Lvlab.yml").write_text(
+        "default_network: user-net\nnetworks:\n  vlan10:\n    gateway: 10.0.0.1\n"
+    )
+    (cwd / "Lvlab.yml").write_text("default_network: cwd-net\n")
+
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+
+    # CWD wins the contested key ...
+    assert config.default_network == "cwd-net"
+    # ... while the user dotfile's networks entry (uncontested) survives.
+    assert config.networks["vlan10"].gateway == "10.0.0.1"
+
+
+def test_load_host_config_deep_merges_one_network_field(tmp_path: Path) -> None:
+    """A CWD layer can override a single nested network field, inheriting siblings."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (system_dir / "Lvlab.yml").write_text(
+        "networks:\n"
+        "  vlan10:\n"
+        "    gateway: 100.64.10.1\n"
+        "    dns: [100.64.10.10]\n"
+        "    search: [tkclabs.io]\n"
+    )
+    (cwd / "Lvlab.yml").write_text(
+        "networks:\n  vlan10:\n    dns: [10.0.0.53]\n"  # override only dns
+    )
+
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+    vlan10 = config.networks["vlan10"]
+
+    assert vlan10.dns == ["10.0.0.53"]  # CWD wins on dns
+    assert vlan10.gateway == "100.64.10.1"  # /etc gateway inherited
+    assert vlan10.search == ["tkclabs.io"]  # /etc search inherited
+
+
+def test_load_host_config_explicit_config_wins(tmp_path: Path) -> None:
+    """An explicit ``--config`` layers over both CWD and /etc (highest precedence)."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (system_dir / "Lvlab.yml").write_text("default_network: vlan10\n")
+    (cwd / "Lvlab.yml").write_text("default_network: vlan20\n")
+    explicit = tmp_path / "special.yml"
+    explicit.write_text("default_network: vlan99\n")
+
+    config = load_host_config(
+        str(explicit), system_dir=system_dir, home_dir=home_dir, cwd=cwd
+    )
+    assert config.default_network == "vlan99"
+
+
+def test_load_host_config_explicit_missing_raises(tmp_path: Path) -> None:
+    """An explicit ``--config`` that doesn't exist is an error, not a silent skip."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    with pytest.raises(ValueError, match="does not exist"):
+        load_host_config(
+            str(tmp_path / "nope.yml"),
+            system_dir=system_dir,
+            home_dir=home_dir,
+            cwd=cwd,
+        )
+
+
+def test_load_host_config_merges_images_by_key(tmp_path: Path) -> None:
+    """``images:`` maps merge by key across layers; the CWD entry wins on a clash."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (system_dir / "Lvlab.yml").write_text(
+        "images:\n"
+        "  hostimg:\n"
+        "    image_url: http://etc/hostimg.qcow2\n"
+        "  shared:\n"
+        "    image_url: http://etc/shared.qcow2\n"
+    )
+    (cwd / "Lvlab.yml").write_text(
+        "images:\n"
+        "  projimg:\n"
+        "    image_url: http://cwd/projimg.qcow2\n"
+        "  shared:\n"
+        "    image_url: http://cwd/shared.qcow2\n"
+    )
+
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+
+    assert config.images["hostimg"]["image_url"] == "http://etc/hostimg.qcow2"
+    assert config.images["projimg"]["image_url"] == "http://cwd/projimg.qcow2"
+    # CWD wins on the colliding key.
+    assert config.images["shared"]["image_url"] == "http://cwd/shared.qcow2"
+
+
+def test_load_host_config_rejects_non_mapping_file(tmp_path: Path) -> None:
+    """A config layer that isn't a YAML mapping is a clean ValueError."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (cwd / "Lvlab.yml").write_text("- just\n- a\n- list\n")
+    with pytest.raises(ValueError, match="must contain a YAML mapping"):
+        load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)

@@ -18,6 +18,8 @@ emitters in one module keeps them in sync.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -359,6 +361,302 @@ class ConfigManager:
             if machine.get("vm_name", None) == vm_name:
                 return machine
         return None
+
+
+# ---------------------------------------------------------------------------
+# Layered host config (#138)
+# ---------------------------------------------------------------------------
+#
+# ``createvm`` needs host-wide defaults — chiefly per-network gateway/DNS for
+# bridge networks (#136) — without retyping flags on every invocation. The
+# config is layered, lowest precedence first: ``/etc/Lvlab.yml`` (host-wide
+# base) → ``~/.Lvlab.yml`` (per-user) → ``./Lvlab.yml`` (project, CWD) → an
+# explicit ``--config`` path. Each higher layer deep-merges over the lower
+# ones, so a project manifest can override one nested field of a user/host
+# default while inheriting the rest.
+#
+# This path is deliberately separate from :func:`parse_config` /
+# :class:`ConfigManager`: a host-wide ``/etc/Lvlab.yml`` legitimately carries
+# only ``networks:`` / ``images:`` (no ``environment``/``machines``), which the
+# strict manifest validation would reject. Failures raise ``ValueError`` to
+# match ``createvm``'s error idiom (its command boundary maps ``ValueError`` ->
+# a clean ``_fail``), not the manifest path's ``ConfigError``.
+
+SYSTEM_CONFIG_DIR = Path("/etc")
+CONFIG_FILENAMES: tuple[str, ...] = ("Lvlab.yml", "Lvlab.yaml")
+# The per-user layer is a home-directory dotfile (``~/.Lvlab.yml``), so it has
+# its own dotted filenames rather than the bare ``Lvlab.yml`` used in ``/etc``
+# and the project directory.
+USER_CONFIG_FILENAMES: tuple[str, ...] = (".Lvlab.yml", ".Lvlab.yaml")
+
+
+@dataclass(frozen=True)
+class NetworkDefaults:
+    """Per-network DNS/gateway/search defaults from a ``networks:`` entry.
+
+    Populated from one entry of the ``networks:`` map (e.g. a ``vlan10``
+    bridge). All fields are optional; an unset field means "no host default,
+    fall back to the next precedence level" (a CLI flag, NAT self-derivation,
+    or the #136 "bridge needs gateway+dns" error).
+
+    Attributes:
+        gateway: Gateway IPv4 address for the network, or ``None``.
+        dns: DNS server addresses, or ``None`` when unset.
+        search: DNS search domains, or ``None`` when unset.
+    """
+
+    gateway: str | None = None
+    dns: list[str] | None = None
+    search: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class HostConfig:
+    """The layered ``Lvlab.yml`` view that ``createvm`` consumes.
+
+    Built by :func:`load_host_config` from the ``/etc`` -> CWD -> ``--config``
+    layer stack. Only the sections ``createvm`` needs are surfaced; the
+    manifest's ``environment``/``machines`` are not parsed here (that's the
+    :class:`ConfigManager` path).
+
+    Attributes:
+        images: The merged ``images:`` map (``{}`` when none of the layers
+            define one). Fed to
+            :func:`tkc_lvlab.utils.catalog.resolve_catalog`.
+        networks: The per-network defaults map, keyed by network name.
+        default_network: The configured ``default_network`` (used when neither
+            ``--network`` nor a ``NETWORK,IP`` ``--ip4`` names one), or ``None``.
+        sources: The config files that contributed, lowest precedence first.
+    """
+
+    images: dict[str, Any] = field(default_factory=dict)
+    networks: dict[str, NetworkDefaults] = field(default_factory=dict)
+    default_network: str | None = None
+    sources: list[Path] = field(default_factory=list)
+
+    def network_defaults(self, name: str) -> NetworkDefaults | None:
+        """Return the configured defaults for ``name``, or ``None`` if absent.
+
+        Args:
+            name: The libvirt network name to look up.
+
+        Returns:
+            The matching :class:`NetworkDefaults`, or ``None`` when no
+            ``networks:`` entry names that network.
+        """
+        return self.networks.get(name)
+
+
+def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``overlay`` onto ``base``, returning a new dict.
+
+    Where both layers hold a mapping at the same key, the mappings merge
+    recursively — so a higher-precedence layer can override a single nested
+    field (e.g. one network's ``dns``) while inheriting its siblings. For any
+    other value type the ``overlay`` value replaces the ``base`` value
+    wholesale. Neither input is mutated.
+
+    Args:
+        base: The lower-precedence mapping.
+        overlay: The higher-precedence mapping whose values win on a clash.
+
+    Returns:
+        A new merged dict.
+    """
+    merged: dict[str, Any] = dict(base)
+    for key, overlay_value in overlay.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(overlay_value, dict):
+            merged[key] = deep_merge(base_value, overlay_value)
+        else:
+            merged[key] = overlay_value
+    return merged
+
+
+def _first_config_in(
+    directory: Path, filenames: tuple[str, ...] = CONFIG_FILENAMES
+) -> Path | None:
+    """Return the first readable ``Lvlab.yml``/``Lvlab.yaml`` in ``directory``."""
+    for filename in filenames:
+        candidate = directory / filename
+        if candidate.is_file() and os.access(candidate, os.R_OK):
+            return candidate
+    return None
+
+
+def host_config_layers(
+    config_path: str | Path | None = None,
+    *,
+    system_dir: Path = SYSTEM_CONFIG_DIR,
+    home_dir: Path | None = None,
+    cwd: Path | None = None,
+) -> list[Path]:
+    """Return the config files contributing to the layered host config.
+
+    Lowest precedence first: ``<system_dir>/Lvlab.yml`` (host-wide base), then
+    ``<home_dir>/.Lvlab.yml`` (per-user dotfile), then ``<cwd>/Lvlab.yml``
+    (project), then an explicit ``config_path``. Files that don't exist are
+    skipped silently; an explicit ``config_path`` that doesn't exist is an
+    error (the operator asked for a specific file).
+
+    Args:
+        config_path: An explicit ``--config`` path, or ``None``.
+        system_dir: Directory holding the host-wide config (``/etc`` in
+            production; a test seam otherwise).
+        home_dir: Directory holding the per-user dotfile (defaults to the real
+            ``~``; a test seam otherwise).
+        cwd: Directory to treat as the project root (defaults to the real CWD).
+
+    Returns:
+        The existing layer files, ordered lowest precedence first (so a later
+        deep-merge of each over the running result yields the right winner).
+
+    Raises:
+        ValueError: ``config_path`` was given but the file does not exist.
+    """
+    home_dir = Path.home() if home_dir is None else home_dir
+    cwd = Path.cwd() if cwd is None else cwd
+    layers: list[Path] = []
+
+    system = _first_config_in(system_dir)
+    if system is not None:
+        layers.append(system)
+
+    user = _first_config_in(home_dir, USER_CONFIG_FILENAMES)
+    if user is not None:
+        layers.append(user)
+
+    project = _first_config_in(cwd)
+    if project is not None:
+        layers.append(project)
+
+    if config_path is not None:
+        explicit = Path(config_path)
+        if not explicit.is_file():
+            raise ValueError(f"Config file '{config_path}' does not exist.")
+        layers.append(explicit)
+
+    return layers
+
+
+def _load_config_mapping(path: Path) -> dict[str, Any]:
+    """Read one config file into a mapping (lenient: empty file -> ``{}``)."""
+    try:
+        content = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Found '{path}' but couldn't parse it: {exc}") from exc
+    if content is None:
+        return {}
+    if not isinstance(content, dict):
+        raise ValueError(f"Config file '{path}' must contain a YAML mapping.")
+    return content
+
+
+def _normalize_optional_str_list(raw: Any, key: str) -> list[str] | None:
+    """Coerce a scalar/list YAML value into ``list[str] | None``."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        return list(raw)
+    raise ValueError(f"'{key}' must be a string or a list of strings.")
+
+
+def parse_networks(raw: Any) -> dict[str, NetworkDefaults]:
+    """Parse the ``networks:`` section into a map of :class:`NetworkDefaults`.
+
+    Each value may set ``gateway`` (scalar), ``dns`` (scalar or list), and
+    ``search`` (scalar or list). An entry of ``null``/empty is a valid
+    no-defaults placeholder.
+
+    Args:
+        raw: The raw ``networks:`` value (``None`` when absent).
+
+    Returns:
+        ``{network_name: NetworkDefaults}`` (empty when ``raw`` is ``None``).
+
+    Raises:
+        ValueError: ``raw`` is not a mapping, an entry is not a mapping, or a
+            ``dns``/``search`` value is neither a string nor a list of strings.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "The 'networks' section must be a mapping of network name to its defaults."
+        )
+    networks: dict[str, NetworkDefaults] = {}
+    for name, entry in raw.items():
+        key = str(name)
+        if entry is None:
+            networks[key] = NetworkDefaults()
+            continue
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"Network '{key}' must be a mapping of gateway/dns/search values."
+            )
+        raw_gateway = entry.get("gateway")
+        gateway = None if raw_gateway in (None, "") else str(raw_gateway)
+        dns = _normalize_optional_str_list(entry.get("dns"), f"networks.{key}.dns")
+        search = _normalize_optional_str_list(
+            entry.get("search"), f"networks.{key}.search"
+        )
+        networks[key] = NetworkDefaults(gateway=gateway, dns=dns, search=search)
+    return networks
+
+
+def load_host_config(
+    config_path: str | Path | None = None,
+    *,
+    system_dir: Path = SYSTEM_CONFIG_DIR,
+    home_dir: Path | None = None,
+    cwd: Path | None = None,
+) -> HostConfig:
+    """Discover, layer, and parse the host + user + project config for ``createvm``.
+
+    Resolves ``/etc/Lvlab.yml`` (base) -> ``~/.Lvlab.yml`` (user) ->
+    ``./Lvlab.yml`` (CWD) -> an explicit ``--config`` path and deep-merges them
+    (higher precedence wins per key), then extracts the ``images:`` map, the
+    ``networks:`` per-network defaults, and ``default_network``.
+
+    Args:
+        config_path: An explicit ``--config`` path, or ``None`` to use only
+            the discovered ``/etc`` + ``~`` + CWD layers.
+        system_dir: Directory holding the host-wide config (test seam).
+        home_dir: Directory holding the per-user dotfile (test seam).
+        cwd: Directory to treat as the project root (test seam).
+
+    Returns:
+        A :class:`HostConfig`. When no layer exists, every section is empty.
+
+    Raises:
+        ValueError: An explicit ``config_path`` is missing, a layer is not
+            valid YAML / not a mapping, or the ``images:``/``networks:`` /
+            ``default_network`` sections are structurally invalid.
+    """
+    layers = host_config_layers(
+        config_path, system_dir=system_dir, home_dir=home_dir, cwd=cwd
+    )
+
+    merged: dict[str, Any] = {}
+    for path in layers:
+        merged = deep_merge(merged, _load_config_mapping(path))
+
+    images = merged.get("images") or {}
+    if not isinstance(images, dict):
+        raise ValueError("The 'images' section must be a mapping.")
+
+    default_network = merged.get("default_network")
+    if default_network is not None and not isinstance(default_network, str):
+        raise ValueError("The 'default_network' value must be a string.")
+
+    return HostConfig(
+        images=images,
+        networks=parse_networks(merged.get("networks")),
+        default_network=default_network,
+        sources=layers,
+    )
 
 
 def parse_file_from_url(url: str) -> str:

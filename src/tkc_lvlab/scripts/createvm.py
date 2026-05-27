@@ -42,11 +42,10 @@ from pathlib import Path
 from typing import Any
 
 import typer
-import yaml
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 from .. import __version__
-from ..config import parse_config
+from ..config import HostConfig, NetworkDefaults, load_host_config
 from ..exceptions import ImageError
 from ..utils.catalog import (
     BUILTIN_IMAGES,
@@ -125,33 +124,12 @@ _ONEOFF_STORAGE_ROOT = Path("/var/lib/libvirt/images/lvlab/oneoff")
 # (``from tkc_lvlab.scripts.createvm import BUILTIN_IMAGES``).
 
 
-def load_manifest_images(config_path: Path | None = None) -> dict[str, Any] | None:
-    """Return the ``images:`` map from an ``Lvlab.yml``, if present.
-
-    Args:
-        config_path: An explicit manifest path (``--config``), or ``None``
-            to look for ``Lvlab.yml`` in the current directory.
-
-    Returns:
-        The ``images:`` dict when a manifest is found and parses, or
-        ``None`` when no manifest exists (cwd lookup only).
-
-    Raises:
-        ValueError: A manifest exists but couldn't be parsed, or an
-            explicit ``--config`` path was given but not found.
-    """
-    fpath = str(config_path) if config_path is not None else None
-    try:
-        parsed = parse_config(fpath)
-    except (KeyError, IndexError, TypeError, AttributeError, yaml.YAMLError) as exc:
-        where = f"'{config_path}'" if config_path is not None else "Lvlab.yml"
-        raise ValueError(f"Found {where} but couldn't parse it: {exc}") from exc
-    if parsed is None:
-        if config_path is not None:
-            raise ValueError(f"Config file '{config_path}' does not exist.")
-        return None
-    _environment, images, _config_defaults, _machines = parsed
-    return images
+# Config resolution (images + per-network defaults) is shared with ``lvlab``
+# via ``config.load_host_config``: it layers ``/etc/Lvlab.yml`` (host-wide) <
+# ``~/.Lvlab.yml`` (per-user) < ``./Lvlab.yml`` (CWD) < an explicit ``--config``
+# path and returns a :class:`tkc_lvlab.config.HostConfig`. ``createvm`` reads
+# its merged ``images`` (-> :func:`resolve_catalog`), ``networks`` per-bridge
+# defaults, and ``default_network`` (#138).
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +473,8 @@ def _build_createvm_context(
     default_dns: list[str] | None = None,
     default_gateway: str | None = None,
     default_search: list[str] | None = None,
+    networks: dict[str, NetworkDefaults] | None = None,
+    config_default_network: str | None = None,
 ) -> _CreateVmContext:
     """Resolve image, network, addressing, and credentials.
 
@@ -502,6 +482,17 @@ def _build_createvm_context(
     ``--dns`` / ``--gateway`` / ``--search-domain`` flags and are forwarded to
     :func:`resolve_network_settings`: required for a static address on a bridge
     network (a bridge has no libvirt-managed DNS/gateway), ignored for NAT.
+
+    ``networks`` and ``config_default_network`` come from the layered host
+    config (#138). They set the **lower-precedence** fallbacks that a flag
+    overrides:
+
+    - **Network name:** ``--ip4 NETWORK,IP`` -> ``--network`` ->
+        ``config_default_network`` -> the built-in ``"default"``.
+    - **gateway / dns / search:** the matching flag -> the resolved network's
+        ``networks[<name>]`` entry -> :func:`resolve_network_settings` (NAT
+        self-derivation, else the bridge "needs gateway+dns" error). So a
+        configured bridge needs no flags; an unconfigured one still errors.
 
     Every failure mode raises a typed exception the command body maps to a
     clean ``_fail``: :class:`DependencyError`, :class:`ValueError` (unknown
@@ -513,27 +504,51 @@ def _build_createvm_context(
     entry = resolve_image_entry(vm_distro, catalog)
 
     resolved_network, raw_ip = _resolve_network_and_ip(
-        ip4=ip4, network_name=network_name, default_network=DEFAULT_NETWORK
+        ip4=ip4,
+        network_name=network_name,
+        default_network=config_default_network or DEFAULT_NETWORK,
     )
+
+    # Fold the resolved network's host-config defaults under the CLI flags:
+    # an explicit flag wins, otherwise the networks[<name>] entry supplies the
+    # value (and a missing entry leaves it None for resolve_network_settings).
+    net_defaults = (networks or {}).get(resolved_network)
+    eff_gateway = (
+        default_gateway
+        if default_gateway is not None
+        else (net_defaults.gateway if net_defaults else None)
+    )
+    eff_dns = (
+        default_dns
+        if default_dns is not None
+        else (net_defaults.dns if net_defaults else None)
+    )
+    eff_search = (
+        default_search
+        if default_search is not None
+        else (net_defaults.search if net_defaults else None)
+    )
+
     network_info = get_network_info(_SYSTEM_URI, resolved_network)
-    # A static address on a bridge needs DNS + gateway the operator supplies;
-    # fail with the flag names before the generic resolve_network_settings
-    # error (which is phrased for the manifest path's default_dns/gateway).
+    # A static address on a bridge needs DNS + gateway from a flag or a
+    # networks[<name>] entry; fail with the flag names before the generic
+    # resolve_network_settings error (which is phrased for default_dns/gateway).
     if (
         raw_ip is not None
         and network_info.forward_mode.lower() == "bridge"
-        and not (default_gateway and default_dns)
+        and not (eff_gateway and eff_dns)
     ):
         raise ValueError(
             f"Network '{resolved_network}' is a bridge; a static --ip4 needs "
-            "--gateway <ip> and --dns <ip[,ip]>. (Or use '--ip4 "
-            f"{resolved_network}' for DHCP on it, or a NAT network.)"
+            "--gateway <ip> and --dns <ip[,ip]> (or a 'networks:' entry for it "
+            f"in Lvlab.yml). Or use '--ip4 {resolved_network}' for DHCP on it, "
+            "or a NAT network."
         )
     dns_servers, gateway, search_domains = resolve_network_settings(
         network_info,
-        default_dns=default_dns,
-        default_gateway=default_gateway,
-        default_search=default_search,
+        default_dns=eff_dns,
+        default_gateway=eff_gateway,
+        default_search=eff_search,
     )
     vm_ip = _resolve_static_vm_ip(
         raw_ip=raw_ip, netmask=netmask, network_info=network_info
@@ -1162,7 +1177,8 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         _fail("Missing required arguments: VM_NAME and VM_DISTRO.")
 
     try:
-        catalog = resolve_catalog(load_manifest_images(config_path))
+        host_config: HostConfig = load_host_config(config_path)
+        catalog = resolve_catalog(host_config.images or None)
     except ValueError as exc:
         _fail(str(exc))
 
@@ -1206,6 +1222,8 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
             default_dns=dns_servers,
             default_gateway=gateway,
             default_search=search_domains,
+            networks=host_config.networks,
+            config_default_network=host_config.default_network,
         )
     except (
         LibvirtNetworkError,

@@ -34,6 +34,7 @@ from unittest import mock
 import pytest
 from typer.testing import CliRunner
 
+from tkc_lvlab.config import HostConfig, NetworkDefaults
 from tkc_lvlab.scripts import createvm as cv_mod
 from tkc_lvlab.scripts.createvm import (
     BUILTIN_IMAGES,
@@ -319,8 +320,11 @@ def all_external_mocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict
     # Bypass osinfo-db lookup (would add a virt-install subprocess call).
     monkeypatch.setattr(cv_mod, "resolve_os_variant", lambda v: (v, None))
 
-    # Built-ins-only by default so these tests don't depend on a cwd Lvlab.yml.
-    monkeypatch.setattr(cv_mod, "load_manifest_images", lambda config_path=None: None)
+    # Built-ins-only by default so these tests don't depend on a cwd Lvlab.yml
+    # or a host-wide /etc/Lvlab.yml (empty HostConfig => no images/networks).
+    monkeypatch.setattr(
+        cv_mod, "load_host_config", lambda config_path=None: HostConfig()
+    )
     # Keep the completion report deterministic regardless of cwd.
     monkeypatch.setattr(cv_mod, "_manifest_path_used", lambda config_path: None)
 
@@ -650,6 +654,111 @@ def test_bare_network_name_boots_dhcp_on_that_network(
     assert all_external_mocked["get_network_info"].call_args.args[-1] == "vlan10"
 
 
+# ---------------------------------------------------------------------------
+# Host-config (networks / default_network) precedence (#138)
+# ---------------------------------------------------------------------------
+
+
+def test_networks_config_supplies_bridge_gateway_dns(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``networks:`` entry supplies a bridge's gateway/DNS/search, so a
+    static ``--ip4 vlan10,IP`` needs no ``--gateway``/``--dns`` flags (#138)."""
+    all_external_mocked["get_network_info"].return_value = _bridge_network_info()
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(
+            networks={
+                "vlan10": NetworkDefaults(
+                    gateway="100.64.10.1",
+                    dns=["100.64.10.10", "100.64.10.11"],
+                    search=["tkclabs.io"],
+                )
+            }
+        ),
+    )
+    result = _invoke(
+        ["testvm.local", "debian12", "--ip4", "vlan10,100.64.10.50"], tmp_path
+    )
+    assert result.exit_code == 0, result.output
+    kwargs = all_external_mocked["resolve_network_settings"].call_args.kwargs
+    assert kwargs["default_gateway"] == "100.64.10.1"
+    assert kwargs["default_dns"] == ["100.64.10.10", "100.64.10.11"]
+    assert kwargs["default_search"] == ["tkclabs.io"]
+
+
+def test_cli_flags_override_networks_config(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI ``--gateway``/``--dns``/``--search-domain`` win over a ``networks:``
+    entry for the same network (#138)."""
+    all_external_mocked["get_network_info"].return_value = _bridge_network_info()
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(
+            networks={
+                "vlan10": NetworkDefaults(
+                    gateway="100.64.10.1",
+                    dns=["100.64.10.10"],
+                    search=["tkclabs.io"],
+                )
+            }
+        ),
+    )
+    result = _invoke(
+        [
+            "testvm.local",
+            "debian12",
+            "--ip4",
+            "vlan10,100.64.10.50",
+            "--gateway",
+            "10.0.0.1",
+            "--dns",
+            "9.9.9.9",
+            "--search-domain",
+            "override.example",
+        ],
+        tmp_path,
+    )
+    assert result.exit_code == 0, result.output
+    kwargs = all_external_mocked["resolve_network_settings"].call_args.kwargs
+    assert kwargs["default_gateway"] == "10.0.0.1"
+    assert kwargs["default_dns"] == ["9.9.9.9"]
+    assert kwargs["default_search"] == ["override.example"]
+
+
+def test_default_network_from_config_used_when_no_flag(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``default_network`` from config is used when neither ``--network`` nor a
+    ``NETWORK,IP`` ``--ip4`` names one (#138)."""
+    all_external_mocked["get_network_info"].return_value = _bridge_network_info()
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(default_network="vlan10"),
+    )
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code == 0, result.output
+    assert all_external_mocked["get_network_info"].call_args.args[-1] == "vlan10"
+
+
+def test_network_flag_overrides_config_default_network(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit ``--network`` beats the config ``default_network`` (#138)."""
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(default_network="vlan10"),
+    )
+    result = _invoke(["testvm.local", "debian12", "--network", "vlan20"], tmp_path)
+    assert result.exit_code == 0, result.output
+    assert all_external_mocked["get_network_info"].call_args.args[-1] == "vlan20"
+
+
 def test_virt_install_failure_cleans_up_vm_dir(
     all_external_mocked: dict, tmp_path: Path
 ) -> None:
@@ -703,10 +812,12 @@ def test_uses_manifest_image_when_present(
     """A cwd Lvlab.yml contributes a manifest-only distro that resolves."""
     monkeypatch.setattr(
         cv_mod,
-        "load_manifest_images",
-        lambda config_path=None: {
-            "myapp": {"image_url": "http://h/myapp.qcow2", "network_version": 2}
-        },
+        "load_host_config",
+        lambda config_path=None: HostConfig(
+            images={
+                "myapp": {"image_url": "http://h/myapp.qcow2", "network_version": 2}
+            }
+        ),
     )
     captured: dict = {}
 

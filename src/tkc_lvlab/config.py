@@ -426,12 +426,15 @@ class HostConfig:
         networks: The per-network defaults map, keyed by network name.
         default_network: The configured ``default_network`` (used when neither
             ``--network`` nor a ``NETWORK,IP`` ``--ip4`` names one), or ``None``.
+        default_vm_username: The host-wide first-boot account name (used when an
+            image entry doesn't pin an explicit ``username:``), or ``None``.
         sources: The config files that contributed, lowest precedence first.
     """
 
     images: dict[str, Any] = field(default_factory=dict)
     networks: dict[str, NetworkDefaults] = field(default_factory=dict)
     default_network: str | None = None
+    default_vm_username: str | None = None
     sources: list[Path] = field(default_factory=list)
 
     def network_defaults(self, name: str) -> NetworkDefaults | None:
@@ -651,10 +654,19 @@ def load_host_config(
     if default_network is not None and not isinstance(default_network, str):
         raise ValueError("The 'default_network' value must be a string.")
 
+    default_vm_username = merged.get("default_vm_username")
+    if default_vm_username is not None:
+        if not isinstance(default_vm_username, str) or not default_vm_username.strip():
+            raise ValueError(
+                "The 'default_vm_username' value must be a non-empty string."
+            )
+        default_vm_username = default_vm_username.strip()
+
     return HostConfig(
         images=images,
         networks=parse_networks(merged.get("networks")),
         default_network=default_network,
+        default_vm_username=default_vm_username,
         sources=layers,
     )
 

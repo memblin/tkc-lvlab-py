@@ -759,6 +759,47 @@ def test_network_flag_overrides_config_default_network(
     assert all_external_mocked["get_network_info"].call_args.args[-1] == "vlan20"
 
 
+# ---------------------------------------------------------------------------
+# Host-config default_vm_username precedence (#138 Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def test_default_vm_username_overrides_derived(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host-config ``default_vm_username`` overrides the key-derived family
+    name (debian12 would derive ``debian``) and reaches cloud-init (#138)."""
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(default_vm_username="labadmin"),
+    )
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code == 0, result.output
+    user_data = (tmp_path / "testvm.local" / "user-data").read_text()
+    assert "name: labadmin" in user_data
+    assert "name: debian" not in user_data
+
+
+def test_explicit_image_username_beats_default_vm_username(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit per-image ``username:`` wins over ``default_vm_username`` (#138)."""
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(
+            images={"myapp": {"image_url": "http://h/x.qcow2", "username": "appuser"}},
+            default_vm_username="labadmin",
+        ),
+    )
+    result = _invoke(["testvm.local", "myapp"], tmp_path)
+    assert result.exit_code == 0, result.output
+    user_data = (tmp_path / "testvm.local" / "user-data").read_text()
+    assert "name: appuser" in user_data
+    assert "labadmin" not in user_data
+
+
 def test_virt_install_failure_cleans_up_vm_dir(
     all_external_mocked: dict, tmp_path: Path
 ) -> None:

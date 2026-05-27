@@ -481,3 +481,27 @@ def test_load_host_config_rejects_non_mapping_file(tmp_path: Path) -> None:
     (cwd / "Lvlab.yml").write_text("- just\n- a\n- list\n")
     with pytest.raises(ValueError, match="must contain a YAML mapping"):
         load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+
+
+def test_load_host_config_default_vm_username_layers(tmp_path: Path) -> None:
+    """``default_vm_username`` parses and a higher layer overrides a lower one."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (system_dir / "Lvlab.yml").write_text("default_vm_username: etcadmin\n")
+    (home_dir / ".Lvlab.yml").write_text("default_vm_username: meadmin\n")
+
+    # With only /etc + user, the user dotfile wins.
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+    assert config.default_vm_username == "meadmin"
+
+    # A project file wins over both.
+    (cwd / "Lvlab.yml").write_text("default_vm_username: projadmin\n")
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+    assert config.default_vm_username == "projadmin"
+
+
+def test_load_host_config_rejects_empty_default_vm_username(tmp_path: Path) -> None:
+    """A blank/non-string ``default_vm_username`` is a clean ValueError."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (cwd / "Lvlab.yml").write_text('default_vm_username: "   "\n')
+    with pytest.raises(ValueError, match="default_vm_username"):
+        load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)

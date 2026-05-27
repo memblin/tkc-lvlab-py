@@ -44,7 +44,7 @@ _USERNAME_BY_FAMILY: dict[str, str] = {
 
 
 @dataclass(frozen=True)
-class ImageEntry:
+class ImageEntry:  # pylint: disable=too-many-instance-attributes
     """A fully-resolved cloud image ready for either deploy path.
 
     Built by :func:`build_image_entry` from an image-description dict
@@ -65,6 +65,12 @@ class ImageEntry:
         os_variant: ``virt-install --os-variant`` argument, run through
             :func:`tkc_lvlab.utils.osinfo.resolve_os_variant` at deploy.
         default_username: First-boot account name cloud-init creates.
+        username_explicit: ``True`` when ``default_username`` came from an
+            explicit ``username:`` in the image dict (a deliberate per-image
+            pin), ``False`` when it was derived from the key. Lets a caller
+            tell a pinned username apart from a guessed one — e.g. so a
+            host-wide ``default_vm_username`` can override the guess but yield
+            to a pin (#138).
     """
 
     image_url: str
@@ -74,6 +80,7 @@ class ImageEntry:
     network_version: int
     os_variant: str
     default_username: str
+    username_explicit: bool = False
 
 
 def _family_token(key: str) -> str:
@@ -155,6 +162,7 @@ def build_image_entry(key: str, cfg: dict[str, Any]) -> ImageEntry:
         network_version=cfg.get("network_version", 2),
         os_variant=derive_os_variant(key, cfg.get("os_variant")),
         default_username=derive_username(key, cfg.get("username")),
+        username_explicit=bool(cfg.get("username")),
     )
 
 

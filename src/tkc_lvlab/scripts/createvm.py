@@ -387,7 +387,7 @@ def _initialize_cloud_images(catalog: dict[str, dict[str, Any]]) -> None:
 
 
 @dataclass
-class _CreateVmContext:
+class _CreateVmContext:  # pylint: disable=too-many-instance-attributes
     """Everything resolved before any VM state is written to disk."""
 
     cloud_image: CloudImage
@@ -401,6 +401,10 @@ class _CreateVmContext:
     memory_mib: str
     password_plain: str
     password_hash: str
+    # Resolved first-boot account: an explicit per-image ``username:`` wins,
+    # else a host-config ``default_vm_username``, else the key-derived family
+    # name (#138). Carried here so the cloud-init render + the SSH hint agree.
+    username: str = ""
     # Deterministic NIC MAC pinned up front so the same address feeds both
     # ``virt-install --network ...,mac=`` and the cloud-init network-config's
     # ``match: macaddress`` (the only renderer-agnostic NIC selector).
@@ -475,6 +479,7 @@ def _build_createvm_context(
     default_search: list[str] | None = None,
     networks: dict[str, NetworkDefaults] | None = None,
     config_default_network: str | None = None,
+    default_vm_username: str | None = None,
 ) -> _CreateVmContext:
     """Resolve image, network, addressing, and credentials.
 
@@ -494,6 +499,11 @@ def _build_createvm_context(
         self-derivation, else the bridge "needs gateway+dns" error). So a
         configured bridge needs no flags; an unconfigured one still errors.
 
+    ``default_vm_username`` (also from the layered config) sets the first-boot
+    account when the image entry doesn't pin one: an explicit per-image
+    ``username:`` wins, then ``default_vm_username``, then the key-derived
+    family name (#138).
+
     Every failure mode raises a typed exception the command body maps to a
     clean ``_fail``: :class:`DependencyError`, :class:`ValueError` (unknown
     distro / bad IP / bad memory / bridge static IP missing --gateway/--dns),
@@ -502,6 +512,15 @@ def _build_createvm_context(
     """
     check_createvm_tooling()
     entry = resolve_image_entry(vm_distro, catalog)
+
+    # First-boot account: an explicit per-image ``username:`` is a deliberate
+    # pin and wins; otherwise a host-config ``default_vm_username`` overrides
+    # the key-derived family guess (#138).
+    username = (
+        entry.default_username
+        if entry.username_explicit
+        else (default_vm_username or entry.default_username)
+    )
 
     resolved_network, raw_ip = _resolve_network_and_ip(
         ip4=ip4,
@@ -578,6 +597,7 @@ def _build_createvm_context(
         memory_mib=memory_mib,
         password_plain=password_plain,
         password_hash=password_hash,
+        username=username,
         mac=generate_mac(),
         authorized_keys=authorized_keys,
     )
@@ -624,7 +644,7 @@ def _render_cloud_init(*, vm_dir: Path, vm_name: str, ctx: _CreateVmContext) -> 
         libvirt_vm_name=vm_name,
         hostname=vm_name.split(".")[0],
         fqdn=vm_name,
-        username=ctx.entry.default_username,
+        username=ctx.username,
         ssh_public_keys=ctx.authorized_keys,
         password_hash=ctx.password_hash,
     )
@@ -1006,7 +1026,7 @@ def _print_completion_details(
 ) -> None:
     """Print the password, config note, and an SSH hint (lease-aware for NAT)."""
     vm_hostname = vm_name.split(".")[0]
-    username = ctx.entry.default_username
+    username = ctx.username
 
     if manifest_path is not None:
         secho(f"Using config: {manifest_path}", fg=typer.colors.BLUE)
@@ -1224,6 +1244,7 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
             default_search=search_domains,
             networks=host_config.networks,
             config_default_network=host_config.default_network,
+            default_vm_username=host_config.default_vm_username,
         )
     except (
         LibvirtNetworkError,

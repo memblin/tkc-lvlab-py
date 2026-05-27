@@ -102,6 +102,7 @@ project override in the directory you run from.
 # /etc/Lvlab.yml — host-wide defaults for every createvm run on this host
 # (the same schema works in ~/.Lvlab.yml and a project ./Lvlab.yml)
 default_network: vlan10            # used when --network / --ip4 NETWORK is omitted
+default_vm_username: labadmin      # first-boot account when an image doesn't pin one
 networks:
   vlan10:
     gateway: 100.64.10.1
@@ -127,6 +128,10 @@ Resolution precedence per value:
     `networks:` entry → NAT self-derivation → otherwise the "bridge needs
     gateway+dns" error. So a configured bridge just works; an unconfigured one
     still fails clearly.
+- **First-boot username** — an explicit per-image `username:` (in an `images:`
+    entry) → config `default_vm_username` → the key-derived family name (e.g.
+    `debian`, `fedora`). So `default_vm_username` gives every VM one login
+    account unless a specific image pins its own.
 
 (`images:` layers the same way — host-wide image keys merge with a project
 manifest's, the higher layer winning on a name clash.)

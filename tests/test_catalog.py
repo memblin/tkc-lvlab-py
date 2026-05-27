@@ -59,6 +59,7 @@ def test_build_image_entry_derives_when_no_overrides() -> None:
     assert isinstance(entry, ImageEntry)
     assert entry.os_variant == "fedora44"
     assert entry.default_username == "fedora"
+    assert entry.username_explicit is False  # derived, not pinned
     assert entry.network_version == 2  # defaulted
     assert entry.checksum_url_gpg is None  # absent -> None
 
@@ -77,4 +78,5 @@ def test_build_image_entry_honours_overrides() -> None:
     )
     assert entry.os_variant == "ubuntu22.04"
     assert entry.default_username == "ubuntu"
+    assert entry.username_explicit is True  # came from the explicit username:
     assert entry.network_version == 1

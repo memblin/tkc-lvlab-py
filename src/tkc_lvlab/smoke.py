@@ -51,7 +51,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, TextIO
 
 import yaml
 from rich.console import Console
@@ -67,7 +67,7 @@ from .utils.images import CloudImage
 from .utils.libvirt import Machine
 from .utils.network import LibvirtNetworkInfo, get_network_info
 from .utils.output import get_console, is_tty, styled_table
-from .utils.virsh import VirshError, run_virsh
+from .utils.virsh import VirshError, run_virsh, virsh_list_all_names
 
 logger = get_logger(__name__)
 
@@ -301,6 +301,31 @@ def build_cases(
             )
         )
     return cases
+
+
+def preexisting_case_domains(
+    cases: Sequence[SmokeCase], existing_names: Sequence[str]
+) -> list[SmokeCase]:
+    """Return the cases whose libvirt domain already exists (issue #139).
+
+    A smoke case whose ``libvirt_domain`` is already defined is a leftover from
+    a prior run that didn't finish teardown (Ctrl-C, crash, batch died
+    mid-flight). Booting it with ``lvlab up`` would *start the stale domain*
+    rather than re-provision it, so it must be reaped before the run starts.
+
+    Args:
+        cases: The resolved cases for this run.
+        existing_names: Domain names currently defined in libvirt (the output
+            of ``virsh list --all --name``).
+
+    Returns:
+        The subset of ``cases`` whose ``libvirt_domain`` is in
+        ``existing_names``, in the order given. Unrelated domains (a real
+        developer VM, the ``default`` network, etc.) are never included — only
+        names this manifest's cases own.
+    """
+    existing = set(existing_names)
+    return [case for case in cases if case.libvirt_domain in existing]
 
 
 # ---------------------------------------------------------------------------
@@ -1112,6 +1137,39 @@ def _parse_domifaddr_lease(output: str) -> str | None:
     return None
 
 
+def static_failure_detail(
+    static_ip: str | None, leased_ip: str | None, base_detail: str
+) -> str:
+    """Enrich a static case's SSH failure with the guest's actual address (#139).
+
+    A static case is verified by SSHing the address the manifest configured. If
+    that fails *and* libvirt shows the guest holding a **different** lease, the
+    guest came up on DHCP instead of its static config — the exact symptom in
+    issue #139. Turn the bare connect error into a self-diagnosing message
+    rather than leaving the operator with ``No route to host``.
+
+    Pure: the lease is looked up by the lifecycle caller and passed in.
+
+    Args:
+        static_ip: The configured static address the probe targeted.
+        leased_ip: The address libvirt reports the guest actually holds, or
+            ``None`` when no lease was found (a correctly-static guest has
+            none — its address never enters the DHCP lease database).
+        base_detail: The original SSH-probe failure detail.
+
+    Returns:
+        A diagnosis naming both addresses when ``leased_ip`` differs from
+        ``static_ip``; otherwise ``base_detail`` unchanged (no lease, or the
+        guest is on its static address and the failure is something else).
+    """
+    if leased_ip and leased_ip != static_ip:
+        return (
+            f"static {static_ip} unreachable; guest came up on {leased_ip} "
+            "(DHCP fallback?) — static network-config did not take"
+        )
+    return base_detail
+
+
 def _resolve_dhcp_ip(
     case: SmokeCase, uri: str
 ) -> str | None:  # pragma: no cover - VM lifecycle
@@ -1282,6 +1340,31 @@ def render_smoke_table(states: list["_CaseProgress"], *, pool_size: int):
     return table
 
 
+def cases_to_reap(
+    cases: Sequence[SmokeCase], states: Sequence["_CaseProgress"]
+) -> list[SmokeCase]:
+    """Return the cases an interrupted run left running (issue #139).
+
+    A case only reaches a terminal phase (``PASS``/``FAIL``) *after* its
+    :func:`_teardown` ran, so any case not in a terminal phase still has a live
+    VM if the run is interrupted mid-flight (Ctrl-C, exception). Those are the
+    ones a crash-safe ``finally`` must force-destroy; a normally-completed run
+    leaves every case terminal and this returns ``[]``.
+
+    Pure: reads the in-memory phase snapshot, touches no ``virsh``.
+
+    Args:
+        cases: The run's cases.
+        states: A :meth:`SmokeProgress.snapshot` of per-case phase.
+
+    Returns:
+        The subset of ``cases`` whose live phase is not terminal, in the order
+        given.
+    """
+    finished = {s.vm_name for s in states if s.phase in SmokePhase.TERMINAL}
+    return [case for case in cases if case.vm_name not in finished]
+
+
 def _await_shutoff(
     domstate: Callable[[], str],
     *,
@@ -1352,6 +1435,106 @@ def _teardown(
     )
 
 
+def _force_destroy_cases(
+    cases: Sequence[SmokeCase], *, lvlab: str
+) -> None:  # pragma: no cover - VM lifecycle
+    """Best-effort ``lvlab destroy <vm> --force`` for each case (issue #139).
+
+    Shared by the pre-run leftover guard and the crash-safe reaper. Errors are
+    swallowed and storage is removed via the same ``lvlab destroy`` path the
+    normal teardown uses — this is cleanup, not a verified operation.
+    """
+    for case in cases:
+        subprocess.run(
+            [lvlab, "destroy", case.vm_name, "--force"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+
+def _reap_leftover_domains(
+    cases: Sequence[SmokeCase], *, uri: str, lvlab: str, diag: TextIO
+) -> None:  # pragma: no cover - VM lifecycle
+    """Reap any case domain a prior unfinished run left defined (issue #139).
+
+    A run that didn't finish teardown (Ctrl-C, crash, batch died mid-flight)
+    can leave a same-named domain defined-but-off. ``lvlab up`` would then
+    *start that stale domain* — old disk, old ``cidata.iso`` — instead of
+    re-provisioning, so a leftover static-IP case can boot on its old DHCP
+    lease and fail verify on the configured address. Smoke owns these names,
+    so auto-cleaning them before the run is safe.
+
+    Args:
+        cases: The resolved cases for this run.
+        uri: The libvirt connection URI to enumerate domains against.
+        lvlab: The resolved ``lvlab`` executable used to destroy.
+        diag: The diagnostic stream to announce any reaping on.
+    """
+    try:
+        existing_names = virsh_list_all_names(uri)
+    except VirshError:
+        existing_names = []
+    leftover = preexisting_case_domains(cases, existing_names)
+    if leftover:
+        print(
+            f"Reaping {len(leftover)} leftover smoke domain(s) from a prior run: "
+            + ", ".join(c.libvirt_domain for c in leftover),
+            file=diag,
+        )
+        _force_destroy_cases(leftover, lvlab=lvlab)
+
+
+def _reap_stragglers(
+    cases: Sequence[SmokeCase],
+    states: Sequence["_CaseProgress"],
+    *,
+    lvlab: str,
+) -> None:  # pragma: no cover - VM lifecycle
+    """Force-destroy cases an interrupted run left running (issue #139).
+
+    The crash-safe ``finally`` companion to :func:`_reap_leftover_domains`: an
+    interrupted run (Ctrl-C, exception) would otherwise leave its in-flight VMs
+    defined for the next run to inherit. A normally-completed run already tore
+    every VM down, so :func:`cases_to_reap` returns nothing and this is a no-op.
+
+    Args:
+        cases: The run's cases.
+        states: A :meth:`SmokeProgress.snapshot` of per-case phase.
+        lvlab: The resolved ``lvlab`` executable used to destroy.
+    """
+    stragglers = cases_to_reap(cases, states)
+    if stragglers:
+        print(
+            f"Interrupted; reaping {len(stragglers)} in-flight smoke VM(s): "
+            + ", ".join(c.vm_name for c in stragglers),
+            file=sys.stderr,
+        )
+        _force_destroy_cases(stragglers, lvlab=lvlab)
+
+
+def _lease_ip_now(
+    case: SmokeCase, uri: str
+) -> str | None:  # pragma: no cover - VM lifecycle
+    """Read the running domain's current DHCP lease once (no polling).
+
+    Used only on the static-case failure path to tell whether the guest fell
+    back to DHCP (issue #139); the long :func:`_resolve_dhcp_ip` poll already
+    ran for DHCP cases, so a single read suffices here.
+    """
+    try:
+        result = run_virsh(
+            uri,
+            ["domifaddr", case.libvirt_domain, "--source", "lease"],
+            check=False,
+        )
+    except VirshError:
+        return None
+    if result is not None and result.returncode == 0:
+        return _parse_domifaddr_lease(result.stdout)
+    return None
+
+
 def _run_case(
     case: SmokeCase,
     *,
@@ -1411,6 +1594,13 @@ def _run_case(
         if ok:
             result.boot_to_ssh_seconds = round(time.monotonic() - start, 1)
             result.result = "pass"
+        elif case.mode == "static":
+            # Static probe failed: if libvirt shows the guest holding a
+            # *different* lease, it came up on DHCP instead of its static
+            # config — surface that rather than the bare connect error (#139).
+            result.detail = static_failure_detail(
+                case.static_ip, _lease_ip_now(case, uri), detail
+            )
 
     phase(SmokePhase.TEARDOWN)
     _teardown(case, lvlab=lvlab, uri=uri)
@@ -1646,6 +1836,12 @@ def run_smoke(
             raise SmokeError("Aborted: memory-heavy run declined.")
 
     lvlab = _lvlab_bin()
+
+    # Idempotency guard (issue #139): reap any case domain a prior unfinished
+    # run left defined, before `lvlab up` can *start* the stale domain instead
+    # of re-provisioning it. See _reap_leftover_domains for the full rationale.
+    _reap_leftover_domains(cases, uri=uri, lvlab=lvlab, diag=diag)
+
     key_path = _ssh_private_key(config_defaults)
     progress = SmokeProgress(cases)
     # Live phase table only for the human-facing TEXT format on a terminal
@@ -1659,14 +1855,19 @@ def run_smoke(
             f"batch(es); {fmt.value} results print on completion…",
             file=sys.stderr,
         )
-    results = _run_batches(
-        plan,
-        progress,
-        lvlab=lvlab,
-        uri=uri,
-        key_path=key_path,
-        live=live,
-    )
+    try:
+        results = _run_batches(
+            plan,
+            progress,
+            lvlab=lvlab,
+            uri=uri,
+            key_path=key_path,
+            live=live,
+        )
+    finally:
+        # Crash-safe teardown (issue #139): reap any in-flight VM an interrupted
+        # run never tore down. A normal completion leaves nothing to do here.
+        _reap_stragglers(cases, progress.snapshot(), lvlab=lvlab)
 
     order = {c.vm_name: i for i, c in enumerate(cases)}
     results.sort(key=lambda r: order.get(r.vm_name, 0))

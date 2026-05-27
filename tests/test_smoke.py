@@ -749,6 +749,94 @@ def test_render_smoke_table_tally_and_cells() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Leftover-VM idempotency, crash-safe teardown, static-verify hardening (#139)
+# ---------------------------------------------------------------------------
+
+
+def test_preexisting_case_domains_flags_leftover_domains() -> None:
+    """Cases whose libvirt domain is already defined (a prior run left it) are
+    returned; cases not present and unrelated domains are ignored."""
+    cases = [
+        _case("deb11-static", mode="static", static_ip="192.168.122.194"),
+        _case("deb12-dhcp", mode="dhcp"),
+    ]
+    existing = ["deb11-static_smoke", "someones-real-vm", "default"]
+
+    leftover = smoke.preexisting_case_domains(cases, existing)
+
+    assert [c.vm_name for c in leftover] == ["deb11-static"]
+
+
+def test_preexisting_case_domains_empty_when_clean() -> None:
+    """No case domain present in libvirt -> nothing to reap."""
+    cases = [_case("deb12-dhcp", mode="dhcp")]
+    assert smoke.preexisting_case_domains(cases, ["unrelated", "default"]) == []
+
+
+def test_cases_to_reap_returns_only_unfinished_cases() -> None:
+    """An interrupted run: cases not in a terminal phase still have a live VM
+    (they never reached ``_teardown``) and must be reaped; finished ones not."""
+    from tkc_lvlab.smoke import SmokePhase, SmokeProgress
+
+    cases = [
+        _case("done-pass"),
+        _case("done-fail"),
+        _case("mid-teardown"),
+        _case("still-pending"),
+    ]
+    progress = SmokeProgress(cases)
+    progress.set_phase("done-pass", SmokePhase.PASS)
+    progress.set_phase("done-fail", SmokePhase.FAIL)
+    progress.set_phase("mid-teardown", SmokePhase.TEARDOWN)
+    # "still-pending" keeps its initial PENDING phase.
+
+    reap = smoke.cases_to_reap(cases, progress.snapshot())
+
+    assert {c.vm_name for c in reap} == {"mid-teardown", "still-pending"}
+
+
+def test_cases_to_reap_empty_when_all_finished() -> None:
+    """A run that completed normally already tore every VM down -> nothing to reap."""
+    from tkc_lvlab.smoke import SmokePhase, SmokeProgress
+
+    cases = [_case("a"), _case("b")]
+    progress = SmokeProgress(cases)
+    progress.set_phase("a", SmokePhase.PASS)
+    progress.set_phase("b", SmokePhase.FAIL)
+
+    assert smoke.cases_to_reap(cases, progress.snapshot()) == []
+
+
+def test_static_failure_detail_flags_dhcp_fallback() -> None:
+    """A static case that's unreachable while the guest holds a *different*
+    lease gets a self-diagnosing message instead of the bare connect error."""
+    detail = smoke.static_failure_detail(
+        "192.168.122.194",
+        "192.168.122.244",
+        "no SSH after ~150s; last: No route to host",
+    )
+    assert "192.168.122.194" in detail
+    assert "192.168.122.244" in detail
+    # Names the actual cause, not just the connect failure.
+    assert "static" in detail.lower()
+
+
+def test_static_failure_detail_keeps_base_when_no_lease() -> None:
+    """No lease found (a correctly-static guest has none) -> detail unchanged."""
+    base = "no SSH after ~150s; last: Connection timed out"
+    assert smoke.static_failure_detail("192.168.122.194", None, base) == base
+
+
+def test_static_failure_detail_keeps_base_when_lease_matches_static() -> None:
+    """Guest is on its configured static address -> the failure is something
+    else; don't fabricate a DHCP-fallback diagnosis."""
+    base = "no SSH after ~150s; last: Permission denied (publickey)"
+    assert (
+        smoke.static_failure_detail("192.168.122.194", "192.168.122.194", base) == base
+    )
+
+
+# ---------------------------------------------------------------------------
 # _lvlab_bin — executable resolution order (#135)
 # ---------------------------------------------------------------------------
 

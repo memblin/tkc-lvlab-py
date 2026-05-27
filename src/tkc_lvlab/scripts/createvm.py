@@ -46,7 +46,7 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 from .. import __version__
 from ..config import HostConfig, NetworkDefaults, load_host_config
-from ..exceptions import ImageError
+from ..exceptions import CloudInitError, ImageError
 from ..utils.catalog import (
     BUILTIN_IMAGES,
     ImageEntry as CatalogEntry,
@@ -83,7 +83,11 @@ from ..utils.ssh_keys import (
     discover_default_public_keys,
     load_public_key,
 )
-from ..utils.standalone_cloud_init import OneoffCloudInit
+from ..utils.standalone_cloud_init import (
+    OneoffCloudInit,
+    render_user_data_override,
+    user_data_supplies_keys,
+)
 from ..utils.subprocess_env import system_first_env
 from ..utils.virsh import VirshError, run_virsh, vm_exists
 
@@ -411,6 +415,10 @@ class _CreateVmContext:  # pylint: disable=too-many-instance-attributes
     authorized_keys: list[str] = field(default_factory=list)
     # Host-wide first-boot commands from the layered config (#138).
     runcmd: list[str] = field(default_factory=list)
+    # Fully-rendered ``user-data`` from a layered ``user_data:`` override
+    # (#138 §4). When set, it is written verbatim and the structured one-off
+    # template is skipped. ``None`` means "use the structured template".
+    user_data_override: str | None = None
 
 
 def _resolve_network_and_ip(
@@ -469,6 +477,7 @@ def _resolve_authorized_keys(public_key: Path | None) -> list[str]:
 def _build_createvm_context(
     *,
     catalog: dict[str, dict[str, Any]],
+    vm_name: str,
     vm_distro: str,
     ip4: str | None,
     network_name: str | None,
@@ -482,6 +491,7 @@ def _build_createvm_context(
     config_default_network: str | None = None,
     default_vm_username: str | None = None,
     runcmd: list[str] | None = None,
+    user_data: dict[str, Any] | None = None,
 ) -> _CreateVmContext:
     """Resolve image, network, addressing, and credentials.
 
@@ -506,6 +516,14 @@ def _build_createvm_context(
     ``username:`` wins, then ``default_vm_username``, then the key-derived
     family name (#138). ``runcmd`` is the layered config's host-wide
     first-boot command list, rendered into the guest's cloud-init user-data.
+
+    ``user_data`` is a layered-config ``user-data`` override (#138 §4). When
+    present it is rendered here (placeholders filled, discovered keys appended,
+    ``runcmd`` prepended) into :attr:`_CreateVmContext.user_data_override`,
+    replacing the structured one-off template; failing fast (before any state
+    is written) on a bad placeholder or shape. An override that hard-codes an
+    ``ssh_authorized_keys`` entry also satisfies the "no way to log in" guard,
+    so a host with no discoverable ``~/.ssh`` key need not pass ``--public-key``.
 
     Every failure mode raises a typed exception the command body maps to a
     clean ``_fail``: :class:`DependencyError`, :class:`ValueError` (unknown
@@ -580,10 +598,31 @@ def _build_createvm_context(
     password_plain = generate_password_phrase()
     password_hash = hash_password_sha512(password_plain)
     authorized_keys = _resolve_authorized_keys(public_key)
-    if not authorized_keys:
+    if not authorized_keys and not (
+        user_data is not None and user_data_supplies_keys(user_data)
+    ):
         raise PublicKeyError(
-            "No SSH public keys discovered and none supplied via --public-key. "
-            "Refusing to create a VM with no way to log in."
+            "No SSH public keys discovered and none supplied via --public-key "
+            "(and no 'user_data' override hard-codes one). Refusing to create "
+            "a VM with no way to log in."
+        )
+
+    # A layered ``user_data:`` override owns the whole ``user-data`` document.
+    # Render it now (fail fast, before any disk/image state) with the structured
+    # path's resolved values exposed as placeholders; the host-wide top-level
+    # ``runcmd`` is prepended ahead of the override's own ``runcmd``.
+    user_data_override: str | None = None
+    if user_data is not None:
+        user_data_override = render_user_data_override(
+            user_data,
+            context={
+                "vm_name": vm_name,
+                "vm_hostname": vm_name.split(".")[0],
+                "default_vm_username": username,
+                "password_hash": password_hash,
+            },
+            authorized_keys=authorized_keys,
+            runcmd_prefix=runcmd or [],
         )
 
     cloud_image = _build_cloud_image(vm_distro, entry, _CLOUD_IMAGE_BASEDIR)
@@ -604,6 +643,7 @@ def _build_createvm_context(
         mac=generate_mac(),
         authorized_keys=authorized_keys,
         runcmd=list(runcmd or []),
+        user_data_override=user_data_override,
     )
 
 
@@ -668,8 +708,16 @@ def _render_cloud_init(*, vm_dir: Path, vm_name: str, ctx: _CreateVmContext) -> 
     network_config_path = vm_dir / "network-config"
     cidata_path = vm_dir / "cidata.iso"
 
+    # A layered ``user_data:`` override (already rendered in the context) owns
+    # the user-data document; otherwise the structured one-off template renders it.
+    user_data = (
+        ctx.user_data_override
+        if ctx.user_data_override is not None
+        else oneoff.render_user_data()
+    )
+
     network_config_path.write_text(network_config.render_config(), encoding="utf-8")
-    user_data_path.write_text(oneoff.render_user_data(), encoding="utf-8")
+    user_data_path.write_text(user_data, encoding="utf-8")
     meta_data_path.write_text(oneoff.render_meta_data(), encoding="utf-8")
 
     iso = CloudInitIso(
@@ -1238,6 +1286,7 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     try:
         ctx = _build_createvm_context(
             catalog=catalog,
+            vm_name=vm_name,
             vm_distro=vm_distro,
             ip4=ip4,
             network_name=network_name,
@@ -1251,6 +1300,7 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
             config_default_network=host_config.default_network,
             default_vm_username=host_config.default_vm_username,
             runcmd=host_config.runcmd,
+            user_data=host_config.user_data,
         )
     except (
         LibvirtNetworkError,

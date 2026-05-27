@@ -139,10 +139,67 @@ Resolution precedence per value:
     sets `runcmd` wins **wholesale** (lists replace, they don't concatenate), so
     putting the same commands in both `/etc` and `~/.Lvlab.yml` won't run them
     twice. To add project-specific commands, restate the host ones you still
-    want in the project layer.
+    want in the project layer. (When a `user_data:` override is also set, this
+    top-level `runcmd` runs *first*, ahead of the override's own — see below.)
 
 (`images:` layers the same way — host-wide image keys merge with a project
 manifest's, the higher layer winning on a name clash.)
+
+### Full user-data override (`user_data:`)
+
+`default_vm_username` + `runcmd` cover the common cases by shaping the built-in
+single-user template. When you need control over the **whole** cloud-config
+`user-data` document — multiple users, group membership, `write_files`, package
+installs — declare a `user_data:` mapping. When present it **replaces** the
+built-in template entirely; you own the document.
+
+```yaml
+# /etc/Lvlab.yml
+default_vm_username: tkcadmin
+user_data:
+  manage_etc_hosts: false
+  hostname: '{vm_hostname}'        # short name
+  fqdn: '{vm_name}'                # full name passed as VM_NAME
+  users:
+    - name: '{default_vm_username}'
+      lock_passwd: false
+      passwd: '{password_hash}'    # createvm's generated hash (plaintext printed on success)
+      sudo: ALL=(ALL) NOPASSWD:ALL
+      shell: /bin/bash
+      ssh_authorized_keys:
+        - ssh-ed25519 AAAA... you@laptop
+  runcmd:
+    - curl -fsSL https://vault.example.test/v1/pki/ca/pem -o /usr/local/share/ca-certificates/lab.crt
+    - update-ca-certificates
+```
+
+Placeholders (anything else is a hard error — a typo fails the run before a VM
+is created, rather than booting with a blank value):
+
+| Placeholder             | Filled with                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| `{vm_name}`             | the `VM_NAME` you passed (used as `fqdn`)                                            |
+| `{vm_hostname}`         | the short hostname (`VM_NAME` up to the first `.`)                                   |
+| `{default_vm_username}` | the resolved first-boot account (image `username:` → `default_vm_username` → family) |
+| `{password_hash}`       | the generated password hash (the plaintext is still printed)                         |
+
+Behavior to know:
+
+- **SSH keys still get appended.** Your discovered `~/.ssh` keys (and any
+    `--public-key`) are added to every user's `ssh_authorized_keys`, deduped —
+    so a hard-coded key and your workstation key both land. An override that
+    declares at least one key also **satisfies the login guard**, so a build
+    host with no discoverable `~/.ssh` key needn't pass `--public-key`.
+- **`runcmd` composes.** A top-level `runcmd:` (above) runs first, then the
+    override's own `runcmd` — host-wide CA installs land before project bits.
+- **Layering is the same as everything else.** `user_data` deep-merges across
+    `/etc` → `~` → `./` → `--config`: a higher layer overrides a nested scalar
+    (e.g. swap `hostname`) while inheriting siblings, but **lists replace
+    wholesale** — a higher layer's `users:` or `user_data.runcmd` replaces the
+    lower one, it doesn't concatenate.
+
+> The key is `user_data` (cloud-init's term). If you're migrating from
+> lvscripts, rename its `users_data:` block to `user_data:`.
 
 ### SSH keys
 
@@ -153,7 +210,9 @@ each key (Ed25519, RSA, NIST ECDSA, and hardware-backed `sk-` variants
 are all accepted), de-duplicates, and writes them to the VM's
 `user-data` as `ssh_authorized_keys`. If none are discovered and no
 `--public-key` was provided, `createvm` refuses to create the VM —
-that's the no-way-to-log-in guard.
+that's the no-way-to-log-in guard. (A [`user_data:`](#full-user-data-override-user_data)
+override that declares its own key also satisfies this guard, and your
+discovered keys are appended to it.)
 
 ### Password
 

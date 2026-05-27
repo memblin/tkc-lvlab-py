@@ -24,12 +24,28 @@ Nothing here reads ``Lvlab.yml`` or talks to libvirt.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
+import yaml
 from jinja2 import Environment, PackageLoader, select_autoescape
+
+from ..exceptions import CloudInitError
 
 _DEFAULT_SUDO = "ALL=(ALL) NOPASSWD:ALL"
 _DEFAULT_SHELL = "/bin/bash"
+
+# Placeholders a ``user_data:`` override may reference. ``createvm`` fills
+# these from the resolved create context; an override naming anything else is
+# a hard error (see ``render_user_data_override``) rather than a silent blank.
+USER_DATA_PLACEHOLDERS: tuple[str, ...] = (
+    "vm_name",
+    "vm_hostname",
+    "default_vm_username",
+    "password_hash",
+)
 
 
 @dataclass
@@ -100,3 +116,141 @@ class OneoffCloudInit:
         )
         template = env.get_template("meta-data.oneoff.j2")
         return template.render(config=self)
+
+
+def render_user_data_override(
+    user_data: Mapping[str, Any],
+    *,
+    context: Mapping[str, Any],
+    authorized_keys: Sequence[str] = (),
+    runcmd_prefix: Sequence[str] = (),
+) -> str:
+    """Render a layered-config ``user_data:`` block into ``user-data``.
+
+    Modeled on the lvscripts user-data override (which named the key
+    ``users_data``; tkc-lvlab uses the cloud-init-aligned ``user_data``): the
+    override is a full cloud-config mapping that the operator owns. Every string
+    value is ``{placeholder}``-substituted from ``context`` (see
+    :data:`USER_DATA_PLACEHOLDERS`); discovered SSH keys are then appended to
+    each user's ``ssh_authorized_keys`` (so an operator's ``~/.ssh`` keys land
+    alongside any keys the override hard-codes); and ``runcmd_prefix`` (the
+    host-wide top-level ``runcmd:``) is prepended ahead of the override's own
+    ``runcmd`` so host-wide bootstrap (CA installs, etc.) runs first.
+
+    Args:
+        user_data: The raw ``user_data:`` mapping from the layered config.
+        context: Placeholder values; keys should be a subset of
+            :data:`USER_DATA_PLACEHOLDERS`.
+        authorized_keys: Discovered/``--public-key`` SSH keys to append to each
+            user's ``ssh_authorized_keys`` (deduped against keys already there).
+        runcmd_prefix: Commands to run before the override's own ``runcmd``.
+
+    Returns:
+        A ``#cloud-config`` YAML string ready to write as ``user-data``.
+
+    Raises:
+        CloudInitError: ``user_data`` is not a mapping, references an unknown
+            placeholder, or carries a non-list ``runcmd``/``ssh_authorized_keys``.
+    """
+    if not isinstance(user_data, Mapping):
+        raise CloudInitError("'user_data' must be a YAML mapping.")
+
+    rendered = _render_value(dict(user_data), dict(context))
+    if not isinstance(rendered, dict):  # pragma: no cover - mapping in => dict out
+        raise CloudInitError("'user_data' must render to a YAML mapping.")
+
+    _append_authorized_keys(rendered, list(authorized_keys))
+
+    if runcmd_prefix:
+        existing = rendered.get("runcmd") or []
+        if not isinstance(existing, list):
+            raise CloudInitError("'user_data.runcmd' must be a list of commands.")
+        rendered["runcmd"] = list(runcmd_prefix) + existing
+
+    text = yaml.safe_dump(rendered, sort_keys=False, width=float("inf"))
+    if not text.endswith("\n"):
+        text += "\n"
+    return "#cloud-config\n" + text
+
+
+def user_data_supplies_keys(user_data: Mapping[str, Any]) -> bool:
+    """Return ``True`` if ``user_data`` already declares any SSH key.
+
+    Lets ``createvm`` relax its "no way to log in" refusal: an override that
+    hard-codes ``ssh_authorized_keys`` is a valid login path even when no key
+    is discovered from ``~/.ssh`` and none is passed via ``--public-key``.
+
+    Args:
+        user_data: The raw ``user_data:`` mapping.
+
+    Returns:
+        ``True`` when at least one ``users[*].ssh_authorized_keys`` is non-empty.
+    """
+    users = user_data.get("users")
+    if not isinstance(users, list):
+        return False
+    return any(
+        isinstance(user, Mapping) and user.get("ssh_authorized_keys") for user in users
+    )
+
+
+def _append_authorized_keys(
+    document: dict[str, Any], authorized_keys: list[str]
+) -> None:
+    """Append ``authorized_keys`` to every user's ``ssh_authorized_keys`` (deduped)."""
+    if not authorized_keys:
+        return
+    users = document.get("users")
+    if not isinstance(users, list):
+        return
+    for user in users:
+        if not isinstance(user, dict):
+            continue
+        key_list = user.setdefault("ssh_authorized_keys", [])
+        if not isinstance(key_list, list):
+            raise CloudInitError(
+                "'user_data' ssh_authorized_keys must be a list when set."
+            )
+        for key in authorized_keys:
+            if key not in key_list:
+                key_list.append(key)
+
+
+def _render_value(value: Any, context: dict[str, Any]) -> Any:
+    """Recursively ``{placeholder}``-substitute every string in ``value``."""
+    if isinstance(value, dict):
+        return {
+            _render_value(key, context): _render_value(item, context)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_render_value(item, context) for item in value]
+    if isinstance(value, str):
+        return _render_string(value, context)
+    return value
+
+
+def _render_string(template: str, context: dict[str, Any]) -> Any:
+    """Substitute placeholders in one string.
+
+    A whole-string ``{key}`` returns the raw context value (preserving its
+    type); embedded placeholders use ``format_map``. An unknown placeholder is
+    a :class:`CloudInitError`, never a silent blank.
+    """
+    whole = re.fullmatch(r"\{([a-zA-Z_]\w*)\}", template)
+    if whole and whole.group(1) in context:
+        return context[whole.group(1)]
+    try:
+        return template.format_map(_StrictFormatDict(context))
+    except KeyError as exc:
+        raise CloudInitError(
+            f"Unknown 'user_data' placeholder '{exc.args[0]}'. "
+            f"Known placeholders: {', '.join(USER_DATA_PLACEHOLDERS)}."
+        ) from exc
+
+
+class _StrictFormatDict(dict):
+    """``format_map`` backing dict that raises ``KeyError`` on a missing key."""
+
+    def __missing__(self, key: str) -> Any:
+        raise KeyError(key)

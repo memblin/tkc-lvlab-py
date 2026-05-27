@@ -32,6 +32,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from tkc_lvlab.config import HostConfig, NetworkDefaults
@@ -831,6 +832,125 @@ def test_no_runcmd_emits_no_runcmd_block(
     assert result.exit_code == 0, result.output
     user_data = (tmp_path / "testvm.local" / "user-data").read_text()
     assert "runcmd:" not in user_data
+
+
+# ---------------------------------------------------------------------------
+# user_data override (#138 §4)
+# ---------------------------------------------------------------------------
+
+_OVERRIDE_YAML = """
+manage_etc_hosts: false
+hostname: '{vm_hostname}'
+fqdn: '{vm_name}'
+users:
+  - name: '{default_vm_username}'
+    lock_passwd: false
+    passwd: '{password_hash}'
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAhardcoded crow@laptop01
+    sudo: ALL=(ALL) NOPASSWD:ALL
+"""
+
+
+def _host_config_with_override(monkeypatch, **kwargs) -> None:
+    """Patch load_host_config to return a HostConfig carrying a user_data override."""
+    user_data = yaml.safe_load(_OVERRIDE_YAML)
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(user_data=user_data, **kwargs),
+    )
+
+
+def test_user_data_override_renders_into_user_data(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``user_data:`` override owns the document: placeholders are filled from
+    the resolved context (short hostname, full fqdn, resolved username, password
+    hash) and the discovered ~/.ssh key is appended to the hard-coded one."""
+    _host_config_with_override(monkeypatch, default_vm_username="tkcadmin")
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code == 0, result.output
+    parsed = yaml.safe_load((tmp_path / "testvm.local" / "user-data").read_text())
+
+    assert parsed["hostname"] == "testvm"  # {vm_hostname} -> short name
+    assert parsed["fqdn"] == "testvm.local"  # {vm_name} -> full name
+    assert parsed["manage_etc_hosts"] is False
+    user = parsed["users"][0]
+    assert user["name"] == "tkcadmin"  # {default_vm_username}
+    assert user["passwd"] == "$6$rounds=4096$abc$xyz"  # {password_hash}
+    # Hard-coded key plus the fixture's discovered key, deduped.
+    assert "ssh-ed25519 AAAAhardcoded crow@laptop01" in user["ssh_authorized_keys"]
+    assert any("tester@laptop" in k for k in user["ssh_authorized_keys"])
+
+
+def test_user_data_override_relaxes_ssh_refusal(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No discovered key and no --public-key, but the override hard-codes one →
+    creation proceeds (the override is a valid login path)."""
+    all_external_mocked["discover_default_public_keys"].return_value = []
+    _host_config_with_override(monkeypatch)
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code == 0, result.output
+    parsed = yaml.safe_load((tmp_path / "testvm.local" / "user-data").read_text())
+    assert parsed["users"][0]["ssh_authorized_keys"] == [
+        "ssh-ed25519 AAAAhardcoded crow@laptop01"
+    ]
+
+
+def test_user_data_override_without_keys_still_refuses(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An override with NO ssh_authorized_keys and no discovered key still hits
+    the no-way-to-log-in guard (the relaxation is key-conditional)."""
+    all_external_mocked["discover_default_public_keys"].return_value = []
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(user_data={"hostname": "{vm_hostname}"}),
+    )
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code != 0
+    assert "No SSH public keys" in result.output
+
+
+def test_user_data_override_composes_top_level_runcmd_first(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When both a top-level ``runcmd`` and the override's own ``runcmd`` are set,
+    the host-wide top-level commands run first (locked compose order)."""
+    user_data = {"runcmd": ["update-ca-certificates"]}
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(
+            runcmd=["curl -fsSL https://ca/r.crt -o /x"], user_data=user_data
+        ),
+    )
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code == 0, result.output
+    parsed = yaml.safe_load((tmp_path / "testvm.local" / "user-data").read_text())
+    assert parsed["runcmd"] == [
+        "curl -fsSL https://ca/r.crt -o /x",
+        "update-ca-certificates",
+    ]
+
+
+def test_user_data_unknown_placeholder_fails_fast(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo'd placeholder aborts before any VM directory is created (fail-fast
+    in context-build, mapped to a clean error)."""
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(user_data={"hostname": "{vm_hsotname}"}),
+    )
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code != 0
+    assert "Unknown 'user_data' placeholder 'vm_hsotname'" in result.output
+    assert not (tmp_path / "testvm.local").exists()  # no state written
 
 
 def test_virt_install_failure_cleans_up_vm_dir(

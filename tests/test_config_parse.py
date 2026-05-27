@@ -538,3 +538,53 @@ def test_load_host_config_rejects_bad_runcmd(tmp_path: Path) -> None:
     (cwd / "Lvlab.yml").write_text("runcmd: echo not-a-list\n")
     with pytest.raises(ValueError, match="'runcmd' value must be a list"):
         load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+
+
+def test_load_host_config_parses_user_data_mapping(tmp_path: Path) -> None:
+    """``user_data:`` parses into ``HostConfig.user_data`` as a raw mapping
+    (placeholders are left for render time, not substituted at load)."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (system_dir / "Lvlab.yml").write_text(
+        "user_data:\n"
+        "  hostname: '{vm_hostname}'\n"
+        "  users:\n"
+        "    - name: '{default_vm_username}'\n"
+    )
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+    assert config.user_data == {
+        "hostname": "{vm_hostname}",
+        "users": [{"name": "{default_vm_username}"}],
+    }
+
+
+def test_load_host_config_rejects_non_mapping_user_data(tmp_path: Path) -> None:
+    """A scalar/list ``user_data`` is a clean ValueError, not a silent skip."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (cwd / "Lvlab.yml").write_text("user_data: just-a-string\n")
+    with pytest.raises(ValueError, match="'user_data' value must be a mapping"):
+        load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+
+
+def test_load_host_config_user_data_deep_merges_scalars_replaces_lists(
+    tmp_path: Path,
+) -> None:
+    """Per the locked merge rule: a higher layer overrides a nested scalar in
+    ``user_data`` (dict merge) while a list (``users``) replaces wholesale."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (system_dir / "Lvlab.yml").write_text(
+        "user_data:\n"
+        "  manage_etc_hosts: false\n"
+        "  hostname: '{vm_hostname}'\n"
+        "  users:\n"
+        "    - name: etcuser\n"
+    )
+    (cwd / "Lvlab.yml").write_text(
+        "user_data:\n"
+        "  hostname: overridden\n"  # scalar override, manage_etc_hosts inherited
+        "  users:\n"
+        "    - name: cwduser\n"  # list replaces wholesale
+    )
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+    assert config.user_data["manage_etc_hosts"] is False  # /etc inherited
+    assert config.user_data["hostname"] == "overridden"  # CWD scalar wins
+    assert config.user_data["users"] == [{"name": "cwduser"}]  # list replaced

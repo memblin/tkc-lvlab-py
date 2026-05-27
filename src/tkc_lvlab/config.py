@@ -432,6 +432,12 @@ class HostConfig:
             The highest-precedence layer that sets ``runcmd`` wins wholesale
             (deep-merge replaces lists), so identical commands in ``/etc`` and
             ``~`` don't run twice. Empty when no layer sets it.
+        user_data: A full cloud-config ``user-data`` override (the ``user_data:``
+            key). When set, ``createvm`` renders it — with ``{placeholder}``
+            substitution, discovered SSH keys appended, and :attr:`runcmd`
+            prepended ahead of its own ``runcmd`` — instead of the structured
+            one-off template. ``None`` when no layer sets it. See
+            :func:`tkc_lvlab.utils.standalone_cloud_init.render_user_data_override`.
         sources: The config files that contributed, lowest precedence first.
     """
 
@@ -440,6 +446,7 @@ class HostConfig:
     default_network: str | None = None
     default_vm_username: str | None = None
     runcmd: list[str] = field(default_factory=list)
+    user_data: dict[str, Any] | None = None
     sources: list[Path] = field(default_factory=list)
 
     def network_defaults(self, name: str) -> NetworkDefaults | None:
@@ -649,7 +656,8 @@ def load_host_config(
     ``./Lvlab.yml`` (CWD) -> an explicit ``--config`` path and deep-merges them
     (higher precedence wins per key), then extracts the ``images:`` map, the
     ``networks:`` per-network defaults, ``default_network``,
-    ``default_vm_username``, and ``runcmd``.
+    ``default_vm_username``, ``runcmd``, and the ``user_data`` cloud-config
+    override.
 
     Args:
         config_path: An explicit ``--config`` path, or ``None`` to use only
@@ -690,12 +698,19 @@ def load_host_config(
             )
         default_vm_username = default_vm_username.strip()
 
+    # A full cloud-config ``user-data`` override. Substitution happens at render
+    # time in createvm — here we only validate it's a mapping.
+    user_data = merged.get("user_data")
+    if user_data is not None and not isinstance(user_data, dict):
+        raise ValueError("The 'user_data' value must be a mapping (cloud-config).")
+
     return HostConfig(
         images=images,
         networks=parse_networks(merged.get("networks")),
         default_network=default_network,
         default_vm_username=default_vm_username,
         runcmd=parse_runcmd(merged.get("runcmd")),
+        user_data=user_data,
         sources=layers,
     )
 

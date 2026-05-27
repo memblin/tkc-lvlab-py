@@ -173,3 +173,14 @@ class PublicKeyError(LvlabError, ValueError):
     discovery walk's ``except PublicKeyError`` both depend on that base.
     Removing it would silently widen what those handlers let through.
     """
+
+
+class CloudInitError(LvlabError, ValueError):
+    """Raised when a cloud-init ``user-data`` override cannot be rendered.
+
+    Covers a ``user_data:`` override that isn't a YAML mapping, references an
+    unknown ``{placeholder}``, or carries a malformed ``ssh_authorized_keys``
+    list. Subclasses :class:`ValueError` so ``createvm``'s context-build
+    ``except ValueError`` maps it to a clean ``_fail`` like every other
+    config-shaped error, failing fast before any VM state is created.
+    """

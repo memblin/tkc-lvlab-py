@@ -33,6 +33,10 @@ test-safety:
 lint:
     uv run pre-commit run --all-files
 
+# Static analysis with pylint (reads .pylintrc; line-length 150).
+pylint:
+    uv run pylint src/tkc_lvlab
+
 # Build the docs site with strict warnings (CI-equivalent).
 docs:
     uv run zensical build -s

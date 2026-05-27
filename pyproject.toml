@@ -53,6 +53,11 @@ dev = [
     "pytest-cov>=5",
     "mkdocstrings[python]>=1.0.4",
     "zensical>=0.0.43",
+    # Linters/formatters also wired into pre-commit; pinned here so
+    # `uv run black` / `uv run pylint` match the hook behavior locally
+    # (black version tracks .pre-commit-config.yaml; pylint reads .pylintrc).
+    "black==24.4.2",
+    "pylint>=3",
 ]
 
 [tool.pytest.ini_options]

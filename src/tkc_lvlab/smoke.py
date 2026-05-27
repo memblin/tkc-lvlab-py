@@ -1003,15 +1003,67 @@ def _git_sha() -> str:
 # ===========================================================================
 
 
-def _lvlab_bin() -> str:  # pragma: no cover - VM lifecycle
+def _lvlab_bin(
+    *,
+    env: dict[str, str] | None = None,
+    argv0: str | None = None,
+    executable: str | None = None,
+    which: Callable[[str], str | None] | None = None,
+    is_exec: Callable[[str], bool] | None = None,
+) -> str:
     """Resolve the ``lvlab`` executable to drive lifecycle subcommands.
 
-    Prefers ``$LVLAB``, then ``lvlab`` on PATH, then a bare ``lvlab``.
+    Resolution order (issue #135):
+
+    1. ``$LVLAB`` — explicit operator override.
+    2. A ``lvlab`` console script **sibling to the running interpreter**
+        (the directory of ``sys.argv[0]``, then of ``sys.executable``). The
+        smoke process is itself an ``lvlab`` install, so this resolves a venv
+        invoked by absolute path without activation
+        (``/path/.venv/bin/lvlab smoke``) — the sharp edge from #123.
+    3. ``lvlab`` on ``$PATH``.
+    4. A bare ``"lvlab"`` (last resort; the subprocess raises if it's absent).
+
+    The keyword-only arguments are test seams; production callers pass none and
+    the function reads ``os.environ`` / ``sys.argv`` / ``sys.executable`` /
+    ``shutil.which`` / the filesystem.
+
+    Args:
+        env: Environment mapping (defaults to ``os.environ``).
+        argv0: The invoking script path (defaults to ``sys.argv[0]``).
+        executable: The interpreter path (defaults to ``sys.executable``).
+        which: ``PATH`` lookup callable (defaults to :func:`shutil.which`).
+        is_exec: Predicate for "is an executable file" (defaults to
+            ``os.path.isfile`` + ``os.X_OK``).
+
+    Returns:
+        The resolved ``lvlab`` command — an absolute path when one is found,
+        otherwise the bare name ``"lvlab"``.
     """
-    explicit = os.environ.get("LVLAB")
+    environ = os.environ if env is None else env
+    explicit = environ.get("LVLAB")
     if explicit:
         return explicit
-    return shutil.which("lvlab") or "lvlab"
+
+    argv0 = sys.argv[0] if argv0 is None else argv0
+    executable = sys.executable if executable is None else executable
+    if is_exec is None:
+
+        def is_exec(path: str) -> bool:
+            return os.path.isfile(path) and os.access(path, os.X_OK)
+
+    candidate_dirs: list[str] = []
+    if argv0:
+        candidate_dirs.append(os.path.dirname(os.path.realpath(argv0)))
+    if executable:
+        candidate_dirs.append(os.path.dirname(executable))
+    for base in candidate_dirs:
+        candidate = os.path.join(base, "lvlab")
+        if is_exec(candidate):
+            return candidate
+
+    which = shutil.which if which is None else which
+    return which("lvlab") or "lvlab"
 
 
 def _ssh_private_key(config_defaults: dict[str, Any]) -> str | None:

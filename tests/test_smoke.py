@@ -746,3 +746,68 @@ def test_render_smoke_table_tally_and_cells() -> None:
     for name in ("a", "b", "c"):
         assert name in rendered
     assert "10.0.0.1" in rendered  # static ip shown
+
+
+# ---------------------------------------------------------------------------
+# _lvlab_bin — executable resolution order (#135)
+# ---------------------------------------------------------------------------
+
+
+def test_lvlab_bin_env_override_wins() -> None:
+    """``$LVLAB`` beats everything — sibling probe and PATH aren't consulted."""
+    resolved = smoke._lvlab_bin(
+        env={"LVLAB": "/custom/lvlab"},
+        argv0="/venv/bin/lvlab",
+        executable="/venv/bin/python",
+        which=lambda _name: "/usr/bin/lvlab",
+        is_exec=lambda _p: True,
+    )
+    assert resolved == "/custom/lvlab"
+
+
+def test_lvlab_bin_prefers_sibling_to_interpreter() -> None:
+    """A sibling ``lvlab`` next to argv0 wins over PATH — the venv-by-abspath fix."""
+    resolved = smoke._lvlab_bin(
+        env={},
+        argv0="/venv/bin/lvlab",
+        executable="/venv/bin/python",
+        which=lambda _name: "/usr/bin/lvlab",  # on PATH, but must NOT be chosen
+        is_exec=lambda p: p == "/venv/bin/lvlab",
+    )
+    assert resolved == "/venv/bin/lvlab"
+
+
+def test_lvlab_bin_uses_executable_dir_when_argv0_has_no_sibling() -> None:
+    """When argv0's dir has no ``lvlab``, fall back to the interpreter's dir."""
+    resolved = smoke._lvlab_bin(
+        env={},
+        argv0="/usr/bin/some-wrapper",  # no lvlab here
+        executable="/venv/bin/python",
+        which=lambda _name: None,
+        is_exec=lambda p: p == "/venv/bin/lvlab",
+    )
+    assert resolved == "/venv/bin/lvlab"
+
+
+def test_lvlab_bin_falls_back_to_path() -> None:
+    """With no sibling executable, resolve via ``$PATH``."""
+    resolved = smoke._lvlab_bin(
+        env={},
+        argv0="/usr/bin/some-wrapper",
+        executable="/usr/bin/python",
+        which=lambda _name: "/usr/local/bin/lvlab",
+        is_exec=lambda _p: False,  # nothing executable beside the interpreter
+    )
+    assert resolved == "/usr/local/bin/lvlab"
+
+
+def test_lvlab_bin_bare_name_last_resort() -> None:
+    """Nothing found anywhere → the bare ``"lvlab"`` (subprocess raises later)."""
+    resolved = smoke._lvlab_bin(
+        env={},
+        argv0="/usr/bin/some-wrapper",
+        executable="/usr/bin/python",
+        which=lambda _name: None,
+        is_exec=lambda _p: False,
+    )
+    assert resolved == "lvlab"

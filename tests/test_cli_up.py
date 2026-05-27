@@ -12,14 +12,27 @@ from __future__ import annotations
 
 from unittest import mock
 
+import pytest
 from typer.testing import CliRunner
 
 from tkc_lvlab import cli
 from tkc_lvlab.cli import app
+from tkc_lvlab.config import HostConfig
 
 SAMPLE_ENV = {"name": "demo", "libvirt_uri": "qemu:///session"}
 SAMPLE_IMAGES = {"debian13": {"image_url": "https://example.invalid/debian.qcow2"}}
 SAMPLE_MACHINES = [{"vm_name": "alpha", "os": "debian13"}]
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_host_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``up``'s layered-config read hermetic (#138 Phase 3).
+
+    ``up`` now reads the layered ``networks:`` via ``load_host_config``; stub it
+    to an empty :class:`HostConfig` so these tests never pick up a developer's
+    real ``/etc/Lvlab.yml`` or ``~/.Lvlab.yml``.
+    """
+    monkeypatch.setattr(cli, "load_host_config", lambda *a, **k: HostConfig())
 
 
 def _patched_config() -> mock._patch:

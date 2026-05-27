@@ -16,6 +16,7 @@ from unittest import mock
 import pytest
 import yaml
 
+from tkc_lvlab.config import NetworkDefaults
 from tkc_lvlab.utils.cloud_init import NetworkConfig
 from tkc_lvlab.utils.libvirt import Machine, _virt_install_network_arg
 from tkc_lvlab.utils.virsh import VirshError
@@ -247,6 +248,110 @@ def test_init_accepts_default_managed_network_with_ip4() -> None:
     assert m.interfaces[0]["ip4"] == "192.168.122.50"
     # network_type omitted means the default behaviour.
     assert m.interfaces[0].get("network_type", "network") == "network"
+
+
+# ---------------------------------------------------------------------------
+# __init__ — layered networks: bridge gateway/DNS fill (#138 Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def _vlan10_networks() -> dict[str, NetworkDefaults]:
+    """A ``networks:`` map with a bridge-style vlan10 entry."""
+    return {
+        "vlan10": NetworkDefaults(
+            gateway="100.64.10.1",
+            dns=["100.64.10.10", "100.64.10.11"],
+            search=["lab.example"],
+        )
+    }
+
+
+def test_init_fills_bridge_gateway_from_networks() -> None:
+    """A static interface on a configured network inherits its gateway (#138)."""
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [{"name": "eth0", "network": "vlan10", "ip4": "100.64.10.50/24"}],
+    }
+    m = Machine(
+        machine_cfg, {"name": "lab"}, config_defaults, networks=_vlan10_networks()
+    )
+    assert m.interfaces[0]["ip4gw"] == "100.64.10.1"
+
+
+def test_init_explicit_ip4gw_wins_over_networks() -> None:
+    """An explicit interface ``ip4gw`` is never overwritten by the networks map."""
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [
+            {
+                "name": "eth0",
+                "network": "vlan10",
+                "ip4": "100.64.10.50/24",
+                "ip4gw": "100.64.10.254",
+            }
+        ],
+    }
+    m = Machine(
+        machine_cfg, {"name": "lab"}, config_defaults, networks=_vlan10_networks()
+    )
+    assert m.interfaces[0]["ip4gw"] == "100.64.10.254"
+
+
+def test_init_networks_skips_dhcp_interface() -> None:
+    """A DHCP interface (no ip4) gets no gateway even if its network is configured."""
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [{"name": "eth0", "network": "vlan10"}],  # no ip4 -> DHCP
+    }
+    m = Machine(
+        machine_cfg, {"name": "lab"}, config_defaults, networks=_vlan10_networks()
+    )
+    assert "ip4gw" not in m.interfaces[0]
+
+
+def test_init_fills_nameservers_from_networks_when_absent() -> None:
+    """With no machine/defaults nameservers, the interface's network supplies DNS."""
+    config_defaults = _minimal_config_defaults()  # interfaces.nameservers == {}
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [{"name": "eth0", "network": "vlan10", "ip4": "100.64.10.50/24"}],
+    }
+    m = Machine(
+        machine_cfg, {"name": "lab"}, config_defaults, networks=_vlan10_networks()
+    )
+    assert m.nameservers == {
+        "addresses": ["100.64.10.10", "100.64.10.11"],
+        "search": ["lab.example"],
+    }
+
+
+def test_init_explicit_nameservers_win_over_networks() -> None:
+    """A machine's own nameservers are never overridden by the networks map."""
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "nameservers": {"addresses": ["9.9.9.9"], "search": ["own.example"]},
+        "interfaces": [{"name": "eth0", "network": "vlan10", "ip4": "100.64.10.50/24"}],
+    }
+    m = Machine(
+        machine_cfg, {"name": "lab"}, config_defaults, networks=_vlan10_networks()
+    )
+    assert m.nameservers == {"addresses": ["9.9.9.9"], "search": ["own.example"]}
+
+
+def test_init_no_networks_leaves_interface_and_nameservers_untouched() -> None:
+    """Default (networks=None): no gateway/DNS filling — backward compatible."""
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [{"name": "eth0", "network": "vlan10", "ip4": "100.64.10.50/24"}],
+    }
+    m = Machine(machine_cfg, {"name": "lab"}, config_defaults)
+    assert "ip4gw" not in m.interfaces[0]
+    assert m.nameservers == {}
 
 
 # ---------------------------------------------------------------------------

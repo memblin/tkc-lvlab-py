@@ -54,6 +54,8 @@ from .utils.output import (
 from .utils.passwords import generate_one_time_password
 from .config import (
     ConfigManager,
+    NetworkDefaults,
+    load_host_config,
     parse_config,
     generate_hosts,
     generate_hosts_entries,
@@ -287,6 +289,29 @@ def _load_config() -> ConfigManager:
         logger.error(CONFIG_PARSE_ERROR_MSG)
         raise typer.Exit(code=1)
     return ConfigManager.from_parsed(parsed)
+
+
+def _host_networks() -> dict[str, NetworkDefaults]:
+    """Return the layered ``networks:`` per-network defaults for the up path.
+
+    Reads the same ``/etc`` -> ``~`` -> CWD layered config ``createvm`` uses
+    (:func:`tkc_lvlab.config.load_host_config`) and returns its ``networks``
+    map, so a manifest VM on a bridge interface inherits that network's
+    gateway/DNS without repeating it per machine (#138 Phase 3). A
+    structurally invalid layer maps to the standard config-error exit.
+
+    Returns:
+        The per-network defaults map (``{}`` when no layer declares
+        ``networks:``).
+
+    Raises:
+        typer.Exit: A config layer is structurally invalid (code 1).
+    """
+    try:
+        return load_host_config().networks
+    except ValueError as exc:
+        logger.error("%s", exc)
+        raise typer.Exit(code=1)
 
 
 class ResolvedMachine:
@@ -1565,7 +1590,9 @@ def up(vm_name: str) -> None:
         logger.error("Machine %s not found in manifest.", vm_name)
         return
 
-    machine = Machine(machine_config, environment, config_defaults)
+    machine = Machine(
+        machine_config, environment, config_defaults, networks=_host_networks()
+    )
     libvirt_uri = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
     exists, status_state, _ = machine.exists_in_libvirt(libvirt_uri)
 

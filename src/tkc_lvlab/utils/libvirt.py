@@ -24,7 +24,7 @@ import subprocess
 from typing import TYPE_CHECKING, Any
 
 from .._logging import get_logger
-from ..config import parse_config, generate_hosts
+from ..config import NetworkDefaults, parse_config, generate_hosts
 from ..exceptions import ConfigError, LvlabError
 from .osinfo import OsInfoLookupError, resolve_os_variant
 from .subprocess_env import system_first_env
@@ -115,6 +115,42 @@ def _virt_install_network_arg(iface: dict[str, Any]) -> str:
         "address.type=pci,address.domain=0,address.bus=1,"
         "address.slot=0,address.function=0"
     )
+
+
+def _nameservers_from_networks(
+    interfaces: list[dict[str, Any]], networks: dict[str, NetworkDefaults]
+) -> dict[str, Any]:
+    """Derive machine nameservers from the layered ``networks:`` map (#138 Phase 3).
+
+    Used as the lowest-precedence fallback when neither the machine nor
+    ``config_defaults`` declares ``nameservers``: returns the DNS/search of the
+    first interface whose libvirt ``network`` has a configured ``networks:``
+    entry with DNS servers. (Machine nameservers are a single per-machine block,
+    so the first matching interface wins — the common single-NIC case.)
+
+    Args:
+        interfaces: The machine's resolved interface dicts.
+        networks: The layered per-network defaults map (network name -> defaults).
+
+    Returns:
+        ``{"addresses": [...], "search": [...]}`` from the first matching
+        interface's network, or ``{}`` when no interface's network supplies DNS.
+    """
+    if not networks:
+        return {}
+    for iface in interfaces:
+        # ``self.interfaces`` is normally a list of dicts, but degrades to the
+        # ``config_defaults['interfaces']`` mapping when a machine declares no
+        # interfaces of its own; skip anything that isn't an interface dict.
+        if not isinstance(iface, dict):
+            continue
+        net_defaults = networks.get(iface.get("network"))
+        if net_defaults and net_defaults.dns:
+            return {
+                "addresses": list(net_defaults.dns),
+                "search": list(net_defaults.search or []),
+            }
+    return {}
 
 
 class _SnapshotManager:
@@ -631,6 +667,15 @@ class Machine:
         config_defaults: The manifest's ``config_defaults`` block —
             applied as a baseline for top-level keys plus interfaces,
             disks, and ``shared_directories``.
+        networks: The layered ``networks:`` per-network defaults map
+            (network name -> :class:`tkc_lvlab.config.NetworkDefaults`),
+            from :func:`tkc_lvlab.config.load_host_config` (#138 Phase 3).
+            A static interface whose ``network`` matches an entry inherits
+            that network's ``gateway`` (when ``ip4gw`` is unset) and the
+            machine inherits its ``dns``/``search`` (when no ``nameservers``
+            are declared). Explicit manifest/defaults values always win.
+            Defaults to ``None`` (no filling) for callers that don't render
+            cloud-init (``destroy``/``down``/snapshot paths).
 
     Attributes:
         environment: Reference to the environment dict.
@@ -648,8 +693,9 @@ class Machine:
         cpu: vCPU count.
         memory: RAM in MiB.
         interfaces: List of resolved interface dicts.
-        nameservers: Resolved nameservers dict — per-machine override
-            with fallback to ``config_defaults['interfaces']['nameservers']``.
+        nameservers: Resolved nameservers dict — per-machine override,
+            then ``config_defaults['interfaces']['nameservers']``, then the
+            layered ``networks:`` DNS for an interface's network (#138).
         disks: List of resolved disk dicts.
         shared_directories: Merged shared-directory list (defaults +
             per-machine, keyed by ``mount_tag``).
@@ -666,7 +712,10 @@ class Machine:
         machine: dict[str, Any],
         environment: dict[str, Any],
         config_defaults: dict[str, Any],
+        networks: dict[str, NetworkDefaults] | None = None,
     ) -> None:
+
+        networks = networks or {}
 
         # Apply interface defaults, then pin a deterministic MAC per
         # interface (unless the manifest supplied one). The same address
@@ -682,6 +731,15 @@ class Machine:
                 **iface,
             }
             machine["interfaces"][index].setdefault("macaddress", generate_mac())
+            # Fill the gateway for a static interface from the layered
+            # ``networks:`` map (#138 Phase 3) when the manifest/defaults
+            # didn't set one: a bridge interface (``network: vlan10``) inherits
+            # ``vlan10``'s configured gateway instead of repeating it per VM.
+            # An explicit ``ip4gw`` always wins (setdefault).
+            merged_iface = machine["interfaces"][index]
+            net_defaults = networks.get(merged_iface.get("network"))
+            if net_defaults and merged_iface.get("ip4") and net_defaults.gateway:
+                merged_iface.setdefault("ip4gw", net_defaults.gateway)
 
         # Validate interface network_type and the ip4-with-user-mode
         # combination at construction time so an operator sees a clear
@@ -775,9 +833,13 @@ class Machine:
         self.cpu = machine.get("cpu", config_defaults.get("cpu", 2))
         self.memory = machine.get("memory", config_defaults.get("memory", 2024))
         self.interfaces = machine.get("interfaces", [])
+        # Precedence: machine ``nameservers`` -> config_defaults nameservers ->
+        # the layered ``networks:`` map's DNS for an interface's network
+        # (#138 Phase 3). The networks-derived block is the lowest fallback, so
+        # an explicit manifest/defaults nameservers always wins.
         self.nameservers = machine.get(
             "nameservers", config_defaults["interfaces"].get("nameservers", {})
-        )
+        ) or _nameservers_from_networks(self.interfaces, networks)
         self.disks = machine.get("disks", [])
         self.shared_directories = machine.get("shared_directories", [])
         self.cloud_init_config = machine.get("cloud_init", {})

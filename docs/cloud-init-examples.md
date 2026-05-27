@@ -53,6 +53,54 @@ sensitive to the starting UID). For non-lab use, add a normal user
 instead — that's the username you'd SSH in as with the matching
 private key.
 
+## Cross-distro `runcmd`: trusting a custom CA
+
+`runcmd` is delivered to the guest verbatim and runs late in first
+boot. cloud-init does **not** run it under `set -e`: a failing command
+is logged and the rest of the list keeps going. That is convenient, but
+it means a command that only exists on one distro family fails
+*silently* on the others — the SSH key and other steps still land, so it
+looks like "most of it worked" while one step quietly did nothing.
+
+Installing a private CA into the system trust store is the classic case,
+because the tool and the anchor directory differ by family:
+
+| Family                                 | Anchor directory                                                  | Refresh command          |
+| -------------------------------------- | ----------------------------------------------------------------- | ------------------------ |
+| Debian, Ubuntu                         | `/usr/local/share/ca-certificates/` (file **must** end in `.crt`) | `update-ca-certificates` |
+| Fedora, AlmaLinux, Rocky, CentOS, RHEL | `/etc/pki/ca-trust/source/anchors/`                               | `update-ca-trust`        |
+
+A Debian-style CA install (`update-ca-certificates` writing to
+`/usr/local/share/ca-certificates/`) therefore does nothing on a RHEL
+guest: the anchor directory is absent (so `curl -o` can't even write the
+file) and the command does not exist. Branch on which refresh tool is
+present so one `runcmd` covers both families:
+
+```yaml
+runcmd:
+  # Install a private root CA, choosing the anchor dir + refresh tool for
+  # the running distro family. -k is needed only here because the CA is
+  # not yet trusted at the moment we download it (chicken-and-egg).
+  - |
+    if command -v update-ca-trust >/dev/null 2>&1; then
+      # RHEL family: Fedora, AlmaLinux, Rocky, CentOS, RHEL
+      curl -fsSk -L -o /etc/pki/ca-trust/source/anchors/root-ca.crt https://ca.example.lab/root-ca.pem
+      update-ca-trust
+    else
+      # Debian family: Debian, Ubuntu (filename must end in .crt)
+      curl -fsSk -L -o /usr/local/share/ca-certificates/root-ca.crt https://ca.example.lab/root-ca.pem
+      update-ca-certificates
+    fi
+```
+
+Probing for `update-ca-trust` cleanly separates the two toolchains for
+every distro in `lvlab`'s built-in image catalog. You would only need a
+third branch if you add SUSE, Arch, or Alpine images: those use
+different anchor directories (and SUSE even reuses the
+`update-ca-certificates` *name* for a different layout), so key the
+branch off `/etc/os-release` `ID`/`ID_LIKE` instead of a command probe in
+that case.
+
 ## network-config (v1, ENI-style)
 
 The v1 template selects when an image entry sets

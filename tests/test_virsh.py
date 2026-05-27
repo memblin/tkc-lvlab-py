@@ -32,7 +32,6 @@ from tkc_lvlab.utils.virsh import (
     virsh_snapshot_names,
 )
 
-
 URI = "qemu:///session"
 
 

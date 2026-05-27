@@ -47,7 +47,6 @@ from tkc_lvlab.utils.virsh import VirshError
 
 import re
 
-
 # Realistic virsh net-dumpxml output for libvirt's stock "default" NAT
 # network — gateway 192.168.122.1, /24, dnsmasq DHCP range .2-.254.
 NAT_NETWORK_XML = """\

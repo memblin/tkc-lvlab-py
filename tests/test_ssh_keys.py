@@ -30,7 +30,6 @@ from tkc_lvlab.utils.ssh_keys import (
     validate_public_key,
 )
 
-
 # Sample bodies chosen for stable base64 (no padding ambiguity).
 _ED25519_BODY = "AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
 _RSA_BODY = "AAAAB3NzaC1yc2EAAAADAQABAAABAQCCCCCCCCCCCCCCCCCCCCCCCCCCCC"

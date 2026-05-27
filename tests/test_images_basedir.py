@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from tkc_lvlab.utils.images import CloudImage
 
-
 _DEBIAN_CONFIG = {
     "image_url": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2",
     "checksum_url": "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",

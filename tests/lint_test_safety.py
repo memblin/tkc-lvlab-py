@@ -30,7 +30,6 @@ import ast
 import sys
 from pathlib import Path
 
-
 GUARD_FUNCTION_NAME = "assert_owned_by_test"
 """The function call name a static-safe integration test must contain."""
 

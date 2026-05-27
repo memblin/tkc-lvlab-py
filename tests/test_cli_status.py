@@ -27,7 +27,6 @@ from tkc_lvlab import cli
 from tkc_lvlab.cli import app
 from tkc_lvlab.utils.virsh import VirshError
 
-
 # A representative manifest tuple matching parse_config's return shape:
 # (environment, images, config_defaults, machines).
 SAMPLE_ENV = {"name": "demo", "libvirt_uri": "qemu:///session"}

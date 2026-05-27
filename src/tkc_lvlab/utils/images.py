@@ -41,7 +41,6 @@ from .._logging import get_logger
 from ..exceptions import ImageError
 from .catalog import derive_os_variant, derive_username
 
-
 logger = get_logger(__name__)
 
 #: ``callback(bytes_done, total)`` for download progress reporting. ``total``

@@ -87,7 +87,6 @@ from ..utils.standalone_cloud_init import OneoffCloudInit
 from ..utils.subprocess_env import system_first_env
 from ..utils.virsh import VirshError, run_virsh, vm_exists
 
-
 # ---------------------------------------------------------------------------
 # Defaults (mirror the lvscripts reference)
 # ---------------------------------------------------------------------------

@@ -41,7 +41,6 @@ from tests.integration_helpers import (
     wait_for_no_domain,
 )
 
-
 _LVLAB_UP_TIMEOUT_SECONDS = 300
 _LVLAB_STATUS_TIMEOUT_SECONDS = 30
 _LVLAB_DESTROY_TIMEOUT_SECONDS = 60

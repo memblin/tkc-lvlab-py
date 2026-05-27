@@ -28,7 +28,6 @@ import pytest
 from tkc_lvlab.utils.libvirt import Machine
 from tkc_lvlab.utils.virsh import VirshError
 
-
 URI = "qemu:///session"
 
 

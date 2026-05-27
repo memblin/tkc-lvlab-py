@@ -37,7 +37,6 @@ import xml.etree.ElementTree as ET
 from ..exceptions import LibvirtNetworkError, VirshError
 from .virsh import run_virsh
 
-
 # QEMU/KVM's registered OUI. libvirt assigns guest NICs MACs from this
 # prefix by default, so generating our own from the same range keeps the
 # address indistinguishable from an auto-assigned one.

@@ -49,7 +49,6 @@ from ..utils.snapshot_cleanup import undefine_with_snapshot_cleanup
 from ..utils.virsh import VirshError, run_virsh, virsh_snapshot_names, vm_exists
 from .createvm import storage_dir_for
 
-
 _SYSTEM_URI = "qemu:///system"
 _ONEOFF_STORAGE_ROOT = Path("/var/lib/libvirt/images/lvlab/oneoff")
 

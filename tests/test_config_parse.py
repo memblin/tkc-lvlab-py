@@ -35,7 +35,6 @@ from tkc_lvlab.config import (
 )
 from tkc_lvlab.exceptions import ConfigError, LvlabError
 
-
 SAMPLE_MANIFEST = """---
 environment:
   - name: demo

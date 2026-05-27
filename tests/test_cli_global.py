@@ -18,7 +18,6 @@ from tkc_lvlab import cli
 from tkc_lvlab.cli import app
 from tkc_lvlab.utils.virsh import DomInfo, VirshError
 
-
 # Domains keyed by URI for the enumeration stubs. The two default URIs return
 # disjoint domain sets so a test can prove both connections are merged.
 SYSTEM_DOMAINS = ["web01_demo", "db01_demo"]

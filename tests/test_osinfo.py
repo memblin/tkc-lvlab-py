@@ -21,7 +21,6 @@ from tkc_lvlab.utils.osinfo import (
     resolve_os_variant,
 )
 
-
 # A representative slice of what ``virt-install --osinfo list`` emits on
 # a current-ish host. Each line is one or more comma-separated aliases.
 _SAMPLE_OSINFO_LIST_OUTPUT = """\

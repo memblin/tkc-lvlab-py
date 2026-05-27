@@ -31,7 +31,6 @@ from __future__ import annotations
 
 from .virsh import VirshError, run_virsh
 
-
 _SNAPSHOT_UNDEFINE_MARKER = "cannot delete inactive domain"
 _SNAPSHOT_KEYWORD = "snapshot"
 

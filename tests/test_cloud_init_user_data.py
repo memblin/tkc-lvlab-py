@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from tkc_lvlab.utils.cloud_init import UserData
 
-
 # A slash-free literal key so UserData.__post_init__ treats it as a literal
 # (a real base64 key can contain ``/`` and would be mistaken for a path).
 _LITERAL_PUBKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5testkeymaterial user@host"

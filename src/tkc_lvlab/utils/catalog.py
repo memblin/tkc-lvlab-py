@@ -29,7 +29,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-
 # First-boot account name keyed by distro family. Cloud images create a
 # conventional unprivileged user; cloud-init adds the SSH key to it.
 _USERNAME_BY_FAMILY: dict[str, str] = {

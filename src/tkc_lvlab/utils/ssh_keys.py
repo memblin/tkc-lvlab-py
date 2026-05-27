@@ -30,7 +30,6 @@ import pwd
 # unaffected.
 from ..exceptions import PublicKeyError
 
-
 SUPPORTED_KEY_TYPES: frozenset[str] = frozenset(
     {
         "ssh-ed25519",

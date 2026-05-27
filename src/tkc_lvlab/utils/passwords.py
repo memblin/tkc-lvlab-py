@@ -29,7 +29,6 @@ import subprocess
 # class definition moved to :mod:`tkc_lvlab.exceptions`.
 from ..exceptions import PasswordHashError
 
-
 WORD_LIST: list[str] = [
     "amber",
     "aspen",

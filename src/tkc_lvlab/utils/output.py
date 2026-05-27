@@ -33,7 +33,6 @@ from rich.box import Box, SQUARE
 from rich.console import Console
 from rich.table import Table
 
-
 # Width used for a non-interactive console (piped output, the test
 # runner). Rich defaults those to 80 columns and *truncates* cells that
 # overflow, which would clip long domain names, URIs, and image URLs.

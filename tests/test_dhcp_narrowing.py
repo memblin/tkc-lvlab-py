@@ -31,7 +31,6 @@ from tests.integration_helpers import (
     compute_narrowed_range,
 )
 
-
 _GATEWAY = "192.168.122.1"
 _NETMASK = "255.255.255.0"
 

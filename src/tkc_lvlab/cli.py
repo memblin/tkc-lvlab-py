@@ -85,7 +85,6 @@ from .utils.virsh import (
     virsh_list_all_names,
 )
 
-
 logger = get_logger(__name__)
 
 

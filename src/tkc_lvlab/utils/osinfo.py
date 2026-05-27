@@ -37,7 +37,6 @@ from functools import lru_cache
 from ..exceptions import OsInfoLookupError
 from .subprocess_env import system_first_env
 
-
 _FAMILY_PATTERN = re.compile(r"^([a-zA-Z]+)(\d+(?:\.\d+)?)$")
 """Splits an osinfo id like ``debian13`` or ``fedora40`` into family and version."""
 

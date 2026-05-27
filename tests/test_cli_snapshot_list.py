@@ -15,7 +15,6 @@ from typer.testing import CliRunner
 from tkc_lvlab import cli
 from tkc_lvlab.cli import app
 
-
 SAMPLE_ENV = {"name": "demo", "libvirt_uri": "qemu:///session"}
 SAMPLE_MACHINES = [{"vm_name": "alpha", "os": "debian13"}]
 

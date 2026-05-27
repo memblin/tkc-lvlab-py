@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 
 from jinja2 import Environment, PackageLoader, select_autoescape
 
-
 _DEFAULT_SUDO = "ALL=(ALL) NOPASSWD:ALL"
 _DEFAULT_SHELL = "/bin/bash"
 

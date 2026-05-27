@@ -24,7 +24,6 @@ import yaml
 
 from tkc_lvlab.utils.cloud_init import NetworkConfig, NetworkVersion
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

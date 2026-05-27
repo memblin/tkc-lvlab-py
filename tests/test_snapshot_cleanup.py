@@ -25,7 +25,6 @@ from tkc_lvlab.utils import snapshot_cleanup as sc_mod
 from tkc_lvlab.utils.snapshot_cleanup import undefine_with_snapshot_cleanup
 from tkc_lvlab.utils.virsh import VirshError
 
-
 URI = "qemu:///system"
 DOMAIN = "oneoff-testvm.local"
 

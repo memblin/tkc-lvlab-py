@@ -25,7 +25,6 @@ from textwrap import dedent
 
 import pytest
 
-
 VIRSH_TIMEOUT_SECONDS = 30
 """Default timeout for short virsh probes used in test helpers."""
 
@@ -36,8 +35,7 @@ DOMAIN_GONE_TIMEOUT_SECONDS = 20
 """Total seconds :func:`wait_for_no_domain` will wait before raising."""
 
 
-MANIFEST_TEMPLATE = dedent(
-    """\
+MANIFEST_TEMPLATE = dedent("""\
     ---
     environment:
       - name: {env_name}
@@ -79,8 +77,7 @@ MANIFEST_TEMPLATE = dedent(
         checksum_url: https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
         checksum_type: sha512
         network_version: 2
-    """
-)
+    """)
 """Minimal single-machine ``Lvlab.yml`` template for integration tests.
 
 Placeholders: ``env_name``, ``uri``, ``storage_root``, ``vm_name``,

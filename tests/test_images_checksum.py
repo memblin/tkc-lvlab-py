@@ -19,7 +19,6 @@ from pathlib import Path
 
 from tkc_lvlab.utils.images import CloudImage
 
-
 FEDORA_SAMPLE = """# Comment line that should not break parsing
 SHA256 (Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2) = abc123def456
 SHA256 (Fedora-Container-Base-40-1.14.x86_64.tar.xz) = 999888777666

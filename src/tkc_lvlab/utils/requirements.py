@@ -31,7 +31,6 @@ import shutil
 # class definition moved to :mod:`tkc_lvlab.exceptions`.
 from ..exceptions import DependencyError
 
-
 _OS_RELEASE_PATH: Path = Path("/etc/os-release")
 """Filesystem path read to classify the local package manager.
 

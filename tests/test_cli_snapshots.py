@@ -24,7 +24,6 @@ from tkc_lvlab import cli
 from tkc_lvlab.cli import snapshot
 from tkc_lvlab.utils.virsh import VirshError
 
-
 URI = "qemu:///session"
 
 

@@ -19,7 +19,6 @@ from tkc_lvlab import cli
 from tkc_lvlab.cli import app
 from tkc_lvlab.exceptions import ConfigError
 
-
 SNIPPET_DEFAULT = "## hosts snippet (default mode)\n10.0.0.1 web01.lab web01\n"
 SNIPPET_HEREDOC = "cat <<EOF >> /etc/hosts\n10.0.0.1 web01.lab web01\nEOF\n"
 

@@ -50,7 +50,6 @@ from tkc_lvlab.scripts.createvm import (
 from tkc_lvlab.utils.network import LibvirtNetworkError, LibvirtNetworkInfo
 from tkc_lvlab.utils.requirements import DependencyError
 
-
 _GIB = 1024**3
 
 # Virtual size that the mocked ``qemu-img info`` reports for the base image.

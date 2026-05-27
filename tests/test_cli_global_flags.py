@@ -17,7 +17,7 @@ from unittest import mock
 import pytest
 from typer.testing import CliRunner
 
-from tkc_lvlab import cli
+from tkc_lvlab import __version__, cli
 from tkc_lvlab.cli import _is_global_flag, app
 from tkc_lvlab.utils import output
 
@@ -160,3 +160,13 @@ def test_unknown_post_subcommand_flag_still_errors():
     res = runner.invoke(app, ["status", "--definitely-not-a-flag"])
     assert res.exit_code == 2
     assert "No such option" in res.output
+
+
+@pytest.mark.parametrize("flag", ["--version", "-V"])
+def test_version_flag(flag):
+    """``lvlab --version`` / ``-V`` print ``lvlab <version>`` and exit 0,
+    uniform with ``createvm``/``deletevm``. The eager callback short-circuits
+    before any subcommand (and before ``no_args_is_help``) runs."""
+    res = runner.invoke(app, [flag])
+    assert res.exit_code == 0
+    assert res.output.strip() == f"lvlab {__version__}"

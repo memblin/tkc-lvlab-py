@@ -40,6 +40,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 
+from . import __version__
 from ._logging import configure_logging, get_logger
 from .utils.catalog import BUILTIN_IMAGES, resolve_catalog
 from .utils.output import (
@@ -222,6 +223,13 @@ PREVENT_CLEANUP_FLAG = "prevent_cloud_image_cleanup"
 DEFAULT_GLOBAL_URIS: tuple[str, ...] = ("qemu:///system", "qemu:///session")
 
 
+def _version_callback(value: bool) -> None:
+    """Print the installed package version and exit when ``--version`` is set."""
+    if value:
+        typer.echo(f"lvlab {__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
 def _root(
     verbose: int = typer.Option(
@@ -241,6 +249,14 @@ def _root(
         False,
         "--no-color",
         help="Disable colored/styled output (also honors the NO_COLOR env var).",
+    ),
+    version: bool = typer.Option(  # pylint: disable=unused-argument
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed tkc-lvlab package version and exit.",
     ),
 ) -> None:
     """Top-level callback — configures logging before any subcommand runs."""

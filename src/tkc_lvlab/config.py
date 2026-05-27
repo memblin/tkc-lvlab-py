@@ -428,6 +428,10 @@ class HostConfig:
             ``--network`` nor a ``NETWORK,IP`` ``--ip4`` names one), or ``None``.
         default_vm_username: The host-wide first-boot account name (used when an
             image entry doesn't pin an explicit ``username:``), or ``None``.
+        runcmd: Host-wide cloud-init ``runcmd`` commands run at first boot.
+            The highest-precedence layer that sets ``runcmd`` wins wholesale
+            (deep-merge replaces lists), so identical commands in ``/etc`` and
+            ``~`` don't run twice. Empty when no layer sets it.
         sources: The config files that contributed, lowest precedence first.
     """
 
@@ -435,6 +439,7 @@ class HostConfig:
     networks: dict[str, NetworkDefaults] = field(default_factory=dict)
     default_network: str | None = None
     default_vm_username: str | None = None
+    runcmd: list[str] = field(default_factory=list)
     sources: list[Path] = field(default_factory=list)
 
     def network_defaults(self, name: str) -> NetworkDefaults | None:
@@ -609,6 +614,28 @@ def parse_networks(raw: Any) -> dict[str, NetworkDefaults]:
     return networks
 
 
+def parse_runcmd(raw: Any) -> list[str]:
+    """Parse the ``runcmd:`` section into a list of command strings.
+
+    Each entry is a shell command cloud-init runs at first boot; a multi-line
+    string is rendered as a ``|`` heredoc by the user-data template.
+
+    Args:
+        raw: The raw ``runcmd:`` value (``None`` when absent).
+
+    Returns:
+        The list of command strings (empty when ``raw`` is ``None``).
+
+    Raises:
+        ValueError: ``raw`` is not a list, or any entry is not a string.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ValueError("The 'runcmd' value must be a list of command strings.")
+    return list(raw)
+
+
 def load_host_config(
     config_path: str | Path | None = None,
     *,
@@ -621,7 +648,8 @@ def load_host_config(
     Resolves ``/etc/Lvlab.yml`` (base) -> ``~/.Lvlab.yml`` (user) ->
     ``./Lvlab.yml`` (CWD) -> an explicit ``--config`` path and deep-merges them
     (higher precedence wins per key), then extracts the ``images:`` map, the
-    ``networks:`` per-network defaults, and ``default_network``.
+    ``networks:`` per-network defaults, ``default_network``,
+    ``default_vm_username``, and ``runcmd``.
 
     Args:
         config_path: An explicit ``--config`` path, or ``None`` to use only
@@ -667,6 +695,7 @@ def load_host_config(
         networks=parse_networks(merged.get("networks")),
         default_network=default_network,
         default_vm_username=default_vm_username,
+        runcmd=parse_runcmd(merged.get("runcmd")),
         sources=layers,
     )
 

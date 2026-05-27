@@ -31,6 +31,7 @@ from tkc_lvlab.config import (
     parse_config,
     parse_file_from_url,
     parse_networks,
+    parse_runcmd,
 )
 from tkc_lvlab.exceptions import ConfigError, LvlabError
 
@@ -504,4 +505,37 @@ def test_load_host_config_rejects_empty_default_vm_username(tmp_path: Path) -> N
     system_dir, home_dir, cwd = _layered_dirs(tmp_path)
     (cwd / "Lvlab.yml").write_text('default_vm_username: "   "\n')
     with pytest.raises(ValueError, match="default_vm_username"):
+        load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+
+
+def test_parse_runcmd_accepts_string_list_rejects_others() -> None:
+    """``runcmd`` is a list of command strings; anything else is a ValueError."""
+    assert parse_runcmd(None) == []
+    assert parse_runcmd(["echo hi", "touch /tmp/x"]) == ["echo hi", "touch /tmp/x"]
+    with pytest.raises(ValueError, match="'runcmd' value must be a list"):
+        parse_runcmd("echo not-a-list")
+    with pytest.raises(ValueError, match="'runcmd' value must be a list"):
+        parse_runcmd([{"cmd": "echo hi"}])
+
+
+def test_load_host_config_runcmd_higher_layer_replaces(tmp_path: Path) -> None:
+    """A higher layer's ``runcmd`` replaces a lower one wholesale (no concat).
+
+    Deliberate: identical host-wide commands in /etc and ~ must not run twice.
+    """
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (system_dir / "Lvlab.yml").write_text(
+        "runcmd:\n  - echo from-etc\n  - touch /tmp/etc\n"
+    )
+    (cwd / "Lvlab.yml").write_text("runcmd:\n  - echo from-cwd\n")
+
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+    assert config.runcmd == ["echo from-cwd"]  # CWD replaced /etc, not appended
+
+
+def test_load_host_config_rejects_bad_runcmd(tmp_path: Path) -> None:
+    """A non-list ``runcmd`` in a layer is a clean ValueError."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (cwd / "Lvlab.yml").write_text("runcmd: echo not-a-list\n")
+    with pytest.raises(ValueError, match="'runcmd' value must be a list"):
         load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)

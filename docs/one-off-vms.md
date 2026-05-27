@@ -111,6 +111,9 @@ networks:
   vlan20:
     gateway: 100.64.20.1
     dns: [100.64.20.10]
+runcmd:                            # cloud-init commands run on every VM at first boot
+  - curl -fsSL https://ca.example.test/root.crt -o /usr/local/share/ca-certificates/lab.crt
+  - update-ca-certificates
 ```
 
 With that in place, a static IP on the `vlan10` bridge needs no networking
@@ -132,6 +135,11 @@ Resolution precedence per value:
     entry) → config `default_vm_username` → the key-derived family name (e.g.
     `debian`, `fedora`). So `default_vm_username` gives every VM one login
     account unless a specific image pins its own.
+- **`runcmd`** — cloud-init commands run at first boot. The highest layer that
+    sets `runcmd` wins **wholesale** (lists replace, they don't concatenate), so
+    putting the same commands in both `/etc` and `~/.Lvlab.yml` won't run them
+    twice. To add project-specific commands, restate the host ones you still
+    want in the project layer.
 
 (`images:` layers the same way — host-wide image keys merge with a project
 manifest's, the higher layer winning on a name clash.)

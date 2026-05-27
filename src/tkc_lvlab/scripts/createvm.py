@@ -410,6 +410,8 @@ class _CreateVmContext:  # pylint: disable=too-many-instance-attributes
     # ``match: macaddress`` (the only renderer-agnostic NIC selector).
     mac: str = ""
     authorized_keys: list[str] = field(default_factory=list)
+    # Host-wide first-boot commands from the layered config (#138).
+    runcmd: list[str] = field(default_factory=list)
 
 
 def _resolve_network_and_ip(
@@ -480,6 +482,7 @@ def _build_createvm_context(
     networks: dict[str, NetworkDefaults] | None = None,
     config_default_network: str | None = None,
     default_vm_username: str | None = None,
+    runcmd: list[str] | None = None,
 ) -> _CreateVmContext:
     """Resolve image, network, addressing, and credentials.
 
@@ -502,7 +505,8 @@ def _build_createvm_context(
     ``default_vm_username`` (also from the layered config) sets the first-boot
     account when the image entry doesn't pin one: an explicit per-image
     ``username:`` wins, then ``default_vm_username``, then the key-derived
-    family name (#138).
+    family name (#138). ``runcmd`` is the layered config's host-wide
+    first-boot command list, rendered into the guest's cloud-init user-data.
 
     Every failure mode raises a typed exception the command body maps to a
     clean ``_fail``: :class:`DependencyError`, :class:`ValueError` (unknown
@@ -600,6 +604,7 @@ def _build_createvm_context(
         username=username,
         mac=generate_mac(),
         authorized_keys=authorized_keys,
+        runcmd=list(runcmd or []),
     )
 
 
@@ -647,6 +652,7 @@ def _render_cloud_init(*, vm_dir: Path, vm_name: str, ctx: _CreateVmContext) -> 
         username=ctx.username,
         ssh_public_keys=ctx.authorized_keys,
         password_hash=ctx.password_hash,
+        runcmd=ctx.runcmd,
     )
 
     iface: dict[str, Any] = {"name": "eth0", "macaddress": ctx.mac}
@@ -1245,6 +1251,7 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
             networks=host_config.networks,
             config_default_network=host_config.default_network,
             default_vm_username=host_config.default_vm_username,
+            runcmd=host_config.runcmd,
         )
     except (
         LibvirtNetworkError,

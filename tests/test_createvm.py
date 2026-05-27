@@ -800,6 +800,40 @@ def test_explicit_image_username_beats_default_vm_username(
     assert "labadmin" not in user_data
 
 
+def test_host_config_runcmd_reaches_user_data(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host-config ``runcmd`` is rendered into the guest's cloud-init
+    user-data (#138 Phase 2)."""
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(
+            runcmd=[
+                "echo provisioned > /tmp/marker",
+                "systemctl enable qemu-guest-agent",
+            ]
+        ),
+    )
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code == 0, result.output
+    user_data = (tmp_path / "testvm.local" / "user-data").read_text()
+    assert "runcmd:" in user_data
+    assert "echo provisioned > /tmp/marker" in user_data
+    assert "systemctl enable qemu-guest-agent" in user_data
+
+
+def test_no_runcmd_emits_no_runcmd_block(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """With no host-config ``runcmd`` (the default), user-data has no runcmd
+    block at all (the template guards on a non-empty list)."""
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code == 0, result.output
+    user_data = (tmp_path / "testvm.local" / "user-data").read_text()
+    assert "runcmd:" not in user_data
+
+
 def test_virt_install_failure_cleans_up_vm_dir(
     all_external_mocked: dict, tmp_path: Path
 ) -> None:

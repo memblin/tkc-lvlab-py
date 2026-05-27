@@ -15,6 +15,7 @@ import contextlib
 import os
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -22,6 +23,44 @@ from typing import Iterator
 # VirshError``) and isinstance checks keep working after the class definition
 # moved to the centralized hierarchy in :mod:`tkc_lvlab.exceptions`.
 from ..exceptions import VirshError
+
+# Transient libvirtd connection-drop retry (issue #129). Under high concurrency
+# the DBus-activated modular daemons (``virtqemud``) occasionally refuse a
+# connection for a moment; a single ``virsh`` call then fails with one of the
+# stderr signatures below even though the request never reached the daemon.
+# Retrying is safe even for mutating verbs precisely because a *connection*
+# failure means the command never ran. The schedule's length is also the retry
+# count: one initial attempt plus ``len(_CONNECTION_ERROR_BACKOFF)`` retries.
+_CONNECTION_ERROR_BACKOFF: tuple[float, ...] = (0.5, 1.0, 2.0)
+
+# Lowercase stderr substrings that mark a transient connection drop. Matched
+# case-insensitively against ``virsh`` stderr. These are connection-level only
+# — genuine command errors (bad args, missing domain) are never listed, so they
+# still surface on the first attempt.
+_TRANSIENT_CONNECTION_MARKERS: tuple[str, ...] = (
+    "remote peer disconnected",
+    "failed to connect to the hypervisor",
+    "cannot recv data",
+    "broken pipe",
+    "noreply",
+)
+
+
+def _is_transient_connection_error(stderr: str) -> bool:
+    """Return whether ``virsh`` stderr signals a transient libvirtd connection drop.
+
+    Matches the connection-level signatures from issue #129 case-insensitively.
+    Genuine command failures (bad arguments, missing domain, inactive network)
+    do not match, so only connection drops are treated as retry-worthy.
+
+    Args:
+        stderr: The captured ``virsh`` stderr text.
+
+    Returns:
+        ``True`` iff a connection-drop marker appears in ``stderr``.
+    """
+    haystack = stderr.lower()
+    return any(marker in haystack for marker in _TRANSIENT_CONNECTION_MARKERS)
 
 
 def run_virsh(
@@ -39,12 +78,22 @@ def run_virsh(
     distros' ``virsh`` honors ``LANG`` even when ``LC_ALL`` is set, so both
     overrides are required to guarantee stable output parsing.
 
+    A transient libvirtd connection drop (issue #129) is retried with backoff
+    (``_CONNECTION_ERROR_BACKOFF``) rather than surfaced on the first failure:
+    when ``capture=True`` and stderr matches a connection-level signature (see
+    :func:`_is_transient_connection_error`), the call is repeated up to three
+    times. This applies regardless of ``check`` and of the verb — a connection
+    failure means the command never reached the daemon, so even a mutating verb
+    is safe to retry. Genuine command failures (bad args, missing domain) are
+    not retried; a missing binary and a timeout still raise immediately.
+
     Args:
         uri: libvirt connection URI (e.g. ``qemu:///session``).
         args: ``virsh`` subcommand and flags (no leading ``virsh -c <uri>``).
         check: If ``True``, raise :class:`VirshError` on nonzero exit.
         capture: If ``True``, capture stdout/stderr as text. If ``False``,
             inherit the parent's stdio (used for interactive subcommands).
+            Connection-drop retry requires ``capture=True`` to read stderr.
         timeout: Wall-clock seconds before raising :class:`VirshError`. The
             default is 30s; long-running ops (snapshots) should pass a larger
             value explicitly.
@@ -56,7 +105,8 @@ def run_virsh(
 
     Raises:
         VirshError: On nonzero exit (when ``check=True``), on missing
-            ``virsh`` binary, or on timeout.
+            ``virsh`` binary, or on timeout. A transient connection drop only
+            raises after the retry budget is exhausted.
     """
     argv = ["virsh", "-c", uri, *args]
     env = os.environ.copy()
@@ -77,22 +127,36 @@ def run_virsh(
             errors="replace",
         )
 
-    try:
-        result = subprocess.run(
-            argv, **run_kwargs
-        )  # noqa: S603 (args are constructed in-process)
-    except FileNotFoundError as exc:
-        raise VirshError(
-            127,
-            "virsh binary not found in PATH; install libvirt-clients",
-            args,
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise VirshError(
-            -1,
-            f"virsh timed out after {timeout}s: {' '.join(args)}",
-            args,
-        ) from exc
+    for attempt in range(len(_CONNECTION_ERROR_BACKOFF) + 1):
+        try:
+            result = subprocess.run(
+                argv, **run_kwargs
+            )  # noqa: S603 (args are constructed in-process)
+        except FileNotFoundError as exc:
+            raise VirshError(
+                127,
+                "virsh binary not found in PATH; install libvirt-clients",
+                args,
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise VirshError(
+                -1,
+                f"virsh timed out after {timeout}s: {' '.join(args)}",
+                args,
+            ) from exc
+
+        # Retry only a transient connection drop, and only while attempts
+        # remain; everything else (success, or a genuine failure) falls
+        # through to the check below on this attempt's result.
+        if (
+            capture
+            and result.returncode != 0
+            and attempt < len(_CONNECTION_ERROR_BACKOFF)
+            and _is_transient_connection_error(result.stderr or "")
+        ):
+            time.sleep(_CONNECTION_ERROR_BACKOFF[attempt])
+            continue
+        break
 
     if check and result.returncode != 0:
         stderr = result.stderr if capture else ""

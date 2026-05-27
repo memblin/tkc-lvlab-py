@@ -194,6 +194,136 @@ def test_virsh_error_empty_stderr_uses_placeholder():
 
 
 # ---------------------------------------------------------------------------
+# run_virsh — transient libvirtd connection-drop retry (issue #129)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "error: failed to connect to the hypervisor",
+        (
+            "error: failed to connect to the hypervisor\n"
+            "error: error from service: GDBus.Error:"
+            "org.freedesktop.DBus.Error.NoReply: Remote peer disconnected"
+        ),
+        "error: Cannot recv data: Connection reset by peer",
+        "error: Cannot recv data: ...: Broken pipe",
+        "error: ...DBus.Error.NoReply: Message recipient disconnected",
+        "ERROR: FAILED TO CONNECT TO THE HYPERVISOR",  # match is case-insensitive
+    ],
+)
+def test_is_transient_connection_error_detects_connection_drops(stderr):
+    """Each libvirtd connection-drop signature from #129 is classed transient."""
+    assert virsh._is_transient_connection_error(stderr)
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "error: Failed to get domain 'nope'",
+        "error: invalid argument: network 'default' is not active",
+        "error: Domain not found: no domain with matching name 'web01'",
+        "",
+    ],
+)
+def test_is_transient_connection_error_ignores_genuine_failures(stderr):
+    """Genuine command errors (bad args, missing domain) are NOT retry-worthy."""
+    assert not virsh._is_transient_connection_error(stderr)
+
+
+def test_run_virsh_retries_transient_drop_then_succeeds():
+    """A connection drop followed by success returns success after a retry."""
+    transient = _completed(
+        stderr="error: failed to connect to the hypervisor", returncode=1
+    )
+    success = _completed(stdout="dom1\n", returncode=0)
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.virsh.subprocess.run", side_effect=[transient, success]
+        ) as run,
+        mock.patch("tkc_lvlab.utils.virsh.time.sleep") as sleep,
+    ):
+        result = run_virsh(URI, ["list", "--all", "--name"])
+
+    assert result.stdout == "dom1\n"
+    assert run.call_count == 2
+    sleep.assert_called_once_with(0.5)
+
+
+def test_run_virsh_does_not_retry_genuine_failure():
+    """A non-connection error raises on the first try — no retry, no backoff."""
+    genuine = _completed(stderr="error: Failed to get domain 'nope'", returncode=1)
+    with (
+        mock.patch("tkc_lvlab.utils.virsh.subprocess.run", return_value=genuine) as run,
+        mock.patch("tkc_lvlab.utils.virsh.time.sleep") as sleep,
+    ):
+        with pytest.raises(VirshError):
+            run_virsh(URI, ["domstate", "nope"])
+
+    assert run.call_count == 1
+    sleep.assert_not_called()
+
+
+def test_run_virsh_raises_after_exhausting_retry_budget():
+    """A persistent connection drop raises only after 3 retries with 0.5/1/2s backoff."""
+    transient = _completed(
+        stderr=(
+            "error: error from service: GDBus.Error:"
+            "org.freedesktop.DBus.Error.NoReply: Remote peer disconnected"
+        ),
+        returncode=1,
+    )
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.virsh.subprocess.run", return_value=transient
+        ) as run,
+        mock.patch("tkc_lvlab.utils.virsh.time.sleep") as sleep,
+    ):
+        with pytest.raises(VirshError) as excinfo:
+            run_virsh(URI, ["list", "--all", "--name"])
+
+    assert excinfo.value.returncode == 1
+    assert run.call_count == 4  # 1 initial attempt + 3 retries
+    assert [call.args[0] for call in sleep.call_args_list] == [0.5, 1.0, 2.0]
+
+
+def test_run_virsh_retries_transient_drop_even_when_check_false():
+    """check=False callers (vm_exists, lease probes) also retry a connection drop
+    rather than misreading it as a failed/absent result."""
+    transient = _completed(
+        stderr="error: failed to connect to the hypervisor", returncode=1
+    )
+    success = _completed(stdout="running\n", returncode=0)
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.virsh.subprocess.run", side_effect=[transient, success]
+        ) as run,
+        mock.patch("tkc_lvlab.utils.virsh.time.sleep"),
+    ):
+        result = run_virsh(URI, ["dominfo", "vm"], check=False)
+
+    assert result.returncode == 0
+    assert run.call_count == 2
+
+
+def test_run_virsh_no_retry_when_capture_false():
+    """capture=False inherits stdio, so stderr can't be inspected -> no retry path."""
+    with (
+        mock.patch(
+            "tkc_lvlab.utils.virsh.subprocess.run",
+            return_value=_completed(returncode=1),
+        ) as run,
+        mock.patch("tkc_lvlab.utils.virsh.time.sleep") as sleep,
+    ):
+        with pytest.raises(VirshError):
+            run_virsh(URI, ["console", "vm"], capture=False)
+
+    assert run.call_count == 1
+    sleep.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # State strings & humanize_state
 # ---------------------------------------------------------------------------
 

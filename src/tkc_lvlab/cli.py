@@ -83,6 +83,7 @@ from .utils.virsh import (
     DOMSTATE_RUNNING,
     DomInfo,
     VirshError,
+    run_virsh,
     virsh_dominfo,
     virsh_domstate,
     virsh_list_all_names,
@@ -815,6 +816,119 @@ def ssh_config(
         for machine in selected_machines
     ]
     typer.echo("\n\n".join(snippets))
+
+
+# ---------------------------------------------------------------------------
+# ssh: direct SSH into a manifest VM (experimental, see GitHub issue)
+# ---------------------------------------------------------------------------
+
+# Same ephemeral-lab opts ssh-config emits by default (#127). Replicated as
+# explicit ``-o`` flags here so ``lvlab ssh`` works even when the operator
+# hasn't appended an ssh-config snippet to ``~/.ssh/config``.
+_LVLAB_SSH_EPHEMERAL_OPTS: tuple[tuple[str, str], ...] = (
+    ("StrictHostKeyChecking", "no"),
+    ("UserKnownHostsFile", "/dev/null"),
+    ("CheckHostIP", "no"),
+    ("LogLevel", "ERROR"),
+)
+
+
+def _ssh_command_argv(
+    host_ip: str, user: str | None, identity_file: str | None
+) -> list[str]:
+    """Build the ``ssh`` argv for an ephemeral lab VM.
+
+    Args:
+        host_ip: The guest IP to connect to (no port — default 22).
+        user: Login user, or ``None`` to omit (ssh picks ``$USER``).
+        identity_file: Path to the private key, or ``None`` to omit.
+
+    Returns:
+        The fully-resolved argv ready for ``os.execvp``.
+    """
+    argv: list[str] = ["ssh"]
+    for key, value in _LVLAB_SSH_EPHEMERAL_OPTS:
+        argv.extend(["-o", f"{key}={value}"])
+    if identity_file:
+        argv.extend(["-i", identity_file])
+    argv.append(f"{user}@{host_ip}" if user else host_ip)
+    return argv
+
+
+def _lvlab_ssh_resolve_dhcp_ip(libvirt_uri: str, libvirt_domain: str) -> str | None:
+    """One-shot DHCP-lease lookup for ``lvlab ssh``.
+
+    No polling — if the lease isn't visible right now (guest not up, not
+    on DHCP, lease not yet observed), return ``None`` and let the caller
+    report it. The smoke runner does its own polling because it just
+    booted the guest; ``lvlab ssh`` is invoked by a human after they
+    expect the guest to be live, so a single read is the right contract.
+    """
+    from .smoke import _parse_domifaddr_lease  # local import: avoid cycle
+
+    try:
+        result = run_virsh(
+            libvirt_uri,
+            ["domifaddr", libvirt_domain, "--source", "lease"],
+            check=False,
+        )
+    except VirshError:
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_domifaddr_lease(result.stdout)
+
+
+@app.command()
+def ssh(vm_name: str) -> None:
+    """SSH into a manifest VM with the right user, key, and lab-friendly opts.
+
+    Resolves the IP (manifest static first, then ``virsh domifaddr`` for
+    DHCP), the login user (``cloud_init.user`` if set, else the image's
+    default username), and the identity file (``cloud_init.pubkey`` when
+    it's a path on disk). Then ``exec``\\ s ``ssh`` with the ephemeral-lab
+    options from #127, so the process replaces this one — stdin/stdout/
+    stderr are wired directly to the SSH session.
+    """
+    config = _load_config()
+    environment, images, config_defaults, _machines = config.as_tuple()
+    machine_config = config.get_machine(vm_name)
+    if not machine_config:
+        typer.echo(f"Machine {vm_name} not found in manifest.")
+        raise typer.Exit(code=1)
+
+    machine = Machine(machine_config, environment, config_defaults)
+
+    host_ip = _ssh_config_primary_ip(machine_config)
+    if not host_ip:
+        host_ip = _lvlab_ssh_resolve_dhcp_ip(
+            environment.get("libvirt_uri", "qemu:///system"),
+            machine.libvirt_vm_name,
+        )
+    if not host_ip:
+        typer.echo(
+            f"Could not resolve an IP for {vm_name} — is the VM up? "
+            "Try `lvlab status` or `virsh domifaddr "
+            f"{machine.libvirt_vm_name} --source lease`."
+        )
+        raise typer.Exit(code=1)
+
+    cloud_init_defaults = config_defaults.get("cloud_init", {})
+    merged_ci = {**cloud_init_defaults, **machine_config.get("cloud_init", {})}
+    user = merged_ci.get("user")
+    if not user:
+        image_config = _resolve_image_config(images, machine.os, machine.vm_name)
+        cloud_image = CloudImage(machine.os, image_config, environment, config_defaults)
+        user = cloud_image.default_username
+
+    identity_file = _ssh_config_identity_file(merged_ci.get("pubkey"))
+
+    argv = _ssh_command_argv(host_ip, user, identity_file)
+    # Echo the command we're about to exec so the operator can see what
+    # we're doing (and copy-paste if they want to vary it). Goes to
+    # stderr so stdout stays clean for any SSH transfer that follows.
+    typer.echo(f"# {' '.join(argv)}", err=True)
+    os.execvp(argv[0], argv)
 
 
 # ---------------------------------------------------------------------------

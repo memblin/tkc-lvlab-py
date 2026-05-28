@@ -710,8 +710,39 @@ def _ssh_config_identity_file(pubkey: str | None) -> str | None:
     return pubkey[:-4] if pubkey.endswith(".pub") else pubkey
 
 
-def _ssh_config_render_machine(machine: dict, cloud_init_defaults: dict) -> str:
-    """Render the ``~/.ssh/config`` snippet for one manifest machine."""
+# Ephemeral lab-VM SSH options emitted by default — lab VMs recycle the NAT DHCP
+# pool, so the same IP gets a different host key each lab cycle and a strict
+# `ssh` would trip "REMOTE HOST IDENTIFICATION HAS CHANGED" on every recycle.
+# Keep `--strict-host-keys` available for someone who wants strict checking
+# (e.g. a stable manifest pinned to static IPs). See issue #127.
+_EPHEMERAL_SSH_OPT_LINES: tuple[str, ...] = (
+    "  StrictHostKeyChecking no",
+    "  UserKnownHostsFile /dev/null",
+    "  CheckHostIP no",
+    "  LogLevel ERROR",
+)
+
+
+def _ssh_config_render_machine(
+    machine: dict,
+    cloud_init_defaults: dict,
+    *,
+    strict_host_keys: bool = False,
+) -> str:
+    """Render the ``~/.ssh/config`` snippet for one manifest machine.
+
+    Args:
+        machine: One ``machines[]`` entry from the parsed manifest.
+        cloud_init_defaults: ``config_defaults.cloud_init`` to merge under
+            the per-machine ``cloud_init`` override.
+        strict_host_keys: When ``True``, suppress the default ephemeral
+            host-key options (``StrictHostKeyChecking no`` /
+            ``UserKnownHostsFile /dev/null`` / ``CheckHostIP no`` /
+            ``LogLevel ERROR``) and emit the legacy snippet only.
+
+    Returns:
+        The multi-line ``Host`` block as one string (no trailing newline).
+    """
     machine_cloud_init = {**cloud_init_defaults, **machine.get("cloud_init", {})}
     user = machine_cloud_init.get("user")
     identity_file = _ssh_config_identity_file(machine_cloud_init.get("pubkey"))
@@ -729,16 +760,34 @@ def _ssh_config_render_machine(machine: dict, cloud_init_defaults: dict) -> str:
         lines.append(f"  User {user}")
     if identity_file:
         lines.append(f"  IdentityFile {identity_file}")
+    if not strict_host_keys:
+        lines.extend(_EPHEMERAL_SSH_OPT_LINES)
     return "\n".join(lines)
 
 
 @app.command("ssh-config")
-def ssh_config(vm_name: str = typer.Argument(None)) -> None:
+def ssh_config(
+    vm_name: str = typer.Argument(None),
+    strict_host_keys: bool = typer.Option(
+        False,
+        "--strict-host-keys",
+        help=(
+            "Emit the legacy snippet only — omit the default ephemeral "
+            "options (StrictHostKeyChecking no / UserKnownHostsFile /dev/null "
+            "/ CheckHostIP no / LogLevel ERROR) so ssh enforces strict "
+            "host-key checking for these hosts."
+        ),
+    ),
+) -> None:
     """Print ~/.ssh/config snippet(s) for machines in the manifest.
 
     With no VM_NAME, a snippet is emitted for every machine. With a
     VM_NAME, only that machine's snippet is emitted. Output goes to
     stdout; redirect or append it to ~/.ssh/config yourself.
+
+    By default each ``Host`` block carries ephemeral-lab options that
+    keep recycled DHCP-pool IPs from poisoning ``~/.ssh/known_hosts``;
+    pass ``--strict-host-keys`` to keep strict checking.
     """
     # ssh-config keeps its bespoke parse handling (echo to stdout, only the
     # missing-file failure caught — a structural ConfigError still
@@ -760,7 +809,9 @@ def ssh_config(vm_name: str = typer.Argument(None)) -> None:
     cloud_init_defaults = config_defaults.get("cloud_init", {})
 
     snippets = [
-        _ssh_config_render_machine(machine, cloud_init_defaults)
+        _ssh_config_render_machine(
+            machine, cloud_init_defaults, strict_host_keys=strict_host_keys
+        )
         for machine in selected_machines
     ]
     typer.echo("\n\n".join(snippets))

@@ -136,3 +136,54 @@ def test_ssh_config_handles_parse_failure_via_typeerror() -> None:
 
     assert result.exit_code == 1
     assert "Could not parse config file." in result.output
+
+
+# --- #127: ephemeral lab-VM host-key options (default on) ---------------------
+
+
+EPHEMERAL_OPT_LINES = (
+    "  StrictHostKeyChecking no",
+    "  UserKnownHostsFile /dev/null",
+    "  CheckHostIP no",
+    "  LogLevel ERROR",
+)
+
+
+def test_ssh_config_emits_ephemeral_host_key_opts_by_default() -> None:
+    """Default render → each Host block carries the four ephemeral opts (#127)."""
+    machines = [_make_machine("web01", ip4="10.0.0.1/24")]
+    result = _invoke([], machines)
+
+    assert result.exit_code == 0, result.output
+    for opt_line in EPHEMERAL_OPT_LINES:
+        assert opt_line in result.output, f"missing {opt_line!r} in {result.output!r}"
+
+
+def test_ssh_config_strict_host_keys_flag_omits_ephemeral_opts() -> None:
+    """--strict-host-keys → revert to the legacy 4-line snippet (no ephemeral opts)."""
+    machines = [_make_machine("web01", ip4="10.0.0.1/24", user="lab")]
+    result = _invoke(["--strict-host-keys"], machines)
+
+    assert result.exit_code == 0, result.output
+    for opt_line in EPHEMERAL_OPT_LINES:
+        assert opt_line not in result.output, f"unexpected {opt_line!r}"
+    # legacy lines still present
+    assert "Host web01" in result.output
+    assert "HostName 10.0.0.1" in result.output
+    assert "User lab" in result.output
+
+
+def test_ssh_config_emits_ephemeral_opts_under_every_host_block() -> None:
+    """Multi-machine render → opts repeat under each Host (one per block)."""
+    machines = [
+        _make_machine("web01", ip4="10.0.0.1/24"),
+        _make_machine("db01", ip4="10.0.0.2/24"),
+    ]
+    result = _invoke([], machines)
+
+    assert result.exit_code == 0, result.output
+    for opt_line in EPHEMERAL_OPT_LINES:
+        # one occurrence per machine
+        assert result.output.count(opt_line) == len(
+            machines
+        ), f"{opt_line!r} should appear {len(machines)}× in {result.output!r}"

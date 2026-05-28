@@ -217,10 +217,34 @@ lvlab ssh-config
 
 # Just one machine
 lvlab ssh-config salt.local
+
+# Keep strict host-key checking (no ephemeral-lab opts)
+lvlab ssh-config --strict-host-keys
 ```
 
 Output goes to stdout — redirect or append it to `~/.ssh/config`
 yourself. No file is mutated.
+
+### Ephemeral-lab options (default on)
+
+By default each `Host` block carries four options tuned for ephemeral
+lab VMs that recycle the NAT DHCP pool:
+
+```text
+StrictHostKeyChecking no
+UserKnownHostsFile /dev/null
+CheckHostIP no
+LogLevel ERROR
+```
+
+Without these, the same IP picking up a different host key on each
+lab cycle would trip `ssh`'s "REMOTE HOST IDENTIFICATION HAS CHANGED"
+prompt and poison `~/.ssh/known_hosts`. **Trade-off:** this loosens
+host-key verification for the hosts in the emitted snippet — it's
+appropriate for throwaway local-NAT lab VMs but not for anything you
+trust. Pass `--strict-host-keys` to omit them and get the legacy
+snippet (`Host` / `HostName` / `User` / `IdentityFile` only) if you'd
+rather keep strict checking.
 
 ## hosts
 

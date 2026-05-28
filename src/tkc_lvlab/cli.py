@@ -1882,21 +1882,61 @@ def _up_first_time_create(
 
 
 @app.command()
-def up(vm_name: str) -> None:
+def up(
+    vm_name: str = typer.Argument(
+        None,
+        help="The vm_name of the manifest machine to boot. Omit and pass --all to boot every machine.",
+    ),
+    boot_all: bool = typer.Option(
+        False,
+        "--all",
+        help="Boot every machine in the manifest sequentially (manifest order). Mutually exclusive with VM_NAME.",
+    ),
+) -> None:
     """Start a machine defined in the Lvlab.yml manifest.
 
     Creates the VM on first run (qcow2 disks -> cloud-init render ->
     ISO pack -> virt-install) or powers it on if it's shut off.
-    Already-running VMs are a no-op.
+    Already-running VMs are a no-op. With ``--all``, every machine in
+    the manifest is booted sequentially in manifest order.
     """
+    if boot_all and vm_name:
+        typer.echo("lvlab up: pass either a VM_NAME or --all, not both.")
+        raise typer.Exit(code=1)
+    if not boot_all and not vm_name:
+        typer.echo("lvlab up: specify a VM_NAME, or pass --all to boot every machine.")
+        raise typer.Exit(code=1)
+
     config = _load_config()
     environment, images, config_defaults, machines = config.as_tuple()
+
+    if boot_all:
+        if not machines:
+            typer.echo("lvlab up --all: no machines in manifest.")
+            return
+        for machine_config in machines:
+            _up_one(machine_config, environment, images, config_defaults, machines)
+        return
 
     machine_config = config.get_machine(vm_name)
     if not machine_config:
         logger.error("Machine %s not found in manifest.", vm_name)
         return
+    _up_one(machine_config, environment, images, config_defaults, machines)
 
+
+def _up_one(
+    machine_config: dict,
+    environment: dict,
+    images: dict,
+    config_defaults: dict,
+    machines: list[dict],
+) -> None:
+    """Boot one manifest machine — create on first run, power-on otherwise.
+
+    The body of :func:`up` factored out so the single-VM and the
+    ``--all`` paths share one implementation.
+    """
     machine = Machine(
         machine_config, environment, config_defaults, networks=_host_networks()
     )

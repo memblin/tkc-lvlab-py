@@ -761,13 +761,17 @@ class Machine:
                     f"{iface.get('name', '<unnamed>')!r}. "
                     f"Valid values: {', '.join(NETWORK_TYPES)}."
                 )
-            if network_type in USER_MODE_NETWORK_TYPES and iface.get("ip4"):
+            if network_type in USER_MODE_NETWORK_TYPES and (
+                iface.get("ip4") or iface.get("ip6")
+            ):
+                static_field = "ip4" if iface.get("ip4") else "ip6"
                 raise ValueError(
                     f"Interface {iface.get('name', '<unnamed>')!r} declares "
                     f"network_type={network_type!r} together with a static "
-                    f"ip4 ({iface['ip4']!r}). User-mode networking "
-                    f"(SLIRP/passt) does not honour static IPs — remove the "
-                    f"ip4 field or switch to network_type='network'."
+                    f"{static_field} ({iface[static_field]!r}). User-mode "
+                    f"networking (SLIRP/passt) does not honour static IPs — "
+                    f"remove the {static_field} field or switch to "
+                    f"network_type='network'."
                 )
 
         # Apply disk defaults

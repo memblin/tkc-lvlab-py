@@ -62,6 +62,7 @@ from ..utils.network import (
     generate_mac,
     get_network_info,
     resolve_network_settings,
+    resolve_network_settings6,
     validate_static_ip,
 )
 from ..utils.osinfo import OsInfoLookupError, resolve_os_variant
@@ -98,9 +99,13 @@ from ..utils.virsh import VirshError, run_virsh, vm_exists
 _SYSTEM_URI = "qemu:///system"
 DEFAULT_NETWORK = "default"
 DEFAULT_NETMASK = "24"
-# Values for ``--ip4`` that mean "no static IP — use DHCP", equivalent to
-# omitting the flag. None of these are valid IPv4 addresses, so there's no
-# ambiguity with a real address (issue #105).
+# Default IPv6 prefix length appended to a bare ``--ip6`` address that
+# lacks a ``/CIDR`` suffix. /64 is the universal lab-network default —
+# the same convention libvirt's dual-stack examples use (#137).
+DEFAULT_PREFIX6 = "64"
+# Values for ``--ip4`` and ``--ip6`` that mean "no static IP — use DHCP",
+# equivalent to omitting the flag. None of these are valid IP addresses,
+# so there's no ambiguity with a real address (issue #105).
 _DHCP_SENTINELS = frozenset({"dhcp", "default", "auto"})
 DEFAULT_DISK_SIZE = "35G"
 DEFAULT_CPU = "2"
@@ -202,7 +207,56 @@ def parse_ip4_option(value: str, default_network: str) -> tuple[str, str | None]
     # tokens stay on the static path so a numeric typo still gets the clean
     # "not a valid IPv4 address" error rather than a confusing network lookup
     # (issue #105 / #136).
-    if not re.fullmatch(r"[0-9.]+(/[0-9]+)?", raw_ip):
+    if not re.fullmatch(r"[\d.]+(/\d+)?", raw_ip):
+        return raw_ip, None
+    return default_network, raw_ip
+
+
+def parse_ip6_option(value: str, default_network: str) -> tuple[str, str | None]:
+    """IPv6 sibling of :func:`parse_ip4_option`.
+
+    Mirrors every shape ``parse_ip4_option`` accepts, just with an IPv6
+    IP-ish heuristic (hex digits + colons + optional ``/CIDR``):
+
+    - ``ADDR`` (e.g. ``2001:db8::5``) → static v6 on ``default_network``.
+    - ``NETWORK,ADDR`` → static v6 on a named network.
+    - ``dhcp`` / ``default`` / ``auto`` (case-insensitive) → DHCPv6/SLAAC
+        on ``default_network``, same as omitting ``--ip6``.
+    - Bare network name (e.g. ``--ip6 vlan10``) → DHCPv6/SLAAC on that
+        network.
+
+    Args:
+        value: The raw value from ``--ip6``.
+        default_network: Network to assume when ``value`` is bare.
+
+    Returns:
+        ``(network_name, raw_ip)`` where ``raw_ip`` is ``None`` for the
+        DHCPv6/SLAAC paths.
+
+    Raises:
+        ValueError: ``value`` has a comma but either side is empty.
+    """
+    if "," in value:
+        network, _, raw_ip = value.partition(",")
+        network = network.strip()
+        raw_ip = raw_ip.strip()
+        if not network or not raw_ip:
+            raise ValueError(
+                f"Invalid --ip6 value '{value}'. Expected ADDR or NETWORK,ADDR."
+            )
+        if raw_ip.lower() in _DHCP_SENTINELS:
+            return network, None
+        return network, raw_ip
+    raw_ip = value.strip()
+    if raw_ip.lower() in _DHCP_SENTINELS:
+        return default_network, None
+    # A bare token that isn't v6-ish (only hex digits / colons, optional
+    # ``/CIDR``) is treated as a network name → SLAAC/DHCPv6 on it. The
+    # IP-ish gate parallels the v4 path: a bare token that looks like an
+    # address stays on the static path so a malformed v6 typo still hits
+    # the clean ``not a valid IPv6 address`` error rather than a
+    # confusing network lookup.
+    if not re.fullmatch(r"[\da-fA-F:]+(/\d+)?", raw_ip):
         return raw_ip, None
     return default_network, raw_ip
 
@@ -419,6 +473,13 @@ class _CreateVmContext:  # pylint: disable=too-many-instance-attributes
     # (#138 §4). When set, it is written verbatim and the structured one-off
     # template is skipped. ``None`` means "use the structured template".
     user_data_override: str | None = None
+    # IPv6 dual-stack (#137). All v6 fields are ``None`` / empty list when
+    # the run is v4-only. ``vm_ip6`` is the resolved CIDR static address;
+    # ``gateway6`` and ``dns_servers6`` come from the network's v6 settings
+    # (NAT self-derives, bridge requires explicit ``--gateway6``/``--dns6``).
+    vm_ip6: str | None = None
+    gateway6: str | None = None
+    dns_servers6: list[str] = field(default_factory=list)
 
 
 def _resolve_network_and_ip(
@@ -462,6 +523,134 @@ def _resolve_static_vm_ip(
     return vm_ip
 
 
+def _resolve_v6_settings(
+    *,
+    ip6: str | None,
+    network_name: str | None,
+    config_default_network: str | None,
+    resolved_network: str,
+    network_info: LibvirtNetworkInfo,
+    prefix6: str,
+    default_dns6: list[str] | None,
+    default_gateway6: str | None,
+    default_search: list[str] | None,
+) -> tuple[str | None, str | None, list[str]]:
+    """Resolve the v6 leg of a (potentially dual-stack) createvm run.
+
+    The v6 path is independent of v4 — it may target a different libvirt
+    network — but the common case is a dual-stack manifest that shares
+    one network for both families, in which case the v4 ``network_info``
+    is reused without re-probing libvirt.
+
+    Args:
+        ip6: Raw ``--ip6`` flag value, or ``None`` when the run is v4-only.
+        network_name: Explicit ``--network`` value, used when ``--ip6``
+            doesn't include its own ``NETWORK,`` prefix.
+        config_default_network: Layered-config default network name.
+        resolved_network: The network already resolved by the v4 path —
+            lets us reuse ``network_info`` when v6 lands on the same one.
+        network_info: The v4 path's :class:`LibvirtNetworkInfo`. Reused
+            verbatim when ``ip6`` targets the same network.
+        prefix6: Default IPv6 prefix length appended to a bare static v6.
+        default_dns6: ``--dns6`` value, parsed to a list (or ``None``).
+        default_gateway6: ``--gateway6`` value (or ``None``).
+        default_search: Reused for the v6 search-domain pass through.
+
+    Returns:
+        ``(vm_ip6, gateway6, dns_servers6)``. A SLAAC/DHCPv6 result
+        comes back as ``(None, None, [])`` so the network-config render
+        leaves the v6 stanza alone and dhcp6 stays enabled.
+
+    Raises:
+        ValueError: Static ``--ip6`` on a bridge network without both
+            ``--gateway6`` and ``--dns6``, OR an unparseable static
+            address (chained from :class:`ValueError` raised by
+            :func:`_resolve_static_vm_ip6`).
+        LibvirtNetworkError: ``resolve_network_settings6`` policy
+            rejection (e.g. NAT network with no v6 gateway in its XML).
+    """
+    if ip6 is None:
+        return None, None, []
+    resolved_network6, raw_ip6 = parse_ip6_option(
+        ip6, network_name or config_default_network or DEFAULT_NETWORK
+    )
+    network_info6 = (
+        network_info
+        if resolved_network6 == resolved_network
+        else get_network_info(_SYSTEM_URI, resolved_network6)
+    )
+    # ``networks:`` entries are v4-only today; v6 defaults come from
+    # ``--gateway6``/``--dns6``. Per-network v6 defaults under
+    # ``networks[<name>].gateway6``/``.dns6`` are a tracked enhancement,
+    # not in this first cut.
+    if (
+        raw_ip6 is not None
+        and network_info6.forward_mode.lower() == "bridge"
+        and not (default_gateway6 and default_dns6)
+    ):
+        raise ValueError(
+            f"Network '{resolved_network6}' is a bridge; a static --ip6 "
+            "needs --gateway6 <addr> and --dns6 <addr[,addr]> (no "
+            "'networks:' entry covers v6 yet). Or use "
+            f"'--ip6 {resolved_network6}' for SLAAC/DHCPv6 on it."
+        )
+    dns_servers6, gateway6, _ = resolve_network_settings6(
+        network_info6,
+        default_dns6=default_dns6,
+        default_gateway6=default_gateway6,
+        default_search=default_search,
+    )
+    vm_ip6 = _resolve_static_vm_ip6(
+        raw_ip=raw_ip6, prefix6=prefix6, network_info=network_info6
+    )
+    # An ``--ip6`` that resolved to SLAAC/DHCPv6 (no static address)
+    # should NOT inject v6 gateway/DNS into the static render path —
+    # cloud-init's network-config leaves dhcp6 enabled and the
+    # router-advertised values take effect at runtime.
+    if vm_ip6 is None:
+        return None, None, []
+    return vm_ip6, gateway6, list(dns_servers6)
+
+
+def _resolve_static_vm_ip6(
+    *, raw_ip: str | None, prefix6: str, network_info: LibvirtNetworkInfo
+) -> str | None:
+    """IPv6 sibling of :func:`_resolve_static_vm_ip`.
+
+    A ``raw_ip`` of ``None`` means SLAAC/DHCPv6. A non-``None`` value
+    gets a ``/prefix6`` appended when it lacks one and is then validated
+    by :func:`validate_static_ip` (dual-stack-aware: routes to v6 subnet
+    + v6 DHCP range based on the address family).
+
+    Args:
+        raw_ip: Bare IPv6 address (with or without ``/CIDR``), or
+            ``None`` for SLAAC/DHCPv6.
+        prefix6: Default prefix length string (e.g. ``"64"``).
+        network_info: A populated :class:`LibvirtNetworkInfo`.
+
+    Returns:
+        The CIDR string ready for the cloud-init render, or ``None`` for
+        the SLAAC/DHCPv6 path.
+
+    Raises:
+        ValueError: ``raw_ip`` is not a parseable IPv6 address, or it
+            collides with the network's static-IP policy.
+    """
+    if raw_ip is None:
+        return None
+    vm_ip = raw_ip if "/" in raw_ip else f"{raw_ip}/{prefix6}"
+    try:
+        ipaddress.IPv6Interface(vm_ip)
+    except ValueError as exc:
+        raise ValueError(
+            f"--ip6 value {raw_ip!r} is not a valid IPv6 address. Pass an "
+            "address like 2001:db8::5 (or NETWORK,2001:db8::5), or use "
+            "--ip6 dhcp (or omit --ip6) for SLAAC/DHCPv6."
+        ) from exc
+    validate_static_ip(vm_ip, network_info)
+    return vm_ip
+
+
 def _resolve_authorized_keys(public_key: Path | None) -> list[str]:
     """Discover default SSH keys, append ``--public-key``, and dedupe.
 
@@ -492,6 +681,10 @@ def _build_createvm_context(
     default_vm_username: str | None = None,
     runcmd: list[str] | None = None,
     user_data: dict[str, Any] | None = None,
+    ip6: str | None = None,
+    prefix6: str = DEFAULT_PREFIX6,
+    default_dns6: list[str] | None = None,
+    default_gateway6: str | None = None,
 ) -> _CreateVmContext:
     """Resolve image, network, addressing, and credentials.
 
@@ -594,6 +787,18 @@ def _build_createvm_context(
         raw_ip=raw_ip, netmask=netmask, network_info=network_info
     )
 
+    vm_ip6, gateway6, dns_servers6 = _resolve_v6_settings(
+        ip6=ip6,
+        network_name=network_name,
+        config_default_network=config_default_network,
+        resolved_network=resolved_network,
+        network_info=network_info,
+        prefix6=prefix6,
+        default_dns6=default_dns6,
+        default_gateway6=default_gateway6,
+        default_search=default_search,
+    )
+
     memory_mib = parse_memory_to_mib(memory)
     password_plain = generate_password_phrase()
     password_hash = hash_password_sha512(password_plain)
@@ -644,6 +849,9 @@ def _build_createvm_context(
         authorized_keys=authorized_keys,
         runcmd=list(runcmd or []),
         user_data_override=user_data_override,
+        vm_ip6=vm_ip6,
+        gateway6=gateway6,
+        dns_servers6=dns_servers6,
     )
 
 
@@ -700,6 +908,15 @@ def _render_cloud_init(*, vm_dir: Path, vm_name: str, ctx: _CreateVmContext) -> 
         iface["ip4"] = ctx.vm_ip
         iface["ip4gw"] = ctx.gateway
         nameservers = {"addresses": ctx.dns_servers, "search": ctx.search_domains}
+    # IPv6 dual-stack (#137): a separate static v6 also feeds the same
+    # interface dict. netplan accepts a mixed-family ``addresses`` list,
+    # so v6 DNS appends onto the v4 DNS list.
+    if ctx.vm_ip6 is not None:
+        iface["ip6"] = ctx.vm_ip6
+        iface["ip6gw"] = ctx.gateway6
+        existing_addresses = list(nameservers.get("addresses", []))
+        nameservers["addresses"] = existing_addresses + list(ctx.dns_servers6)
+        nameservers.setdefault("search", ctx.search_domains)
 
     network_config = NetworkConfig(ctx.entry.network_version, [iface], nameservers)
 
@@ -1199,6 +1416,31 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         "--search-domain",
         help="Comma-separated DNS search domain(s) (honored on NAT and bridge).",
     ),
+    ip6: str | None = typer.Option(
+        None,
+        "--ip6",
+        help=(
+            "Static IPv6 address (dual-stack with --ip4): ADDR or NETWORK,ADDR. "
+            "Use 'dhcp' (or 'default'/'auto'), or omit the flag, for "
+            "SLAAC/DHCPv6."
+        ),
+    ),
+    gateway6: str | None = typer.Option(
+        None,
+        "--gateway6",
+        help=(
+            "IPv6 gateway for a static --ip6 on a bridge network. Required with "
+            "--dns6 for a bridge; ignored for NAT (self-derived)."
+        ),
+    ),
+    dns6: str | None = typer.Option(
+        None,
+        "--dns6",
+        help=(
+            "Comma-separated IPv6 DNS server(s) for a static --ip6 on a bridge "
+            "network. Required with --gateway6 for a bridge; ignored for NAT."
+        ),
+    ),
     public_key: Path | None = typer.Option(
         None,
         "--public-key",
@@ -1277,6 +1519,7 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     _ensure_storage_root_writable(storage_root)
 
     dns_servers = [s.strip() for s in dns.split(",") if s.strip()] if dns else None
+    dns_servers6 = [s.strip() for s in dns6.split(",") if s.strip()] if dns6 else None
     search_domains = (
         [s.strip() for s in search_domain.split(",") if s.strip()]
         if search_domain
@@ -1301,6 +1544,9 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
             default_vm_username=host_config.default_vm_username,
             runcmd=host_config.runcmd,
             user_data=host_config.user_data,
+            ip6=ip6,
+            default_dns6=dns_servers6,
+            default_gateway6=gateway6,
         )
     except (
         LibvirtNetworkError,

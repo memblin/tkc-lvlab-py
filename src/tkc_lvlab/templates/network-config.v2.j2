@@ -28,6 +28,13 @@
 # Per-interface MAC matching also disambiguates multiple NICs (the old
 # driver match could not), though multi-NIC manifests are not yet exercised
 # end-to-end.
+#
+# IPv6 (#137): when ``iface.ip6`` is set, the stanza emits a second
+# ``addresses`` entry and a ``::/0`` route via ``iface.ip6gw``. netplan
+# accepts mixed-family addresses and per-family routes — dual-stack
+# guests get both. ``dhcp4``/``dhcp6`` are switched off only for the
+# families that have a static address, so a v4-only manifest can still
+# accept SLAAC/DHCPv6 and a v6-only manifest can still accept DHCPv4.
 network:
   version: {{ config.network_version.value }}
   ethernets:
@@ -43,14 +50,27 @@ network:
       {%- endif %}
       {%- if iface.ip4 %}
       dhcp4: false
-      dhcp6: false
       {%- else %}
       dhcp4: true
+      {%- endif %}
+      {%- if iface.ip4 or iface.ip6 %}
+      # dhcp6 is turned off when EITHER family has a static address. The
+      # historical v4-only behaviour (always disabling dhcp6 on a static
+      # interface) is preserved as a defensive measure — netplan's DHCPv6
+      # client hangs on some distros, and operators on v4-only manifests
+      # have never opted into SLAAC/DHCPv6 implicitly.
+      dhcp6: false
+      {%- else %}
       dhcp6: true
       {%- endif %}
-      {%- if iface.ip4 %}
+      {%- if iface.ip4 or iface.ip6 %}
       addresses:
+        {%- if iface.ip4 %}
         - {{ iface.ip4 }}
+        {%- endif %}
+        {%- if iface.ip6 %}
+        - {{ iface.ip6 }}
+        {%- endif %}
       {%- set ns_addresses = config.nameservers.addresses if config.nameservers.addresses is defined else [] %}
       {%- set ns_search = config.nameservers.search if config.nameservers.search is defined else [] %}
       {%- if ns_addresses | length > 0 or ns_search | length > 0 %}
@@ -69,8 +89,14 @@ network:
         {%- endif %}
       {%- endif %}
       routes:
+        {%- if iface.ip4 %}
         - to: 0.0.0.0/0
           via: {{ iface.ip4gw }}
+        {%- endif %}
+        {%- if iface.ip6 %}
+        - to: ::/0
+          via: {{ iface.ip6gw }}
+        {%- endif %}
       {%- endif %}
    {%- endfor %}
 

@@ -88,6 +88,45 @@ OPEN_NETWORK_XML = """\
 </network>
 """
 
+# Dual-stack NAT network: v4 + v6 ``<ip>`` elements, each with its own
+# ``<dhcp>`` range. libvirt uses ``family='ipv6'`` and ``prefix='N'``
+# (no netmask attribute) for the v6 ``<ip>`` element; v4 omits the family
+# attribute and uses ``netmask``. This is the realistic shape we expect
+# from a libvirt 8.x+ network defined for dual-stack lab use (#137).
+DUAL_STACK_NAT_XML = """\
+<network>
+  <name>default-dualstack</name>
+  <forward mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+  </forward>
+  <bridge name='virbr1' stp='on' delay='0'/>
+  <mac address='52:54:00:dd:ee:ff'/>
+  <ip address='192.168.130.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.130.2' end='192.168.130.254'/>
+    </dhcp>
+  </ip>
+  <ip family='ipv6' address='2001:db8:130::1' prefix='64'>
+    <dhcp>
+      <range start='2001:db8:130::100' end='2001:db8:130::1ff'/>
+    </dhcp>
+  </ip>
+</network>
+"""
+
+# v6-only network (NAT). Same shape but no v4 ``<ip>`` element. Used to
+# confirm v4 fields stay ``None`` when only v6 is configured.
+V6_ONLY_NAT_XML = """\
+<network>
+  <name>v6only</name>
+  <forward mode='nat'/>
+  <bridge name='virbr-v6'/>
+  <ip family='ipv6' address='fd00:cafe::1' prefix='64'/>
+</network>
+"""
+
 
 def _fake_completed(stdout: str) -> subprocess.CompletedProcess[str]:
     """Return a CompletedProcess shaped like run_virsh's success return."""
@@ -169,6 +208,205 @@ def test_get_network_info_malformed_xml_translates_to_libvirt_network_error() ->
     ):
         with pytest.raises(LibvirtNetworkError, match="Invalid net-dumpxml response"):
             get_network_info("qemu:///system", "default")
+
+
+# ---------------------------------------------------------------------------
+# get_network_info — IPv6 parsing (#137 dual-stack)
+# ---------------------------------------------------------------------------
+
+
+def test_get_network_info_parses_dual_stack_nat() -> None:
+    """A dual-stack NAT network parses BOTH v4 and v6 fields independently.
+
+    libvirt emits two ``<ip>`` elements — one with no ``family`` (v4,
+    ``netmask``) and one with ``family='ipv6'`` (``prefix``). Each may
+    carry its own ``<dhcp>`` range. The parser must not let v6 overwrite
+    v4 fields or vice versa.
+    """
+    with mock.patch.object(
+        net_mod, "run_virsh", return_value=_fake_completed(DUAL_STACK_NAT_XML)
+    ):
+        info = get_network_info("qemu:///system", "default-dualstack")
+
+    # v4 side unchanged.
+    assert info.gateway_ip == "192.168.130.1"
+    assert info.netmask == "255.255.255.0"
+    assert info.dhcp_start == "192.168.130.2"
+    assert info.dhcp_end == "192.168.130.254"
+    # v6 side populated.
+    assert info.gateway_ip6 == "2001:db8:130::1"
+    assert info.prefix6 == 64
+    assert info.dhcp6_start == "2001:db8:130::100"
+    assert info.dhcp6_end == "2001:db8:130::1ff"
+
+
+def test_get_network_info_parses_v6_only_network() -> None:
+    """A v6-only network leaves v4 fields ``None`` but populates v6 fields.
+
+    Even though lvlab's #137 first-cut scope is dual-stack only, the
+    parser layer must not crash on v6-only networks (operators may use
+    them with non-lvlab tooling on the same hypervisor).
+    """
+    with mock.patch.object(
+        net_mod, "run_virsh", return_value=_fake_completed(V6_ONLY_NAT_XML)
+    ):
+        info = get_network_info("qemu:///system", "v6only")
+
+    assert info.gateway_ip is None
+    assert info.netmask is None
+    assert info.gateway_ip6 == "fd00:cafe::1"
+    assert info.prefix6 == 64
+    assert info.dhcp6_start is None
+    assert info.dhcp6_end is None
+
+
+def test_get_network_info_v4_only_leaves_v6_fields_none() -> None:
+    """A v4-only network (the existing default) parses with v6 fields ``None``.
+
+    Regression guard for the dual-stack work: extending
+    ``LibvirtNetworkInfo`` with v6 fields must not change behavior for
+    callers that only see v4 networks today.
+    """
+    with mock.patch.object(
+        net_mod, "run_virsh", return_value=_fake_completed(NAT_NETWORK_XML)
+    ):
+        info = get_network_info("qemu:///system", "default")
+
+    assert info.gateway_ip == "192.168.122.1"  # v4 still parses
+    assert info.gateway_ip6 is None
+    assert info.prefix6 is None
+    assert info.dhcp6_start is None
+    assert info.dhcp6_end is None
+
+
+# ---------------------------------------------------------------------------
+# LibvirtNetworkInfo.subnet6
+# ---------------------------------------------------------------------------
+
+
+def test_subnet6_inferred_from_gateway_and_prefix() -> None:
+    """subnet6 is an IPv6Network derived from gateway_ip6 + prefix6, strict=False."""
+    info = LibvirtNetworkInfo(
+        name="default-dualstack",
+        forward_mode="nat",
+        gateway_ip="192.168.130.1",
+        netmask="255.255.255.0",
+        dhcp_start=None,
+        dhcp_end=None,
+        gateway_ip6="2001:db8:130::1",
+        prefix6=64,
+        dhcp6_start=None,
+        dhcp6_end=None,
+    )
+    assert info.subnet6 == ipaddress.IPv6Network("2001:db8:130::/64")
+
+
+def test_subnet6_is_none_when_v6_gateway_missing() -> None:
+    """Without a v6 gateway, subnet6 returns None (mirrors subnet's behavior)."""
+    info = LibvirtNetworkInfo(
+        name="v4only",
+        forward_mode="nat",
+        gateway_ip="192.168.122.1",
+        netmask="255.255.255.0",
+        dhcp_start=None,
+        dhcp_end=None,
+        gateway_ip6=None,
+        prefix6=None,
+        dhcp6_start=None,
+        dhcp6_end=None,
+    )
+    assert info.subnet6 is None
+
+
+def test_subnet6_is_none_when_prefix_missing() -> None:
+    """A v6 gateway without a prefix can't infer a subnet — return None."""
+    info = LibvirtNetworkInfo(
+        name="weird",
+        forward_mode="nat",
+        gateway_ip=None,
+        netmask=None,
+        dhcp_start=None,
+        dhcp_end=None,
+        gateway_ip6="2001:db8::1",
+        prefix6=None,
+        dhcp6_start=None,
+        dhcp6_end=None,
+    )
+    assert info.subnet6 is None
+
+
+# ---------------------------------------------------------------------------
+# validate_static_ip — IPv6 routing (#137)
+# ---------------------------------------------------------------------------
+
+
+def _dualstack_default() -> LibvirtNetworkInfo:
+    """Build a NAT dual-stack info object reused across v6 validation tests."""
+    return LibvirtNetworkInfo(
+        name="default-dualstack",
+        forward_mode="nat",
+        gateway_ip="192.168.130.1",
+        netmask="255.255.255.0",
+        dhcp_start="192.168.130.2",
+        dhcp_end="192.168.130.254",
+        gateway_ip6="2001:db8:130::1",
+        prefix6=64,
+        dhcp6_start="2001:db8:130::100",
+        dhcp6_end="2001:db8:130::1ff",
+    )
+
+
+def test_validate_static_ip_accepts_v6_in_subnet_outside_dhcp() -> None:
+    """A v6 address inside the v6 subnet but outside the v6 DHCP range is accepted."""
+    info = _dualstack_default()
+    # ::1 is the gateway — outside DHCP range, inside the /64.
+    validate_static_ip("2001:db8:130::1", info)  # Must not raise.
+    # ::2 is below the dhcp6 range start (::100).
+    validate_static_ip("2001:db8:130::2", info)  # Must not raise.
+
+
+def test_validate_static_ip_rejects_v6_inside_dhcp6_range() -> None:
+    """A v6 static IP inside the v6 DHCP range races libvirt's dnsmasq6 — rejected."""
+    info = _dualstack_default()
+    with pytest.raises(ValueError, match="DHCP range"):
+        validate_static_ip("2001:db8:130::100", info)  # boundary
+    with pytest.raises(ValueError, match="DHCP range"):
+        validate_static_ip("2001:db8:130::150", info)  # mid
+    with pytest.raises(ValueError, match="DHCP range"):
+        validate_static_ip("2001:db8:130::1ff", info)  # boundary
+
+
+def test_validate_static_ip_rejects_v6_outside_subnet() -> None:
+    """A v6 address outside the network's /64 is rejected, ignoring v4 fields entirely."""
+    info = _dualstack_default()
+    with pytest.raises(ValueError, match="not in subnet"):
+        validate_static_ip("2001:db8:999::5", info)
+
+
+def test_validate_static_ip_v4_still_uses_v4_subnet_on_dual_stack() -> None:
+    """A v4 address validated against a dual-stack network checks the v4 side only.
+
+    Regression guard: the dual-stack extension must not let v6 fields
+    interfere with v4 validation. A v4 address far from the v6 subnet
+    must still validate against the v4 subnet.
+    """
+    info = _dualstack_default()
+    validate_static_ip("192.168.130.1", info)  # v4 gateway, must not raise
+    with pytest.raises(ValueError, match="DHCP range"):
+        validate_static_ip("192.168.130.50", info)  # in v4 dhcp range
+
+
+def test_validate_static_ip_v6_with_cidr_suffix() -> None:
+    """A v6 address with a /prefix suffix still validates — strip the CIDR first."""
+    info = _dualstack_default()
+    validate_static_ip("2001:db8:130::1/64", info)  # Must not raise.
+
+
+def test_validate_static_ip_v6_skips_checks_when_v6_subnet_unknown() -> None:
+    """A v6 address validated against a v4-only network skips checks (no v6 subnet)."""
+    info = _nat_default()  # v4-only fixture
+    # Operator picked a v6 address; we have no v6 info — accept it.
+    validate_static_ip("2001:db8::5", info)  # Must not raise.
 
 
 # ---------------------------------------------------------------------------

@@ -355,6 +355,97 @@ def test_init_no_networks_leaves_interface_and_nameservers_untouched() -> None:
 
 
 # ---------------------------------------------------------------------------
+# __init__ — IPv6 dual-stack (#137)
+# ---------------------------------------------------------------------------
+
+
+def test_init_preserves_dual_stack_interface_fields() -> None:
+    """A manifest interface with both ip4/ip4gw and ip6/ip6gw round-trips intact.
+
+    Machine.__init__ does field-by-field merge of defaults + per-machine
+    interface dicts. The IPv6 fields must travel through unmodified so
+    the cloud-init render pipeline sees them.
+    """
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [
+            {
+                "name": "eth0",
+                "network": "default-dualstack",
+                "ip4": "192.168.130.50/24",
+                "ip4gw": "192.168.130.1",
+                "ip6": "2001:db8:130::50/64",
+                "ip6gw": "2001:db8:130::1",
+            }
+        ],
+    }
+    m = Machine(machine_cfg, {"name": "lab"}, config_defaults)
+    iface = m.interfaces[0]
+    assert iface["ip4"] == "192.168.130.50/24"
+    assert iface["ip4gw"] == "192.168.130.1"
+    assert iface["ip6"] == "2001:db8:130::50/64"
+    assert iface["ip6gw"] == "2001:db8:130::1"
+
+
+def test_init_merges_ip6_defaults_into_interface() -> None:
+    """An ``interfaces.ip6gw`` declared at config_defaults level merges into
+    each per-machine interface that lacks one.
+
+    Mirrors the existing pattern where ``config_defaults['interfaces']``
+    seeds per-interface defaults. Lets a manifest say "every machine on
+    this network uses this v6 gateway" without repeating per-VM.
+    """
+    config_defaults = {
+        "interfaces": {
+            "nameservers": {},
+            "ip6gw": "2001:db8:130::1",
+        }
+    }
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [
+            {
+                "name": "eth0",
+                "ip6": "2001:db8:130::50/64",
+            }
+        ],
+    }
+    m = Machine(machine_cfg, {"name": "lab"}, config_defaults)
+    assert m.interfaces[0]["ip6gw"] == "2001:db8:130::1"
+
+
+def test_init_rejects_user_network_with_static_ip6() -> None:
+    """User-mode networking + ip6 is contradictory; refuse at __init__ time.
+
+    SLIRP/passt don't honour static IPv6 any more than they honour static
+    IPv4 — surface the misconfiguration loudly before any state is created.
+    """
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [
+            {"name": "eth0", "network_type": "user", "ip6": "2001:db8::5/64"}
+        ],
+    }
+    with pytest.raises(ValueError, match="does not honour static IPs"):
+        Machine(machine_cfg, {"name": "lab"}, config_defaults)
+
+
+def test_init_rejects_passt_network_with_static_ip6() -> None:
+    """Same invariant for passt: static v6 is rejected."""
+    config_defaults = _minimal_config_defaults()
+    machine_cfg = {
+        "vm_name": "web01",
+        "interfaces": [
+            {"name": "eth0", "network_type": "passt", "ip6": "2001:db8::5/64"}
+        ],
+    }
+    with pytest.raises(ValueError, match="does not honour static IPs"):
+        Machine(machine_cfg, {"name": "lab"}, config_defaults)
+
+
+# ---------------------------------------------------------------------------
 # _virt_install_network_arg — Phase 12 virt-install argument assembly
 # ---------------------------------------------------------------------------
 

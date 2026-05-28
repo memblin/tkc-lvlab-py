@@ -1116,3 +1116,222 @@ def test_no_color_flag_disables_color(monkeypatch: pytest.MonkeyPatch) -> None:
         assert output.color_disabled() is True
     finally:
         output.set_no_color(False)
+
+
+# ---------------------------------------------------------------------------
+# IPv6 dual-stack (#137)
+# ---------------------------------------------------------------------------
+
+
+def _dualstack_nat_network_info() -> LibvirtNetworkInfo:
+    """A NAT network with both v4 and v6 ranges (libvirt dual-stack default)."""
+    return LibvirtNetworkInfo(
+        name="default",
+        forward_mode="nat",
+        gateway_ip="192.168.122.1",
+        netmask="255.255.255.0",
+        dhcp_start="192.168.122.2",
+        dhcp_end="192.168.122.254",
+        gateway_ip6="2001:db8:122::1",
+        prefix6=64,
+        dhcp6_start="2001:db8:122::100",
+        dhcp6_end="2001:db8:122::1ff",
+    )
+
+
+def test_parse_ip6_bare_uses_default_network() -> None:
+    """A bare v6 address uses the default network — mirrors parse_ip4_option."""
+    from tkc_lvlab.scripts.createvm import parse_ip6_option
+
+    assert parse_ip6_option("2001:db8::5", "default") == ("default", "2001:db8::5")
+
+
+def test_parse_ip6_network_comma_ip() -> None:
+    """NETWORK,IP form splits into network + IP for v6 too."""
+    from tkc_lvlab.scripts.createvm import parse_ip6_option
+
+    assert parse_ip6_option("vlan10,2001:db8:10::5", "default") == (
+        "vlan10",
+        "2001:db8:10::5",
+    )
+
+
+@pytest.mark.parametrize("sentinel", ["dhcp", "default", "auto"])
+def test_parse_ip6_dhcp_sentinel_means_dhcp(sentinel: str) -> None:
+    """DHCP sentinels in --ip6 mean SLAAC/DHCPv6 — raw IP comes back as None."""
+    from tkc_lvlab.scripts.createvm import parse_ip6_option
+
+    assert parse_ip6_option(sentinel, "default") == ("default", None)
+
+
+def test_parse_ip6_bare_network_name_means_dhcp_on_that_network() -> None:
+    """``--ip6 vlan10`` selects vlan10 with SLAAC/DHCPv6 (no static)."""
+    from tkc_lvlab.scripts.createvm import parse_ip6_option
+
+    assert parse_ip6_option("vlan10", "default") == ("vlan10", None)
+
+
+def test_parse_ip6_rejects_empty_segments() -> None:
+    """Comma form with empty network or empty IP is rejected."""
+    from tkc_lvlab.scripts.createvm import parse_ip6_option
+
+    with pytest.raises(ValueError, match="Invalid --ip6"):
+        parse_ip6_option("vlan10,", "default")
+    with pytest.raises(ValueError, match="Invalid --ip6"):
+        parse_ip6_option(",2001:db8::5", "default")
+
+
+def test_ip6_renders_into_network_config(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """A --ip6 argument reaches the guest network-config as a v6 address + route."""
+    all_external_mocked["get_network_info"].return_value = _dualstack_nat_network_info()
+    result = _invoke(
+        ["testvm.local", "debian12", "--ip6", "2001:db8:122::50"], tmp_path
+    )
+    assert result.exit_code == 0, result.output
+    network_config = (tmp_path / "testvm.local" / "network-config").read_text()
+    assert "2001:db8:122::50/64" in network_config
+    # v6 default route via the network's v6 gateway.
+    assert "::/0" in network_config
+    assert "2001:db8:122::1" in network_config
+
+
+def test_ip6_dual_stack_renders_both_addresses(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """--ip4 + --ip6 together: both addresses + both gateways land in network-config."""
+    all_external_mocked["get_network_info"].return_value = _dualstack_nat_network_info()
+    result = _invoke(
+        [
+            "testvm.local",
+            "debian12",
+            "--ip4",
+            "192.168.122.50",
+            "--ip6",
+            "2001:db8:122::50",
+        ],
+        tmp_path,
+    )
+    assert result.exit_code == 0, result.output
+    network_config = (tmp_path / "testvm.local" / "network-config").read_text()
+    assert "192.168.122.50/24" in network_config
+    assert "2001:db8:122::50/64" in network_config
+    # Both default routes.
+    assert "0.0.0.0/0" in network_config
+    assert "::/0" in network_config
+
+
+def test_ip6_dhcp_sentinel_does_not_render_static(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """--ip6 dhcp leaves the dhcp6 path — no static v6 in network-config."""
+    all_external_mocked["get_network_info"].return_value = _dualstack_nat_network_info()
+    result = _invoke(["testvm.local", "debian12", "--ip6", "dhcp"], tmp_path)
+    assert result.exit_code == 0, result.output
+    network_config = (tmp_path / "testvm.local" / "network-config").read_text()
+    # No static v6 address rendered (only the dhcp6 path).
+    assert "2001:db8" not in network_config
+
+
+def test_ip6_in_dhcp6_range_errors(all_external_mocked: dict, tmp_path: Path) -> None:
+    """A static v6 inside the v6 DHCP range errors via validate_static_ip."""
+    all_external_mocked["get_network_info"].return_value = _dualstack_nat_network_info()
+
+    # Simulate the dual-stack-aware validator rejecting only the v6 boundary.
+    def _validate_side(vm_ip: str, _info: LibvirtNetworkInfo) -> None:
+        if ":" in vm_ip:  # v6
+            raise ValueError(
+                "IP address '2001:db8:122::100' falls within DHCP range "
+                "'2001:db8:122::100-2001:db8:122::1ff' for network 'default'."
+            )
+
+    all_external_mocked["validate_static_ip"].side_effect = _validate_side
+    result = _invoke(
+        ["testvm.local", "debian12", "--ip6", "2001:db8:122::100"], tmp_path
+    )
+    assert result.exit_code != 0
+    assert "DHCP range" in result.output
+
+
+def test_ip6_invalid_address_gives_clean_error(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """A malformed --ip6 value yields the createvm-shaped actionable error.
+
+    The value here is hex-and-colons only (so it passes the IP-ish gate
+    and stays on the static path) but has too many groups to be a valid
+    IPv6 address. Mirrors how ``--ip4 192.168.1.300`` reaches the v4
+    validator: parser-rejected, not network-name-treated.
+    """
+    all_external_mocked["get_network_info"].return_value = _dualstack_nat_network_info()
+    result = _invoke(
+        ["testvm.local", "debian12", "--ip6", "2001:db8::1:2:3:4:5:6:7"], tmp_path
+    )
+    assert result.exit_code != 0
+    out = result.output
+    # The createvm-shaped error names the flag and points at --ip6 dhcp.
+    assert "--ip6" in out
+    assert "dhcp" in out
+
+
+def test_ip6_on_bridge_without_gateway6_dns6_errors(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """Static --ip6 on a bridge requires --gateway6 + --dns6 (parallel to v4)."""
+    bridge_with_v6 = LibvirtNetworkInfo(
+        name="vlan10",
+        forward_mode="bridge",
+        gateway_ip=None,
+        netmask=None,
+        dhcp_start=None,
+        dhcp_end=None,
+        # Bridges typically have no libvirt-managed v6 gateway either —
+        # the operator picks it.
+        gateway_ip6=None,
+        prefix6=None,
+        dhcp6_start=None,
+        dhcp6_end=None,
+    )
+    all_external_mocked["get_network_info"].return_value = bridge_with_v6
+    result = _invoke(
+        ["testvm.local", "debian12", "--ip6", "vlan10,2001:db8:10::50"], tmp_path
+    )
+    assert result.exit_code != 0
+    assert "--gateway6" in result.output and "--dns6" in result.output
+
+
+def test_ip6_on_bridge_with_gateway6_dns6_passes_through(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """--gateway6/--dns6 supplied: a bridge static v6 is accepted and renders."""
+    bridge_with_v6 = LibvirtNetworkInfo(
+        name="vlan10",
+        forward_mode="bridge",
+        gateway_ip=None,
+        netmask=None,
+        dhcp_start=None,
+        dhcp_end=None,
+        gateway_ip6=None,
+        prefix6=None,
+        dhcp6_start=None,
+        dhcp6_end=None,
+    )
+    all_external_mocked["get_network_info"].return_value = bridge_with_v6
+    result = _invoke(
+        [
+            "testvm.local",
+            "debian12",
+            "--ip6",
+            "vlan10,2001:db8:10::50",
+            "--gateway6",
+            "2001:db8:10::1",
+            "--dns6",
+            "2001:db8:10::1",
+        ],
+        tmp_path,
+    )
+    assert result.exit_code == 0, result.output
+    network_config = (tmp_path / "testvm.local" / "network-config").read_text()
+    assert "2001:db8:10::50/64" in network_config
+    assert "2001:db8:10::1" in network_config  # gateway/DNS

@@ -519,6 +519,70 @@ machines:
         network_type: user
 ```
 
+## Dual-stack IPv4 + IPv6 (#137)
+
+When the libvirt network is configured for dual-stack
+(`<ip family='ipv6' …>` alongside the v4 `<ip>` element in
+`virsh net-dumpxml`), a guest can request both a v4 and a v6 static
+address on the same NIC. Both `createvm` and the manifest workflow accept
+this.
+
+**`createvm`** mirrors the `--ip4` shapes with `--ip6`:
+
+```bash
+# Static dual-stack on the default NAT network. /64 is appended if the
+# v6 lacks a CIDR; the v6 gateway and DNS come from the network XML.
+createvm web01.lab debian12 \
+    --ip4 192.168.122.50 \
+    --ip6 2001:db8:122::50
+
+# Bridge networks need both v4 AND v6 gateway/DNS supplied explicitly
+# (libvirt doesn't manage them).
+createvm web02.lab debian12 \
+    --network vlan10 \
+    --ip4 vlan10,100.64.10.50 --gateway 100.64.10.1 --dns 100.64.10.10 \
+    --ip6 vlan10,2001:db8:10::50 --gateway6 2001:db8:10::1 --dns6 2001:db8:10::1
+```
+
+`--ip6 dhcp` (or omitting the flag) leaves cloud-init with `dhcp6: true`
+so the guest accepts SLAAC / DHCPv6 from the network. `--ip6 vlan10`
+(bare network name) selects that network with SLAAC/DHCPv6, same as the
+v4 shape.
+
+**Manifest workflow** carries the same fields on the interface dict:
+
+```yaml
+machines:
+  - vm_name: dual01
+    hostname: dual01
+    os: debian12
+    interfaces:
+      - name: eth0
+        ip4: 192.168.122.50/24
+        ip4gw: 192.168.122.1
+        ip6: 2001:db8:122::50/64
+        ip6gw: 2001:db8:122::1
+    nameservers:
+      addresses: [192.168.122.1, 2001:db8:122::1]
+      search: [lab.local]
+```
+
+`nameservers.addresses` is a flat list — mix v4 and v6 freely; netplan
+and the v1 ENI renderer both accept it.
+
+**First-cut scope.** Dual-stack only — i.e. v4 + optionally v6. **v6-only
+guests** (no v4) are deliberately out of scope: lvlab's helper commands
+(`lvlab ssh`, `lvlab smoke`, `lvlab hosts`) all resolve VM IPs as v4
+today, so removing the v4 leg would leave them without a target. A
+v6-only guest can still boot — the render passes through — but the
+tooling around it expects a v4 address to exist.
+
+**Per-network v6 defaults under `networks:`** (i.e. a `gateway6` /
+`dns6` field on an entry in the layered host config's `networks:` map)
+are not in this cut. Bridges require the `--gateway6`/`--dns6` flags or
+v6 fields on every per-machine interface; a follow-up tracks adding the
+v6 keys to `networks:`.
+
 ## Where things live on disk
 
 Two paths are configurable in the manifest's `config_defaults`:

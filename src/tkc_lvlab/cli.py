@@ -1554,7 +1554,7 @@ def status() -> None:
     console.print()
 
 
-_DOCS_URL = "https://github.com/memblin/tkc-lvlab-py"
+_DOCS_URL = "https://memblin.github.io/tkc-lvlab-py/"
 
 
 def _render_no_manifest_landing() -> None:
@@ -1567,8 +1567,14 @@ def _render_no_manifest_landing() -> None:
     2. The built-in cloud-images table (same shape as the happy-path
         Images table, just with ``images=None`` so only built-ins land).
     3. A ``createvm`` pointer with a concrete usage hint for the
-        no-manifest one-off path.
-    4. A link to the project docs for the manifest-authoring workflow.
+        no-manifest one-off path. The example uses DHCP (no ``--ip4``)
+        so it works on the stock libvirt default network without
+        tripping the static-IP/DHCP-range validation — the libvirt
+        default's DHCP pool spans the entire host range, so any
+        hard-coded static address would either collide or require the
+        operator to narrow the pool first.
+    4. A link to the published mkdocs documentation for the
+        manifest-authoring workflow.
 
     Exits cleanly (returns to the caller, which returns to Typer with
     exit 0). A *malformed* manifest still routes through the strict
@@ -1584,7 +1590,13 @@ def _render_no_manifest_landing() -> None:
         "Need a one-off VM? Use [bold]createvm[/bold] — no manifest required:"
     )
     console.print()
-    console.print("    createvm web01.example debian13 --ip4 192.168.122.50")
+    console.print("    createvm web01.example debian13")
+    console.print()
+    console.print(
+        "(That uses the libvirt default network with DHCP. Pass "
+        "[bold]--ip4 <ADDR>[/bold] / [bold]--ip6 <ADDR>[/bold] for a "
+        "static address — see [bold]createvm --help[/bold].)"
+    )
     console.print()
     console.print(
         "For the manifest-driven workflow (multi-VM environments, snapshots, "

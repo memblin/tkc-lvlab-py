@@ -292,8 +292,8 @@ def test_status_no_manifest_renders_friendly_landing() -> None:
     assert "fedora44" in out
     # createvm pointer + a concrete usage hint.
     assert "createvm" in out
-    # Docs link so the manifest-authoring path is reachable.
-    assert "github.com/memblin/tkc-lvlab-py" in out
+    # Docs link → the published mkdocs site (not the source repo).
+    assert "memblin.github.io/tkc-lvlab-py" in out
     # Never touches the hypervisor — there's no environment to query.
     list_mock.assert_not_called()
 

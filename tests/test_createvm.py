@@ -27,6 +27,7 @@ All subprocess calls are intercepted; pytest never invokes a real binary.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -50,6 +51,20 @@ from tkc_lvlab.scripts.createvm import (
 )
 from tkc_lvlab.utils.network import LibvirtNetworkError, LibvirtNetworkInfo
 from tkc_lvlab.utils.requirements import DependencyError
+
+# Rich (Typer's error renderer) injects ANSI colour spans around literals
+# when the destination looks colour-capable — locally pytest usually runs
+# without TTY so they're absent, but CI's terminal detection often differs
+# and the codes split substring matches across boundaries (``Try `` in one
+# span, ``'createvm`` in another). Strip them before substring assertions
+# so the tests are terminal-agnostic.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Return ``text`` with all ANSI colour escape sequences stripped."""
+    return _ANSI_RE.sub("", text)
+
 
 _GIB = 1024**3
 
@@ -376,7 +391,7 @@ def test_missing_arguments_errors(all_external_mocked: dict, tmp_path: Path) -> 
     """
     result = _invoke([], tmp_path)
     assert result.exit_code != 0
-    out = result.output
+    out = _plain(result.output)
     assert "Missing required arguments" in out
     # The boxed format renders the message with the panel edge character
     # in front of it. Locking this in stops the regression to the plain
@@ -390,7 +405,7 @@ def test_half_positional_pair_errors(all_external_mocked: dict, tmp_path: Path) 
     """Only VM_NAME (no VM_DISTRO) errors with the boxed format too."""
     result = _invoke(["testvm.local"], tmp_path)
     assert result.exit_code != 0
-    out = result.output
+    out = _plain(result.output)
     assert "must be provided together" in out
     assert "Usage:" in out
     assert "╭─ Error" in out

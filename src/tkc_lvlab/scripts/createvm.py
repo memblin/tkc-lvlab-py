@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import click
 import typer
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
@@ -1493,10 +1494,15 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     has_vm_args = vm_name is not None or vm_distro is not None
     has_all_vm_args = vm_name is not None and vm_distro is not None
 
+    # Argument-shape errors render through Typer/Click's boxed Error panel
+    # (#147) so ``createvm`` aligns with every other lvlab CLI surface
+    # (``deletevm``, the manifest commands) instead of dropping out as a
+    # plain red one-liner. ``_fail`` is reserved for operator-facing
+    # errors deeper in the flow (image download, virt-install, etc.).
     if has_vm_args and not has_all_vm_args:
-        _fail("VM_NAME and VM_DISTRO must be provided together.")
+        raise click.UsageError("VM_NAME and VM_DISTRO must be provided together.")
     if not init_cloud_images and not has_all_vm_args:
-        _fail("Missing required arguments: VM_NAME and VM_DISTRO.")
+        raise click.UsageError("Missing required arguments: VM_NAME and VM_DISTRO.")
 
     try:
         host_config: HostConfig = load_host_config(config_path)

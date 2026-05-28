@@ -368,17 +368,48 @@ def test_happy_path_positional_args(all_external_mocked: dict, tmp_path: Path) -
 
 
 def test_missing_arguments_errors(all_external_mocked: dict, tmp_path: Path) -> None:
-    """No positional args (and no --init-cloud-images) errors clearly."""
+    """No positional args (and no --init-cloud-images) errors with the boxed format.
+
+    Matches deletevm and every other lvlab CLI surface — Typer's
+    ``╭─ Error ─╮`` panel with a Usage hint, not the plain one-liner the
+    pre-#147 ``_fail`` path emitted.
+    """
     result = _invoke([], tmp_path)
     assert result.exit_code != 0
-    assert "Missing required arguments" in result.output
+    out = result.output
+    assert "Missing required arguments" in out
+    # The boxed format renders the message with the panel edge character
+    # in front of it. Locking this in stops the regression to the plain
+    # red one-liner.
+    assert "Usage:" in out
+    assert "Try 'createvm --help'" in out
+    assert "╭─ Error" in out
 
 
 def test_half_positional_pair_errors(all_external_mocked: dict, tmp_path: Path) -> None:
-    """Only VM_NAME (no VM_DISTRO) errors: they must be provided together."""
+    """Only VM_NAME (no VM_DISTRO) errors with the boxed format too."""
     result = _invoke(["testvm.local"], tmp_path)
     assert result.exit_code != 0
-    assert "must be provided together" in result.output
+    out = result.output
+    assert "must be provided together" in out
+    assert "Usage:" in out
+    assert "╭─ Error" in out
+
+
+def test_init_cloud_images_without_vm_args_does_not_error(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """The --init-cloud-images path is the deliberate exception to the
+    "VM_NAME + VM_DISTRO required" rule — it must NOT trip the new
+    UsageError when invoked alone.
+
+    Regression guard for #147: the fix replaces the body-level ``_fail``
+    with ``click.UsageError`` only on the missing-args paths; the
+    init-only path stays intact.
+    """
+    result = _invoke(["--init-cloud-images"], tmp_path)
+    assert result.exit_code == 0, result.output
+    assert "Cloud images initialized" in result.output
 
 
 def test_version_flag() -> None:

@@ -117,6 +117,22 @@ environment:
           - name: eth0
             network_type: user
 
+      # Dual-stack IPv4 + IPv6 (#137). Requires a libvirt network with
+      # both an <ip> and an <ip family='ipv6'> element in net-dumpxml.
+      # nameservers.addresses accepts mixed v4/v6 freely.
+      - vm_name: dual01.local
+        hostname: dual01
+        os: debian12
+        interfaces:
+          - name: eth0
+            ip4: 192.168.122.40/24
+            ip4gw: 192.168.122.1
+            ip6: 2001:db8:122::40/64
+            ip6gw: 2001:db8:122::1
+        nameservers:
+          addresses: [192.168.122.1, 2001:db8:122::1]
+          search: [lab.local]
+
 images:
   debian13:
     image_url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2

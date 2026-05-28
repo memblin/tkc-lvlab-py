@@ -405,3 +405,177 @@ def test_cloud_init_emits_hosts_heredocs_by_default_when_flag_unset(
     _run_cloud_init(machine, {"cloud_init": {}}, captured)
     runcmd = captured[0].get("runcmd", [])
     assert len(_hosts_heredocs(runcmd)) == 2, runcmd
+
+
+# ---------------------------------------------------------------------------
+# user_data cloud-config override (#140) — lvlab up parity with createvm
+# ---------------------------------------------------------------------------
+
+
+def _run_cloud_init_capturing_userdata_file(
+    machine, config_defaults, **kwargs
+) -> tuple[str, list]:
+    """Variant of _run_cloud_init that returns (rendered_user_data_text, structured_capture).
+
+    The override path bypasses the ``UserData`` template render and writes
+    directly. This helper reads the on-disk user-data file the composer
+    produced and ALSO captures any structured render that happened, so
+    tests can assert the override path was taken (file content includes
+    the override) and the structured path was not (capture empty).
+    """
+    captured: list = []
+    _run_cloud_init(machine, config_defaults, captured, **kwargs)
+    user_data_path = Path(machine.config_fpath) / "user-data"
+    text = user_data_path.read_text() if user_data_path.exists() else ""
+    return text, captured
+
+
+def _override_doc() -> dict:
+    """A minimal user_data override exercising all six placeholders."""
+    return {
+        "hostname": "{vm_hostname}",
+        "fqdn": "{fqdn}",
+        "users": [
+            {
+                "name": "{default_vm_username}",
+                "passwd": "{password_hash}",
+                "shell": "/bin/bash",
+            }
+        ],
+        "runcmd": [
+            "echo {vm_name} in {environment}",
+        ],
+    }
+
+
+def test_cloud_init_user_data_override_renders_placeholders(
+    tmp_path: Path,
+) -> None:
+    """An override doc with placeholders is rendered with the resolved values.
+
+    The override path bypasses the structured UserData template — the
+    rendered text starts with ``#cloud-config`` (the override renderer's
+    convention) and contains every substituted value from the placeholder
+    context (vm_name, vm_hostname, fqdn, default_vm_username,
+    password_hash, environment).
+    """
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {"user_data": _override_doc()}
+    text, _ = _run_cloud_init_capturing_userdata_file(
+        machine,
+        {"cloud_init": {}},
+        password_hash="$6$rounds=4096$abc$xyz",
+    )
+    assert text.startswith("#cloud-config")
+    # Placeholder substitutions present:
+    assert "web01" in text  # {vm_name} and {vm_hostname}
+    assert "web01.test.local" in text  # {fqdn}
+    assert "debian" in text  # {default_vm_username} from image default
+    assert "$6$rounds=4096$abc$xyz" in text  # {password_hash}
+    assert "in test-env" in text  # {environment}
+
+
+def test_cloud_init_user_data_override_skips_structured_userdata_render(
+    tmp_path: Path,
+) -> None:
+    """The override path must NOT call into the structured UserData template.
+
+    Regression guard: if both paths fired, the override would be silently
+    clobbered by the structured render writing over the same file.
+    """
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {"user_data": _override_doc()}
+    _, structured_capture = _run_cloud_init_capturing_userdata_file(
+        machine,
+        {"cloud_init": {}},
+        password_hash="$6$abc$xyz",
+    )
+    # The structured-path UserData mock captures the cloud_init_config it
+    # was constructed with; an empty list means the structured render
+    # never fired.
+    assert structured_capture == []
+
+
+def test_cloud_init_user_data_override_prepends_hosts_heredocs(
+    tmp_path: Path,
+) -> None:
+    """manage_etc_hosts (default true) prepends hosts heredocs to override runcmd.
+
+    Decision matches createvm's runcmd-prefix behavior (#140): the
+    operator owns the override body, but lvlab still injects its
+    manifest-wide /etc/hosts bootstrap ahead of it. An operator who
+    doesn't want that prepend sets cloud_init.manage_etc_hosts: false.
+    """
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {"user_data": _override_doc()}
+    text, _ = _run_cloud_init_capturing_userdata_file(
+        machine,
+        {"cloud_init": {}},
+        password_hash="$6$abc$xyz",
+    )
+    # Both /etc/hosts heredocs appear ahead of the override's runcmd entry.
+    hosts_idx = text.find("## hosts heredoc for /etc/hosts")
+    template_idx = text.find("## hosts heredoc for /etc/cloud/templates/")
+    override_idx = text.find("echo web01 in test-env")
+    assert hosts_idx >= 0 and template_idx >= 0 and override_idx >= 0
+    assert hosts_idx < override_idx
+    assert template_idx < override_idx
+
+
+def test_cloud_init_user_data_override_skips_hosts_heredocs_when_manage_etc_hosts_false(
+    tmp_path: Path,
+) -> None:
+    """manage_etc_hosts: false → the override runcmd is rendered untouched."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {
+        "manage_etc_hosts": False,
+        "user_data": _override_doc(),
+    }
+    text, _ = _run_cloud_init_capturing_userdata_file(
+        machine,
+        {"cloud_init": {}},
+        password_hash="$6$abc$xyz",
+    )
+    assert "hosts heredoc" not in text
+    # Override runcmd is intact.
+    assert "echo web01 in test-env" in text
+
+
+def test_cloud_init_user_data_override_inherits_from_config_defaults(
+    tmp_path: Path,
+) -> None:
+    """A user_data set ONLY in config_defaults.cloud_init applies to the machine.
+
+    Mirrors how every other cloud_init knob layers: defaults provide the
+    document; per-machine can override.
+    """
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {}
+    text, _ = _run_cloud_init_capturing_userdata_file(
+        machine,
+        {"cloud_init": {"user_data": _override_doc()}},
+        password_hash="$6$abc$xyz",
+    )
+    assert text.startswith("#cloud-config")
+    assert "web01" in text
+
+
+def test_cloud_init_user_data_override_per_machine_wins_over_defaults(
+    tmp_path: Path,
+) -> None:
+    """A per-machine user_data fully replaces the defaults' user_data.
+
+    The override is a complete cloud-config document; merging two whole
+    documents has no clean semantics. The per-machine declaration is the
+    operator's "this machine is special" lever and must NOT be diluted
+    by the defaults.
+    """
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {"user_data": {"hostname": "special-host"}}
+    text, _ = _run_cloud_init_capturing_userdata_file(
+        machine,
+        {"cloud_init": {"user_data": {"hostname": "default-host"}}},
+        password_hash="$6$abc$xyz",
+    )
+    assert "special-host" in text
+    assert "default-host" not in text

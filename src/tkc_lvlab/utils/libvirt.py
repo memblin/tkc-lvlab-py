@@ -31,6 +31,7 @@ from .subprocess_env import system_first_env
 from .vdisk import VirtualDisk
 from .cloud_init import MetaData, NetworkConfig, UserData
 from .network import NETWORK_TYPES, USER_MODE_NETWORK_TYPES, generate_mac
+from .standalone_cloud_init import render_user_data_override
 from .snapshot_cleanup import undefine_with_snapshot_cleanup
 from .virsh import (
     DEAD_STATES,
@@ -540,6 +541,32 @@ class _CloudInitComposer:
                 logger.error("Could not parse config file.")
                 raise ConfigError("Could not parse config file.") from exc
 
+        # Compute the manifest-wide /etc/hosts heredocs once; both the
+        # structured render path and the user_data override path use the
+        # same prefix when ``manage_etc_hosts`` (#120) is on.
+        hosts_runcmd_prefix = self._build_hosts_runcmd_prefix(
+            cloud_init_config, config_defaults, machines
+        )
+
+        # User-data override (#140) — a per-machine ``cloud_init.user_data``
+        # (or config-defaults equivalent; manifest precedence applies via
+        # _merge_cloud_init_config) is a full cloud-config document owned
+        # by the operator. When set, it replaces the structured UserData
+        # template render. The hosts heredocs from above are prepended to
+        # the override's runcmd (same as createvm prepends its
+        # host-wide runcmd), so manifest-wide /etc/hosts bootstrap still
+        # happens; an operator who wants full control sets
+        # ``manage_etc_hosts: false`` (then ``hosts_runcmd_prefix`` is empty).
+        user_data_override = cloud_init_config.pop("user_data", None)
+        if user_data_override is not None:
+            userdata_config_fpath = self._render_user_data_override(
+                user_data_override,
+                cloud_init_config,
+                password_hash,
+                hosts_runcmd_prefix,
+            )
+            return metadata_config_fpath, userdata_config_fpath, network_config_fpath
+
         # The manage_etc_hosts flag (#120) gates BOTH halves of lvlab's
         # in-guest /etc/hosts management together: the cloud-init template's
         # ``manage_etc_hosts: true`` line AND the two runcmd heredocs that
@@ -547,21 +574,13 @@ class _CloudInitComposer:
         # today's behaviour; set ``cloud_init.manage_etc_hosts: false`` (in
         # config_defaults or per-machine) when an external CM tool (Salt /
         # Ansible) owns /etc/hosts on the guest.
-        if cloud_init_config.get("manage_etc_hosts", True):
-            hosts_snippet = generate_hosts(
-                machine.environment, config_defaults, machines, heredoc="/etc/hosts"
-            )
-            template_fpath = self._resolve_hosts_template_path()
-            hosts_template_snippet = generate_hosts(
-                machine.environment, config_defaults, machines, heredoc=template_fpath
-            )
+        if hosts_runcmd_prefix:
             # Prepend the two hosts heredoc snippets so /etc/hosts (and the
             # cloud-init template) are populated before any runcmd entry that
             # does DNS-ish work.
-            cloud_init_config["runcmd"] = [
-                hosts_snippet,
-                hosts_template_snippet,
-            ] + cloud_init_config.get("runcmd", [])
+            cloud_init_config["runcmd"] = list(
+                hosts_runcmd_prefix
+            ) + cloud_init_config.get("runcmd", [])
 
         userdata_config_fpath = self._render_and_write(
             UserData(cloud_init_config, machine.hostname, machine.domain, machine.fqdn),
@@ -569,6 +588,145 @@ class _CloudInitComposer:
         )
 
         return metadata_config_fpath, userdata_config_fpath, network_config_fpath
+
+    def _build_hosts_runcmd_prefix(
+        self,
+        cloud_init_config: dict[str, Any],
+        config_defaults: dict[str, Any],
+        machines: list[dict[str, Any]],
+    ) -> list[str]:
+        """Build the two manifest-wide /etc/hosts heredocs as a runcmd prefix.
+
+        Returns an empty list when ``cloud_init.manage_etc_hosts`` is
+        ``False`` (the #120 opt-out). Otherwise returns the
+        ``/etc/hosts`` heredoc followed by the distro-specific
+        ``hosts.*.tmpl`` heredoc — the same two snippets the structured
+        path has prepended since #120, factored out so the user_data
+        override path (#140) can also consume them.
+
+        Args:
+            cloud_init_config: The merged cloud_init mapping (defaults +
+                per-machine, after :meth:`_merge_cloud_init_config`).
+            config_defaults: The manifest's ``config_defaults`` block,
+                used by :func:`generate_hosts` for hostname/domain.
+            machines: The machine list from the manifest, used to render
+                each machine into ``/etc/hosts``.
+
+        Returns:
+            ``[hosts_snippet, hosts_template_snippet]`` when
+            ``manage_etc_hosts`` is on, else ``[]``.
+
+        Raises:
+            ValueError: When the machine's ``os`` matches no known
+                ``/etc/cloud/templates/hosts.*.tmpl`` distro family.
+        """
+        if not cloud_init_config.get("manage_etc_hosts", True):
+            return []
+        machine = self.machine
+        hosts_snippet = generate_hosts(
+            machine.environment, config_defaults, machines, heredoc="/etc/hosts"
+        )
+        template_fpath = self._resolve_hosts_template_path()
+        hosts_template_snippet = generate_hosts(
+            machine.environment, config_defaults, machines, heredoc=template_fpath
+        )
+        return [hosts_snippet, hosts_template_snippet]
+
+    def _render_user_data_override(
+        self,
+        user_data: Any,
+        cloud_init_config: dict[str, Any],
+        password_hash: str | None,
+        runcmd_prefix: list[str],
+    ) -> str:
+        """Render a manifest ``cloud_init.user_data`` override and write to disk.
+
+        The override is a full cloud-config document owned by the
+        operator. Placeholder context covers the manifest's per-machine
+        identity (``vm_name`` / ``vm_hostname`` / ``fqdn`` /
+        ``environment``), the resolved first-boot username (defaulted
+        from the image when not set), and the optional generated
+        password hash. The ``cloud_init.pubkey`` (when set) is resolved
+        to a literal SSH public key and appended to every user's
+        ``ssh_authorized_keys`` via :func:`render_user_data_override`.
+
+        Args:
+            user_data: The raw ``user_data:`` mapping popped out of
+                ``cloud_init_config``.
+            cloud_init_config: The remaining merged cloud_init mapping
+                (after the ``user_data`` pop). Consulted for the
+                resolved first-boot username (``user``), password hash
+                (``passwd``, when manifest-set), and the SSH public key
+                (``pubkey``).
+            password_hash: The generated console password hash from
+                ``Machine.cloud_init(password_hash=...)``. The
+                placeholder reflects whichever the manifest path would
+                have used: a manifest-set ``passwd`` wins, else this
+                generated hash, else empty string.
+            runcmd_prefix: Hosts heredocs to inject ahead of the
+                override's own ``runcmd`` (from
+                :meth:`_build_hosts_runcmd_prefix`).
+
+        Returns:
+            The file path of the written ``user-data`` document.
+        """
+        machine = self.machine
+        # Resolve the first-boot username: prefer an explicit setting,
+        # then the image's default that was setdefault-ed above.
+        resolved_user = cloud_init_config.get("user", "")
+        # Mirror the structured-path precedence: a manifest-set passwd
+        # wins over the generated password_hash; otherwise use whichever
+        # the structured path would have rendered (or "" when neither).
+        resolved_password_hash = cloud_init_config.get("passwd") or password_hash or ""
+        context = {
+            "vm_name": machine.vm_name,
+            "vm_hostname": machine.hostname,
+            "fqdn": machine.fqdn,
+            "default_vm_username": resolved_user,
+            "password_hash": resolved_password_hash,
+            "environment": machine.environment.get("name", ""),
+        }
+        authorized_keys = self._resolve_pubkey_list(cloud_init_config)
+        rendered = render_user_data_override(
+            user_data,
+            context=context,
+            authorized_keys=authorized_keys,
+            runcmd_prefix=runcmd_prefix,
+        )
+        fpath = os.path.join(machine.config_fpath, "user-data")
+        logger.info("Writing cloud-init user-data file (override) %s", fpath)
+        with open(fpath, "w", encoding="utf-8") as fh:
+            fh.write(rendered)
+        return fpath
+
+    @staticmethod
+    def _resolve_pubkey_list(cloud_init_config: dict[str, Any]) -> list[str]:
+        """Resolve a single ``cloud_init.pubkey`` value to a list of SSH keys.
+
+        The manifest accepts ``cloud_init.pubkey`` as either a literal
+        SSH key string or a path on disk (``~``-expanded). The structured
+        path resolves it in :class:`UserData.__post_init__`; the override
+        path needs the same resolution to feed into
+        :func:`render_user_data_override`'s ``authorized_keys``.
+
+        Returns:
+            A single-element list (or empty list when no pubkey is set).
+            A path that doesn't exist or doesn't look like an SSH key is
+            logged and dropped — same forgiving behaviour as the
+            structured path.
+        """
+        pubkey = cloud_init_config.get("pubkey")
+        if not pubkey:
+            return []
+        if "~" in pubkey or "/" in pubkey:
+            pubkey_path = os.path.expanduser(pubkey)
+            try:
+                with open(pubkey_path, "r", encoding="utf-8") as fh:
+                    return [fh.read().strip()]
+            except OSError as exc:
+                logger.warning("Could not read pubkey file %s: %s", pubkey_path, exc)
+                return []
+        return [pubkey.strip()]
 
     def _ensure_config_dir(self) -> None:
         """Create the machine's ``config_fpath`` if absent.
@@ -761,13 +919,17 @@ class Machine:
                     f"{iface.get('name', '<unnamed>')!r}. "
                     f"Valid values: {', '.join(NETWORK_TYPES)}."
                 )
-            if network_type in USER_MODE_NETWORK_TYPES and iface.get("ip4"):
+            if network_type in USER_MODE_NETWORK_TYPES and (
+                iface.get("ip4") or iface.get("ip6")
+            ):
+                static_field = "ip4" if iface.get("ip4") else "ip6"
                 raise ValueError(
                     f"Interface {iface.get('name', '<unnamed>')!r} declares "
                     f"network_type={network_type!r} together with a static "
-                    f"ip4 ({iface['ip4']!r}). User-mode networking "
-                    f"(SLIRP/passt) does not honour static IPs — remove the "
-                    f"ip4 field or switch to network_type='network'."
+                    f"{static_field} ({iface[static_field]!r}). User-mode "
+                    f"networking (SLIRP/passt) does not honour static IPs — "
+                    f"remove the {static_field} field or switch to "
+                    f"network_type='network'."
                 )
 
         # Apply disk defaults

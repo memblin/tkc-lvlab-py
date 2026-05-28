@@ -207,6 +207,20 @@ Output is two tables (the shared CLI table style — see
 When stdout is piped or redirected the tables render as plain text
 (no ANSI), widened so long image URLs aren't clipped.
 
+### Without a manifest (#149)
+
+`lvlab status` is also the friendly first-run landing: run it from a
+directory with no `Lvlab.yml` and it prints a "no manifest here"
+hint, the **built-in cloud-images table** (so you see what's
+downloadable out of the box), a pointer that `createvm` is the right
+tool for one-off VMs without writing a manifest, and a link to the
+project documentation site for the manifest-driven workflow. Exit 0
+— a missing manifest is missing-context, not a misconfiguration.
+
+A *malformed* `Lvlab.yml` (file exists but is structurally invalid)
+still exits 1 with the strict `Could not parse config file` error;
+only the genuine file-absent case routes to the landing.
+
 ## ssh-config
 
 Print SSH config snippets you can append to `~/.ssh/config`.
@@ -518,6 +532,132 @@ machines:
       - name: eth0
         network_type: user
 ```
+
+## Dual-stack IPv4 + IPv6 (#137)
+
+When the libvirt network is configured for dual-stack
+(`<ip family='ipv6' …>` alongside the v4 `<ip>` element in
+`virsh net-dumpxml`), a guest can request both a v4 and a v6 static
+address on the same NIC. Both `createvm` and the manifest workflow accept
+this.
+
+**`createvm`** mirrors the `--ip4` shapes with `--ip6`:
+
+```bash
+# Static dual-stack on the default NAT network. /64 is appended if the
+# v6 lacks a CIDR; the v6 gateway and DNS come from the network XML.
+createvm web01.lab debian12 \
+    --ip4 192.168.122.50 \
+    --ip6 2001:db8:122::50
+
+# Bridge networks need both v4 AND v6 gateway/DNS supplied explicitly
+# (libvirt doesn't manage them).
+createvm web02.lab debian12 \
+    --network vlan10 \
+    --ip4 vlan10,100.64.10.50 --gateway 100.64.10.1 --dns 100.64.10.10 \
+    --ip6 vlan10,2001:db8:10::50 --gateway6 2001:db8:10::1 --dns6 2001:db8:10::1
+```
+
+`--ip6 dhcp` (or omitting the flag) leaves cloud-init with `dhcp6: true`
+so the guest accepts SLAAC / DHCPv6 from the network. `--ip6 vlan10`
+(bare network name) selects that network with SLAAC/DHCPv6, same as the
+v4 shape.
+
+**Manifest workflow** carries the same fields on the interface dict:
+
+```yaml
+machines:
+  - vm_name: dual01
+    hostname: dual01
+    os: debian12
+    interfaces:
+      - name: eth0
+        ip4: 192.168.122.50/24
+        ip4gw: 192.168.122.1
+        ip6: 2001:db8:122::50/64
+        ip6gw: 2001:db8:122::1
+    nameservers:
+      addresses: [192.168.122.1, 2001:db8:122::1]
+      search: [lab.local]
+```
+
+`nameservers.addresses` is a flat list — mix v4 and v6 freely; netplan
+and the v1 ENI renderer both accept it.
+
+**First-cut scope.** Dual-stack only — i.e. v4 + optionally v6. **v6-only
+guests** (no v4) are deliberately out of scope: lvlab's helper commands
+(`lvlab ssh`, `lvlab smoke`, `lvlab hosts`) all resolve VM IPs as v4
+today, so removing the v4 leg would leave them without a target. A
+v6-only guest can still boot — the render passes through — but the
+tooling around it expects a v4 address to exist.
+
+**Per-network v6 defaults under `networks:`** (i.e. a `gateway6` /
+`dns6` field on an entry in the layered host config's `networks:` map)
+are not in this cut. Bridges require the `--gateway6`/`--dns6` flags or
+v6 fields on every per-machine interface; a follow-up tracks adding the
+v6 keys to `networks:`.
+
+## `user_data` cloud-config override (#140)
+
+For machines that need a non-trivial cloud-config — multiple users,
+`write_files`, package installs, custom mounts, anything beyond the
+structured per-machine `cloud_init` keys — set
+`cloud_init.user_data` to a raw cloud-config mapping. The whole
+mapping replaces the structured `user-data` render for that machine
+(an existing parallel of the `createvm` flag added in 0.5.2).
+
+```yaml
+machines:
+  - vm_name: salt-master
+    hostname: salt-master
+    os: debian12
+    cloud_init:
+      pubkey: ~/.ssh/id_ed25519.pub
+      user_data:
+        users:
+          - name: "{default_vm_username}"
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            shell: /bin/bash
+            passwd: "{password_hash}"
+          - name: deploy
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            shell: /bin/bash
+            ssh_authorized_keys:
+              - ssh-ed25519 AAAA... ops@laptop
+        write_files:
+          - path: /etc/motd
+            content: |
+              {fqdn} — managed by lvlab ({environment})
+        package_update: true
+        packages: [vim, jq]
+        runcmd:
+          - systemctl enable --now salt-master
+```
+
+**Placeholders.** `{vm_name}`, `{vm_hostname}`, `{fqdn}`,
+`{default_vm_username}`, `{password_hash}`, `{environment}` are
+substituted from the per-machine resolved context. An override that
+references anything else raises a clean error rather than emitting a
+silent blank. The placeholder set is shared with `createvm` (which
+fills `fqdn` from `VM_NAME` and `environment` as the empty string).
+
+**SSH keys.** A literal `cloud_init.pubkey` (or path) is appended to
+every user's `ssh_authorized_keys` automatically — the same `pubkey`
+mechanism the structured path uses. An override that hard-codes its
+own `ssh_authorized_keys` is fine; the discovered keys are appended
+without duplication.
+
+**Layering.** A `cloud_init.user_data` set at the `config_defaults`
+level applies to every machine; a per-machine `cloud_init.user_data`
+replaces it wholesale (overriding two whole cloud-config documents
+has no clean merge semantics — the per-machine declaration owns the
+document).
+
+**`/etc/hosts` + runcmd.** When `cloud_init.manage_etc_hosts` is on
+(the default), lvlab's two manifest-wide `/etc/hosts` heredocs are
+still prepended to the override's `runcmd` — same composition rule
+`createvm` applies. Operators who want full control set
+`cloud_init.manage_etc_hosts: false` (#120).
 
 ## Where things live on disk
 

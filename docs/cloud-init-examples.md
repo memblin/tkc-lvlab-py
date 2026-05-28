@@ -172,6 +172,49 @@ also disambiguates multiple NICs in principle (the old driver match
 could not) — though multi-NIC manifests are not yet exercised
 end-to-end in `lvlab`.
 
+## network-config (v2, dual-stack)
+
+When the manifest interface carries both `ip6` and `ip6gw` alongside the
+v4 fields, the v2 template emits a second `addresses` entry and a v6
+default route. `dhcp6` is set to `false` whenever either family has a
+static address — a defensive behaviour preserved from the v4-only days
+since netplan's DHCPv6 client hangs on some distros, and v4-only
+operators never opted into SLAAC implicitly.
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    eth0:
+      match:
+        macaddress: "52:54:00:1a:2b:3c"
+      dhcp4: false
+      dhcp6: false
+      addresses:
+        - 192.168.122.50/24
+        - 2001:db8:122::50/64
+      nameservers:
+        addresses: [192.168.122.1, 2001:db8:122::1]
+        search: [local, example.lab]
+      routes:
+        - to: 0.0.0.0/0
+          via: 192.168.122.1
+        - to: ::/0
+          via: 2001:db8:122::1
+```
+
+`nameservers.addresses` is a flat list — netplan and the v1 ENI
+renderer both accept mixed v4/v6 freely. The v1 (ENI) renderer emits
+the dual-stack form as two subnet entries on the same physical
+interface, one `type: static` (v4) and one `type: static6` (v6).
+
+> Out of scope for `lvlab` today: **v6-only** guests with no v4. The
+> render passes through, but the `lvlab` helper commands (`ssh`, `smoke`,
+> `hosts`) all resolve VM IPs as v4 and would have no target. See the
+> "Dual-stack IPv4 + IPv6" section of the
+> [Walkthrough](walkthrough.md#dual-stack-ipv4-ipv6-137) for the
+> scope statement.
+
 ## See also
 
 - [`network-config.v1.j2`](https://github.com/memblin/tkc-lvlab-py/blob/main/src/tkc_lvlab/templates/network-config.v1.j2)

@@ -14,15 +14,23 @@ network:
       # config to the device carrying this MAC.
       mac_address: {{ iface.macaddress }}
       {%- endif %}
-      {%- if iface.ip4 %}
       subnets:
+         {%- if iface.ip4 %}
          - type: static
            address: {{ iface.ip4 }}
            gateway: {{ iface.ip4gw }}
-      {%- else %}
-      subnets:
+         {%- endif %}
+         {%- if iface.ip6 %}
+         # static6 is cloud-init's ENI shape for a per-family IPv6 static
+         # assignment alongside (or instead of) the v4 ``static`` subnet
+         # above (#137).
+         - type: static6
+           address: {{ iface.ip6 }}
+           gateway: {{ iface.ip6gw }}
+         {%- endif %}
+         {%- if not iface.ip4 and not iface.ip6 %}
          - type: dhcp4
-      {%- endif %}
+         {%- endif %}
     {%- if config.nameservers.search is defined and config.nameservers.search | length > 0 %}
     - type: nameserver
       address:

@@ -251,3 +251,172 @@ def test_v1_matches_by_mac_address_when_pinned() -> None:
     # Still ENI, never netplan match keywords.
     assert "virtio_net" not in rendered
     assert "set-name" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# IPv6 dual-stack rendering (#137) — v2 (netplan)
+# ---------------------------------------------------------------------------
+
+
+def test_v2_dual_stack_renders_both_v4_and_v6_addresses() -> None:
+    """A dual-stack interface emits BOTH v4 and v6 addresses, a v6 route, and disables both DHCPs.
+
+    netplan accepts a mixed-family ``addresses`` list and per-family
+    routes. Disabling ``dhcp4`` and ``dhcp6`` is what stops cloud-init
+    from also requesting a DHCPv6 lease that would conflict with our
+    static v6 (#137).
+    """
+    nc = NetworkConfig(
+        network_version=NetworkVersion.V2,
+        interfaces=[
+            {
+                "name": "eth0",
+                "macaddress": "52:54:00:ab:cd:ef",
+                "ip4": "192.168.130.50/24",
+                "ip4gw": "192.168.130.1",
+                "ip6": "2001:db8:130::50/64",
+                "ip6gw": "2001:db8:130::1",
+            }
+        ],
+        nameservers=_empty_nameservers(),
+    )
+    parsed = yaml.safe_load(nc.render_config())
+
+    eth0 = parsed["network"]["ethernets"]["eth0"]
+    assert eth0["dhcp4"] is False
+    assert eth0["dhcp6"] is False
+    # Both addresses present, in v4-then-v6 order.
+    assert "192.168.130.50/24" in eth0["addresses"]
+    assert "2001:db8:130::50/64" in eth0["addresses"]
+    # Both default-routes rendered.
+    routes = eth0["routes"]
+    v4_route = {"to": "0.0.0.0/0", "via": "192.168.130.1"}
+    v6_route = {"to": "::/0", "via": "2001:db8:130::1"}
+    assert v4_route in routes
+    assert v6_route in routes
+
+
+def test_v2_v6_only_static_renders_v6_with_dhcp4_unchanged() -> None:
+    """A v6-static-only interface (no ip4) still leaves dhcp4 on by default.
+
+    First-cut scope of #137 is dual-stack only — v6-only guests are
+    explicitly out of scope (the maintainer keeps v4 reachability for
+    lvlab's IP-resolution paths). But the renderer should still emit
+    coherent output when only ``ip6`` is set: dhcp6 off, v6 address +
+    route present, dhcp4 stays at its default (true) so the operator
+    can opt in to v4 reachability via DHCP.
+    """
+    nc = NetworkConfig(
+        network_version=NetworkVersion.V2,
+        interfaces=[
+            {
+                "name": "eth0",
+                "macaddress": "52:54:00:ab:cd:ef",
+                "ip6": "2001:db8:130::5/64",
+                "ip6gw": "2001:db8:130::1",
+            }
+        ],
+        nameservers=_empty_nameservers(),
+    )
+    parsed = yaml.safe_load(nc.render_config())
+
+    eth0 = parsed["network"]["ethernets"]["eth0"]
+    assert eth0["dhcp6"] is False
+    assert "2001:db8:130::5/64" in eth0["addresses"]
+    assert {"to": "::/0", "via": "2001:db8:130::1"} in eth0["routes"]
+
+
+def test_v2_dhcp_only_does_not_emit_addresses_or_routes() -> None:
+    """A purely-DHCP interface (no ip4 and no ip6) emits no addresses/routes block.
+
+    Regression guard: adding IPv6 support must not regress the DHCP-only
+    render path that #128 et al rely on.
+    """
+    nc = NetworkConfig(
+        network_version=NetworkVersion.V2,
+        interfaces=[{"name": "eth0", "macaddress": "52:54:00:aa:bb:cc"}],
+        nameservers=_empty_nameservers(),
+    )
+    parsed = yaml.safe_load(nc.render_config())
+
+    eth0 = parsed["network"]["ethernets"]["eth0"]
+    assert eth0["dhcp4"] is True
+    assert eth0["dhcp6"] is True
+    assert "addresses" not in eth0
+    assert "routes" not in eth0
+
+
+# ---------------------------------------------------------------------------
+# IPv6 dual-stack rendering (#137) — v1 (ENI)
+# ---------------------------------------------------------------------------
+
+
+def test_v1_dual_stack_renders_static6_subnet_alongside_static4() -> None:
+    """v1 ENI emits a ``type: static6`` subnet entry next to the v4 ``type: static``.
+
+    cloud-init's ENI renderer accepts a list of subnets per physical
+    interface; one per address family is the canonical shape for
+    dual-stack (used by Debian 11 cloud images, which lvlab pins to
+    network-config v1 to dodge the netplan DHCPv6 hang).
+    """
+    nc = NetworkConfig(
+        network_version=NetworkVersion.V1,
+        interfaces=[
+            {
+                "name": "eth0",
+                "macaddress": "52:54:00:ab:cd:ef",
+                "ip4": "192.168.130.50/24",
+                "ip4gw": "192.168.130.1",
+                "ip6": "2001:db8:130::50/64",
+                "ip6gw": "2001:db8:130::1",
+            }
+        ],
+        nameservers=_empty_nameservers(),
+    )
+    parsed = yaml.safe_load(nc.render_config())
+
+    iface = parsed["network"]["config"][0]
+    subnets = iface["subnets"]
+    # Two subnets, one v4 static and one v6 static.
+    types = {s["type"] for s in subnets}
+    assert types == {"static", "static6"}
+    v6_entry = next(s for s in subnets if s["type"] == "static6")
+    assert v6_entry["address"] == "2001:db8:130::50/64"
+    assert v6_entry["gateway"] == "2001:db8:130::1"
+
+
+def test_v1_v6_only_renders_static6_subnet_alone() -> None:
+    """A v6-only ip6/ip6gw interface emits just the static6 subnet."""
+    nc = NetworkConfig(
+        network_version=NetworkVersion.V1,
+        interfaces=[
+            {
+                "name": "eth0",
+                "macaddress": "52:54:00:ab:cd:ef",
+                "ip6": "2001:db8:130::5/64",
+                "ip6gw": "2001:db8:130::1",
+            }
+        ],
+        nameservers=_empty_nameservers(),
+    )
+    parsed = yaml.safe_load(nc.render_config())
+
+    iface = parsed["network"]["config"][0]
+    subnets = iface["subnets"]
+    types = [s["type"] for s in subnets]
+    # Without ip4 there is no v4 ``static`` entry — only static6.
+    assert "static6" in types
+    assert "static" not in types
+
+
+def test_v1_dhcp_only_renders_dhcp4_subnet() -> None:
+    """v1 DHCP-only stays unchanged — regression guard for #137."""
+    nc = NetworkConfig(
+        network_version=NetworkVersion.V1,
+        interfaces=[{"name": "eth0", "macaddress": "52:54:00:aa:bb:cc"}],
+        nameservers=_empty_nameservers(),
+    )
+    parsed = yaml.safe_load(nc.render_config())
+
+    iface = parsed["network"]["config"][0]
+    assert iface["subnets"] == [{"type": "dhcp4"}]

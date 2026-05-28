@@ -255,3 +255,82 @@ def test_status_image_missing_url_does_not_crash(tmp_path) -> None:
     assert result.exit_code == 0, result.output
     assert "broken" in result.output
     assert "missing image_url" in result.output
+
+
+# ---------------------------------------------------------------------------
+# #149: friendly landing when Lvlab.yml is absent (vs. invalid)
+# ---------------------------------------------------------------------------
+
+
+def test_status_no_manifest_renders_friendly_landing() -> None:
+    """``lvlab status`` from a directory with no Lvlab.yml shows the landing.
+
+    Distinct from a parse error: ``parse_config`` returning ``None`` is the
+    soft "file doesn't exist" signal. The landing exit-0s with: a
+    no-manifest hint, the built-in images table, a ``createvm`` pointer,
+    and a docs URL. A first-time user gets an actionable starting point
+    instead of the pre-#149 ``ERROR Could not parse config file.`` line.
+    """
+    runner = CliRunner()
+    with (
+        mock.patch.object(cli, "parse_config", return_value=None),
+        mock.patch.object(cli, "virsh_list_all_names") as list_mock,
+    ):
+        result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    out = result.output
+    # No-manifest hint clearly informational, not an error.
+    assert "No Lvlab.yml" in out
+    # Built-in images table renders even without a manifest — same shape
+    # _build_images_table uses on the happy path.
+    assert "Images" in out
+    assert "default" in out
+    # Confirm a couple of the built-ins from the catalog are listed so the
+    # user can see what's downloadable out of the box.
+    assert "debian13" in out
+    assert "fedora44" in out
+    # createvm pointer + a concrete usage hint.
+    assert "createvm" in out
+    # Docs link → the published mkdocs site (not the source repo).
+    assert "memblin.github.io/tkc-lvlab-py" in out
+    # Never touches the hypervisor — there's no environment to query.
+    list_mock.assert_not_called()
+
+
+def test_status_no_manifest_does_not_emit_parse_error_log() -> None:
+    """Absence is NOT an error — no ``Could not parse config file`` log.
+
+    Regression guard for the #149 split: the pre-#149 behaviour treated
+    file-absent and file-invalid identically, dumping the same error
+    line. The landing path must stay silent on the error log.
+    """
+    runner = CliRunner()
+    with mock.patch.object(cli, "parse_config", return_value=None):
+        result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0
+    assert "Could not parse config file" not in result.output
+
+
+def test_status_invalid_manifest_still_exits_one() -> None:
+    """A structurally-invalid manifest (ConfigError) still exits 1 loudly.
+
+    Regression guard for the OTHER half of the #149 split: only the
+    soft "file missing" path routes to the landing. A real parse error
+    keeps today's error-log + exit-1 behaviour so misconfigurations
+    don't silently hide behind a friendly screen.
+    """
+    from tkc_lvlab.exceptions import ConfigError
+
+    runner = CliRunner()
+    with (
+        mock.patch.object(
+            cli, "parse_config", side_effect=ConfigError("manifest malformed")
+        ),
+        mock.patch.object(cli, "virsh_list_all_names") as list_mock,
+    ):
+        result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 1
+    list_mock.assert_not_called()

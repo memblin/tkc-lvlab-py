@@ -48,6 +48,13 @@ sudo createvm testvm.local debian12
 # then rendered into the guest's cloud-init network-config.
 sudo createvm testvm.local debian13 --ip4 192.168.122.50
 
+# Dual-stack: both v4 and v6 statics on the same NIC. v6 mirrors
+# every shape v4 accepts (ADDR / NETWORK,ADDR / dhcp / bare NETWORK).
+# /64 is appended if --ip6 lacks a CIDR.
+sudo createvm testvm.local debian13 \
+    --ip4 192.168.122.50 \
+    --ip6 2001:db8:122::50
+
 # Pre-download every catalog image (built-ins + any cwd Lvlab.yml).
 # DEPRECATED: prefer `lvlab init`, which initializes the built-in
 # defaults when there's no Lvlab.yml. This flag still works for now.
@@ -66,6 +73,9 @@ and must be given together.
 | `VM_DISTRO` (positional) | Image key, matched case-insensitively against the built-in catalog (`debian11`, `debian12`, `debian13`, `almalinux9`, `almalinux10`, `ubuntu2204`, `ubuntu2404`, `fedora44`) merged with any `images:` in a cwd `Lvlab.yml`. Required together with `VM_NAME`.                                         |
 | `--ip4`                  | Optional static IPv4. Accepts `IP` (uses `--network`), `NETWORK,IP`, or a bare `NETWORK` name (DHCP on that network). Validated against the network's subnet AND DHCP range, then rendered into the guest's cloud-init network-config. For DHCP, pass `dhcp` (or `default` / `auto`) or omit the flag. |
 | `--netmask`              | CIDR prefix appended to `--ip4` when it lacks one. Default `24`.                                                                                                                                                                                                                                       |
+| `--ip6`                  | Optional static IPv6 (dual-stack with `--ip4`, or v6-static on its own). Same shapes as `--ip4`: `ADDR`, `NETWORK,ADDR`, bare `NETWORK` (SLAAC/DHCPv6), or `dhcp`/`default`/`auto`. `/64` is appended when missing. `validate_static_ip` routes by family — same subnet + DHCP-range guards apply.     |
+| `--gateway6`             | IPv6 gateway for a static `--ip6` on a **bridge** network. Required (with `--dns6`) for a bridge; ignored for NAT (self-derived from the v6 `<ip>` element of the network XML).                                                                                                                        |
+| `--dns6`                 | Comma-separated IPv6 DNS server(s) for a static `--ip6` on a **bridge** network. Required (with `--gateway6`) for a bridge; ignored for NAT.                                                                                                                                                           |
 | `--disk-size`            | qcow2 disk size. Default `35G`.                                                                                                                                                                                                                                                                        |
 | `--cpu`                  | vCPU count. Default `2`.                                                                                                                                                                                                                                                                               |
 | `--memory`               | RAM, optional unit suffix (`2048`, `2G`, `512M`). Default `2048` (MiB).                                                                                                                                                                                                                                |
@@ -81,10 +91,13 @@ and must be given together.
 
 `createvm` attaches the guest to a managed libvirt network
 (`--network network=<name>,model=virtio`), defaulting to the stock NAT
-`default`, with spice graphics on the loopback. With `--ip4` it renders a
-static address (plus the NAT gateway as resolver) into the guest's
-network-config; without it the guest uses DHCP and `createvm` waits up to
-20s for the NAT lease, then prints the discovered SSH target.
+`default`, with spice graphics on the loopback. With `--ip4` (and/or
+`--ip6`) it renders the static address(es) — plus the NAT gateway(s) as
+resolver — into the guest's network-config. Without static flags the
+guest uses DHCP and `createvm` waits up to 20s for the NAT lease, then
+prints the discovered SSH target. The DHCP-lease wait remains v4-only:
+`lvlab`'s SSH/lookup paths target v4, so a v6-only assignment would
+boot but the lease wait would still need a v4 address to report.
 
 ### Host-wide config (`/etc/Lvlab.yml`)
 
@@ -176,12 +189,14 @@ user_data:
 Placeholders (anything else is a hard error — a typo fails the run before a VM
 is created, rather than booting with a blank value):
 
-| Placeholder             | Filled with                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------------ |
-| `{vm_name}`             | the `VM_NAME` you passed (used as `fqdn`)                                            |
-| `{vm_hostname}`         | the short hostname (`VM_NAME` up to the first `.`)                                   |
-| `{default_vm_username}` | the resolved first-boot account (image `username:` → `default_vm_username` → family) |
-| `{password_hash}`       | the generated password hash (the plaintext is still printed)                         |
+| Placeholder             | Filled with                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `{vm_name}`             | the `VM_NAME` you passed (used as `fqdn`)                                                                                                                    |
+| `{vm_hostname}`         | the short hostname (`VM_NAME` up to the first `.`)                                                                                                           |
+| `{fqdn}`                | fully-qualified domain name (for `createvm` this equals `{vm_name}`; differs in the manifest path, where machines are env-namespaced)                        |
+| `{default_vm_username}` | the resolved first-boot account (image `username:` → `default_vm_username` → family)                                                                         |
+| `{password_hash}`       | the generated password hash (the plaintext is still printed)                                                                                                 |
+| `{environment}`         | for `createvm`: empty string (no environment concept). The placeholder is shared with the manifest path (`lvlab up`), where it carries the environment name. |
 
 Behavior to know:
 

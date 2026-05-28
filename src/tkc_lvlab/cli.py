@@ -503,22 +503,63 @@ def _resolve_image_config(images: dict, machine_os: str, vm_name: str) -> dict:
 
 
 @app.command()
-def cloudinit(vm_name: str) -> None:
+def cloudinit(
+    vm_name: str,
+    to_stdout: bool = typer.Option(
+        False,
+        "--stdout",
+        help=(
+            "Render to a tmpdir and print meta-data / user-data / "
+            "network-config to stdout with separators. Does NOT touch "
+            "the per-VM dir under disk_image_basedir — useful for "
+            "quick inspection without root."
+        ),
+    ),
+) -> None:
     """Render cloud-init files for a manifest VM without starting it."""
     config = _load_config()
     environment, images, config_defaults, machines = config.as_tuple()
 
     machine = Machine(config.get_machine(vm_name), environment, config_defaults)
 
-    if machine:
-        image_config = _resolve_image_config(images, machine.os, machine.vm_name)
-        cloud_image = CloudImage(machine.os, image_config, environment, config_defaults)
-        # Render and write cloud-init config
-        try:
-            _, _, _ = machine.cloud_init(cloud_image, config_defaults, machines)
-        except LvlabError as exc:
-            logger.error("%s", exc)
-            raise typer.Exit(code=1)
+    if not machine:
+        return
+
+    image_config = _resolve_image_config(images, machine.os, machine.vm_name)
+    cloud_image = CloudImage(machine.os, image_config, environment, config_defaults)
+
+    if to_stdout:
+        # Redirect config_fpath to a tmpdir so the render never touches
+        # the per-VM (root-owned) directory. After write, read the three
+        # files back and print to stdout with scannable separators.
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="lvlab-cloudinit-") as tmpdir:
+            machine.config_fpath = tmpdir
+            try:
+                meta_path, user_path, net_path = machine.cloud_init(
+                    cloud_image, config_defaults, machines
+                )
+            except LvlabError as exc:
+                logger.error("%s", exc)
+                raise typer.Exit(code=1)
+            for label, fpath in (
+                ("meta-data", meta_path),
+                ("user-data", user_path),
+                ("network-config", net_path),
+            ):
+                typer.echo(f"--- {label} ---")
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    typer.echo(fh.read().rstrip("\n"))
+                typer.echo()  # trailing blank line between blocks
+        return
+
+    # Default: render and write under the per-VM dir as today.
+    try:
+        _, _, _ = machine.cloud_init(cloud_image, config_defaults, machines)
+    except LvlabError as exc:
+        logger.error("%s", exc)
+        raise typer.Exit(code=1)
 
 
 @app.command()

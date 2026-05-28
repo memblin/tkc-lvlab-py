@@ -16,6 +16,7 @@ from tkc_lvlab.utils.catalog import (
     build_image_entry,
     derive_os_variant,
     derive_username,
+    image_version,
 )
 
 
@@ -80,3 +81,84 @@ def test_build_image_entry_honours_overrides() -> None:
     assert entry.default_username == "ubuntu"
     assert entry.username_explicit is True  # came from the explicit username:
     assert entry.network_version == 1
+
+
+# --- #124: best-guess image version --------------------------------------------
+
+
+def test_image_version_debian_dated_build_from_filename() -> None:
+    """Debian dated build → ``<date>-<build>`` token (#124)."""
+    assert (
+        image_version(
+            "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/"
+            "debian-12-generic-amd64-20260518-2482.qcow2",
+            "debian-12-generic-amd64-20260518-2482.qcow2",
+        )
+        == "20260518-2482"
+    )
+
+
+def test_image_version_debian_latest_falls_back_to_url_path() -> None:
+    """Debian trixie latest → ``trixie/latest`` (from URL, filename has no date)."""
+    assert (
+        image_version(
+            "https://cloud.debian.org/images/cloud/trixie/latest/"
+            "debian-13-generic-amd64.qcow2",
+            "debian-13-generic-amd64.qcow2",
+        )
+        == "trixie/latest"
+    )
+
+
+def test_image_version_fedora_release_build_from_filename() -> None:
+    """Fedora ``<release>-<build>`` → ``44-1.7`` (#124)."""
+    assert (
+        image_version(
+            "https://download.fedoraproject.org/pub/fedora/linux/releases/44/"
+            "Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+            "Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
+        )
+        == "44-1.7"
+    )
+
+
+def test_image_version_almalinux_latest() -> None:
+    """AlmaLinux ``-latest`` → ``10 (latest)`` (major from filename, build = latest)."""
+    assert (
+        image_version(
+            "https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/"
+            "AlmaLinux-10-GenericCloud-latest.x86_64.qcow2",
+            "AlmaLinux-10-GenericCloud-latest.x86_64.qcow2",
+        )
+        == "10 (latest)"
+    )
+
+
+def test_image_version_ubuntu_codename_only() -> None:
+    """Ubuntu cloud images encode the version as a codename — ``jammy``, ``noble``."""
+    assert (
+        image_version(
+            "https://cloud-images.ubuntu.com/jammy/current/"
+            "jammy-server-cloudimg-amd64.img",
+            "jammy-server-cloudimg-amd64.img",
+        )
+        == "jammy"
+    )
+    assert (
+        image_version(
+            "https://cloud-images.ubuntu.com/noble/current/"
+            "noble-server-cloudimg-amd64.img",
+            "noble-server-cloudimg-amd64.img",
+        )
+        == "noble"
+    )
+
+
+def test_image_version_unknown_format_returns_question_mark() -> None:
+    """Unrecognised filename + URL → graceful ``?`` fallback (never crash)."""
+    assert image_version("https://example/random/path.qcow2", "path.qcow2") == "?"
+
+
+def test_image_version_handles_empty_inputs_gracefully() -> None:
+    """Empty inputs → ``?`` rather than raising."""
+    assert image_version("", "") == "?"

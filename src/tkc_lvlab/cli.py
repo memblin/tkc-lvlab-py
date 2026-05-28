@@ -42,7 +42,7 @@ from rich.table import Table
 
 from . import __version__
 from ._logging import configure_logging, get_logger
-from .utils.catalog import BUILTIN_IMAGES, resolve_catalog
+from .utils.catalog import BUILTIN_IMAGES, image_version, resolve_catalog
 from .utils.output import (
     get_console,
     is_tty,
@@ -825,13 +825,19 @@ def ssh_config(
 
 @dataclasses.dataclass
 class _ImageInitState:
-    """Mutable per-image progress for the ``lvlab init`` display (issue #104)."""
+    """Mutable per-image progress for the ``lvlab init`` display (issue #104).
+
+    ``version`` is the best-guess upstream version token shown in the init
+    table column (#124) — populated from :func:`tkc_lvlab.utils.catalog.image_version`
+    at construction; ``"?"`` when the heuristic doesn't recognise the format.
+    """
 
     name: str
     phase: str = "pending"
     bytes_done: int = 0
     bytes_total: int = 0
     error: str = ""
+    version: str = "?"
 
 
 class _InitProgress:
@@ -842,10 +848,21 @@ class _InitProgress:
     on the main thread and the workers never render.
     """
 
-    def __init__(self, names: list[str]) -> None:
+    def __init__(
+        self,
+        names: list[str],
+        *,
+        versions: dict[str, str] | None = None,
+    ) -> None:
+        # versions: per-image best-guess upstream version token from
+        # ``image_version()``, surfaced by ``lvlab init``'s table (#124).
+        # Names absent from the map fall back to "?", matching the helper.
+        versions = versions or {}
         self._lock = threading.Lock()
         self._order = list(names)
-        self._states = {n: _ImageInitState(n) for n in names}
+        self._states = {
+            n: _ImageInitState(n, version=versions.get(n, "?")) for n in names
+        }
 
     def set_phase(self, name: str, phase: str) -> None:
         """Set an image's phase (e.g. ``downloading`` / ``verifying`` / ``done``)."""
@@ -911,10 +928,13 @@ def _render_init_table(
         title=f"lvlab init — {env_name} · {len(states)} images · {jobs} concurrent"
     )
     table.add_column("image", style="bold")
+    table.add_column("version")
     table.add_column("phase")
     table.add_column("progress")
     for state in states:
-        table.add_row(state.name, state.phase, _init_progress_cell(state))
+        table.add_row(
+            state.name, state.version, state.phase, _init_progress_cell(state)
+        )
     return table
 
 
@@ -1042,7 +1062,10 @@ def init(
         CloudImage(name, cfg, environment, config_defaults)
         for name, cfg in images.items()
     ]
-    progress = _InitProgress([img.name for img in built])
+    # Best-guess upstream version per image — surfaced in the init table
+    # so an operator can see WHICH dated build / codename they cached (#124).
+    versions = {img.name: image_version(img.image_url, img.filename) for img in built}
+    progress = _InitProgress([img.name for img in built], versions=versions)
 
     typer.echo()
     typer.echo(f"Initializing Libvirt Lab Environment: {env_name}\n")

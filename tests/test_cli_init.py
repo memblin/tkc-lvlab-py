@@ -26,6 +26,11 @@ def _mock_image(name: str, *, has_gpg: bool, has_checksum: bool) -> mock.MagicMo
     img.name = name
     img.image_fpath = f"/tmp/{name}/image.qcow2"
     img.image_url = f"https://example.invalid/{name}/image.qcow2"
+    # ``filename`` is the URL basename on real CloudImage; the init path now
+    # reads it (alongside ``image_url``) for the best-guess version column
+    # (#124), so set a real string here — without this the MagicMock auto-attr
+    # would crash re.match.
+    img.filename = "image.qcow2"
     img.checksum_url_gpg = (
         f"https://example.invalid/{name}/keyring.gpg" if has_gpg else None
     )
@@ -245,6 +250,57 @@ def test_init_progress_cell_renders_bar_done_and_failed() -> None:
     failed = cli._ImageInitState("x", phase="failed", error="HTTP 404")
     cell = cli._init_progress_cell(failed)
     assert "✗" in cell and "HTTP 404" in cell
+
+
+# --- #124: best-guess image-version column in the init table ------------------
+
+
+def test_init_progress_carries_version_when_supplied() -> None:
+    """_InitProgress stamps each state with the version from the versions map (#124)."""
+    progress = cli._InitProgress(
+        ["a", "b"],
+        versions={"a": "20260518-2482", "b": "noble"},
+    )
+    snap = {s.name: s for s in progress.snapshot()}
+    assert snap["a"].version == "20260518-2482"
+    assert snap["b"].version == "noble"
+
+
+def test_init_progress_defaults_version_to_question_mark_when_unset() -> None:
+    """A name absent from the versions map (or no map at all) gets ``?`` (#124)."""
+    progress = cli._InitProgress(["a"])  # no versions map at all
+    assert progress.snapshot()[0].version == "?"
+
+
+def test_render_init_table_includes_a_version_column() -> None:
+    """The init table grew a ``version`` column between ``image`` and ``phase`` (#124)."""
+    states = [
+        cli._ImageInitState("debian12", phase="done", version="20260518-2482"),
+        cli._ImageInitState("ubuntu2404", phase="done", version="noble"),
+    ]
+    table = cli._render_init_table(states, env_name="default", jobs=2)
+    headers = [col.header for col in table.columns]
+    assert "version" in headers
+    # version sits between image and phase for a scannable column order
+    assert headers.index("version") < headers.index("phase")
+    assert headers.index("image") < headers.index("version")
+
+
+def test_render_init_table_renders_version_in_each_row() -> None:
+    """Each rendered row carries the per-image version string (#124)."""
+    from rich.console import Console
+
+    states = [
+        cli._ImageInitState("debian12", phase="done", version="20260518-2482"),
+        cli._ImageInitState("ubuntu2404", phase="done", version="noble"),
+    ]
+    table = cli._render_init_table(states, env_name="default", jobs=2)
+
+    console = Console(width=120, record=True, color_system=None)
+    console.print(table)
+    output = console.export_text()
+    assert "20260518-2482" in output
+    assert "noble" in output
 
 
 def test_init_one_image_failure_exits_1_others_still_processed() -> None:

@@ -135,6 +135,82 @@ def derive_username(key: str, explicit: str | None) -> str:
     return _USERNAME_BY_FAMILY.get(family, family)
 
 
+# Best-guess version parsers for the built-in catalog's filename / URL
+# patterns. Order matters: the first matcher whose regex matches wins. Each
+# matcher reads the filename + URL and returns a short, human-readable
+# version token (e.g. ``"20260518-2482"``, ``"44-1.7"``, ``"jammy"``); the
+# tokens are surfaced by ``lvlab init`` (#124) so an operator can tell at a
+# glance *which* upstream build each cached image actually is. Add a new
+# matcher when an upstream's naming convention changes; keep them
+# string-only (no network, no file I/O) so they stay cheap in the init
+# hot path.
+_DEBIAN_DATED_BUILD_RE = re.compile(
+    r"^debian-\d+-generic-amd64-(\d{6,8})-(\d+)\.qcow2$"
+)
+_FEDORA_RELEASE_BUILD_RE = re.compile(
+    r"^Fedora-Cloud-.+-(\d+)-([\d.]+)\.x86_64\.qcow2$"
+)
+_ALMALINUX_RE = re.compile(
+    r"^AlmaLinux-(\d+)-GenericCloud-(latest|[\d.]+)\.x86_64\.qcow2$"
+)
+_UBUNTU_CODENAME_RE = re.compile(r"^([a-z]+)-server-cloudimg-amd64\.(?:img|qcow2)$")
+_DEBIAN_URL_CODENAME_RE = re.compile(r"/images/cloud/([a-z]+)/([^/]+)/[^/]+\.qcow2$")
+
+
+def image_version(image_url: str, filename: str) -> str:
+    """Best-guess upstream version token for a cloud image.
+
+    Reads the source-of-truth strings (URL + filename) the way an operator
+    would — pulls the most specific version token from the **filename**
+    first, falls back to the **URL path** when the filename is generic
+    (e.g. Debian's ``latest`` tree), and returns ``"?"`` when nothing
+    matches rather than crashing. Pure string work — no network, no file
+    I/O — so it's cheap to call once per image in the init hot path.
+
+    Args:
+        image_url: The image URL (used as a fallback signal).
+        filename: The bare image filename (the last URL segment is fine).
+
+    Returns:
+        A short, human-readable version token (``"20260518-2482"`` /
+        ``"44-1.7"`` / ``"jammy"`` / ``"trixie/latest"`` / ``"10 (latest)"``)
+        or ``"?"`` when no parser recognises either string.
+
+    Examples:
+        >>> image_version(
+        ...     "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/"
+        ...     "debian-12-generic-amd64-20260518-2482.qcow2",
+        ...     "debian-12-generic-amd64-20260518-2482.qcow2",
+        ... )
+        '20260518-2482'
+        >>> image_version("", "")
+        '?'
+    """
+    if filename:
+        m = _DEBIAN_DATED_BUILD_RE.match(filename)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}"
+
+        m = _FEDORA_RELEASE_BUILD_RE.match(filename)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}"
+
+        m = _ALMALINUX_RE.match(filename)
+        if m:
+            return f"{m.group(1)} ({m.group(2)})"
+
+        m = _UBUNTU_CODENAME_RE.match(filename)
+        if m:
+            return m.group(1)
+
+    if image_url:
+        m = _DEBIAN_URL_CODENAME_RE.search(image_url)
+        if m:
+            return f"{m.group(1)}/{m.group(2)}"
+
+    return "?"
+
+
 def build_image_entry(key: str, cfg: dict[str, Any]) -> ImageEntry:
     """Resolve one image-description dict + its key into an :class:`ImageEntry`.
 

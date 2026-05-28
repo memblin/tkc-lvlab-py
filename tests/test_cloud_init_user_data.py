@@ -40,3 +40,27 @@ def test_user_data_omits_passwd_when_absent() -> None:
     rendered = _user_data()
     assert "passwd:" not in rendered
     assert "lock_passwd" not in rendered
+
+
+# --- #120: cloud_init.manage_etc_hosts opt-out --------------------------------
+
+
+def test_user_data_renders_manage_etc_hosts_true_by_default() -> None:
+    """No flag → today's behaviour: manage_etc_hosts: true (#120)."""
+    rendered = _user_data()
+    assert "manage_etc_hosts: true" in rendered
+    assert "manage_etc_hosts: false" not in rendered
+
+
+def test_user_data_renders_manage_etc_hosts_false_when_disabled() -> None:
+    """cloud_init.manage_etc_hosts: false → manage_etc_hosts: false in user-data."""
+    rendered = _user_data(manage_etc_hosts=False)
+    assert "manage_etc_hosts: false" in rendered
+    assert "manage_etc_hosts: true" not in rendered
+
+
+def test_user_data_renders_manage_etc_hosts_true_when_explicitly_enabled() -> None:
+    """Explicit cloud_init.manage_etc_hosts: true renders as such (no double-render)."""
+    rendered = _user_data(manage_etc_hosts=True)
+    assert "manage_etc_hosts: true" in rendered
+    assert "manage_etc_hosts: false" not in rendered

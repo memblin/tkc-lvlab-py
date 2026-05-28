@@ -270,6 +270,31 @@ The same snippet is also injected into the **guest's** `/etc/hosts` and
 first-boot via `runcmd`, so VMs come up able to resolve each other by
 hostname.
 
+### Disabling in-guest `/etc/hosts` management
+
+The default is appropriate for a self-contained lvlab lab. When an
+external configuration-management tool (Salt, Ansible, …) owns
+`/etc/hosts` on the guest — the lab's primary use case — set
+`cloud_init.manage_etc_hosts: false` and lvlab will leave the guest's
+hosts file alone:
+
+```yaml
+config_defaults:
+  cloud_init:
+    manage_etc_hosts: false   # whole environment
+
+machines:
+  - vm_name: salt.local
+    cloud_init:
+      manage_etc_hosts: true  # per-machine override wins
+```
+
+The flag gates **both** mechanisms together: it renders
+`manage_etc_hosts: false` in the guest's cloud-init `user-data` (so
+cloud-init's own hosts management is off) **and** skips lvlab's two
+runcmd heredocs that rewrite `/etc/hosts` + the distro
+`hosts.{debian,redhat}.tmpl`. Default is `true` (today's behaviour).
+
 ## cloudinit
 
 Re-render the cloud-init `meta-data`, `user-data`, and `network-config`

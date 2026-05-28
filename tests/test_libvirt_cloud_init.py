@@ -334,3 +334,74 @@ def test_cloud_init_no_password_hash_injects_nothing(tmp_path: Path) -> None:
     captured: list = []
     _run_cloud_init(machine, {"cloud_init": {}}, captured, password_hash=None)
     assert "passwd" not in captured[0]
+
+
+# ---------------------------------------------------------------------------
+# manage_etc_hosts opt-out (issue #120)
+# ---------------------------------------------------------------------------
+
+
+def _hosts_heredocs(runcmd: list) -> list:
+    """Slice the two manifest-wide /etc/hosts heredocs out of the merged runcmd."""
+    return [line for line in runcmd if "hosts heredoc" in line]
+
+
+def test_cloud_init_skips_hosts_heredocs_when_defaults_disable_manage_etc_hosts(
+    tmp_path: Path,
+) -> None:
+    """config_defaults.cloud_init.manage_etc_hosts: false → no /etc/hosts heredocs."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {"runcmd": ["machine-only"]}
+    captured: list = []
+    _run_cloud_init(
+        machine,
+        {"cloud_init": {"manage_etc_hosts": False}},
+        captured,
+    )
+    runcmd = captured[0].get("runcmd", [])
+    assert _hosts_heredocs(runcmd) == []
+    assert runcmd == ["machine-only"], runcmd
+
+
+def test_cloud_init_skips_hosts_heredocs_when_machine_disables_manage_etc_hosts(
+    tmp_path: Path,
+) -> None:
+    """Per-machine cloud_init.manage_etc_hosts: false → no /etc/hosts heredocs."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {
+        "manage_etc_hosts": False,
+        "runcmd": ["machine-only"],
+    }
+    captured: list = []
+    _run_cloud_init(machine, {"cloud_init": {}}, captured)
+    runcmd = captured[0].get("runcmd", [])
+    assert _hosts_heredocs(runcmd) == []
+    assert runcmd == ["machine-only"], runcmd
+
+
+def test_cloud_init_machine_override_re_enables_manage_etc_hosts_over_defaults(
+    tmp_path: Path,
+) -> None:
+    """Defaults disable, per-machine re-enables → heredocs reappear (machine wins)."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {"manage_etc_hosts": True}
+    captured: list = []
+    _run_cloud_init(
+        machine,
+        {"cloud_init": {"manage_etc_hosts": False}},
+        captured,
+    )
+    runcmd = captured[0].get("runcmd", [])
+    assert len(_hosts_heredocs(runcmd)) == 2, runcmd
+
+
+def test_cloud_init_emits_hosts_heredocs_by_default_when_flag_unset(
+    tmp_path: Path,
+) -> None:
+    """Default (flag absent everywhere) → two heredocs prepended as today."""
+    machine = _make_machine(tmp_path)
+    machine.cloud_init_config = {}
+    captured: list = []
+    _run_cloud_init(machine, {"cloud_init": {}}, captured)
+    runcmd = captured[0].get("runcmd", [])
+    assert len(_hosts_heredocs(runcmd)) == 2, runcmd

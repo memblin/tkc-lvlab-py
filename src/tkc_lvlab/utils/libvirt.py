@@ -540,21 +540,28 @@ class _CloudInitComposer:
                 logger.error("Could not parse config file.")
                 raise ConfigError("Could not parse config file.") from exc
 
-        hosts_snippet = generate_hosts(
-            machine.environment, config_defaults, machines, heredoc="/etc/hosts"
-        )
-        template_fpath = self._resolve_hosts_template_path()
-        hosts_template_snippet = generate_hosts(
-            machine.environment, config_defaults, machines, heredoc=template_fpath
-        )
-
-        # Prepend the two hosts heredoc snippets so /etc/hosts (and the
-        # cloud-init template) are populated before any runcmd entry that
-        # does DNS-ish work.
-        cloud_init_config["runcmd"] = [
-            hosts_snippet,
-            hosts_template_snippet,
-        ] + cloud_init_config.get("runcmd", [])
+        # The manage_etc_hosts flag (#120) gates BOTH halves of lvlab's
+        # in-guest /etc/hosts management together: the cloud-init template's
+        # ``manage_etc_hosts: true`` line AND the two runcmd heredocs that
+        # rewrite /etc/hosts + the distro hosts.*.tmpl. Default true preserves
+        # today's behaviour; set ``cloud_init.manage_etc_hosts: false`` (in
+        # config_defaults or per-machine) when an external CM tool (Salt /
+        # Ansible) owns /etc/hosts on the guest.
+        if cloud_init_config.get("manage_etc_hosts", True):
+            hosts_snippet = generate_hosts(
+                machine.environment, config_defaults, machines, heredoc="/etc/hosts"
+            )
+            template_fpath = self._resolve_hosts_template_path()
+            hosts_template_snippet = generate_hosts(
+                machine.environment, config_defaults, machines, heredoc=template_fpath
+            )
+            # Prepend the two hosts heredoc snippets so /etc/hosts (and the
+            # cloud-init template) are populated before any runcmd entry that
+            # does DNS-ish work.
+            cloud_init_config["runcmd"] = [
+                hosts_snippet,
+                hosts_template_snippet,
+            ] + cloud_init_config.get("runcmd", [])
 
         userdata_config_fpath = self._render_and_write(
             UserData(cloud_init_config, machine.hostname, machine.domain, machine.fqdn),

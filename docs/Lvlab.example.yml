@@ -47,6 +47,11 @@ environment:
         pubkey: ~/.ssh/id_ed25519.pub
         sudo: ["ALL=(ALL) NOPASSWD:ALL"]
         shell: /bin/bash
+        # Set to ``false`` when an external CM tool (Salt, Ansible, …)
+        # owns /etc/hosts in the guest. Default is ``true`` (today's
+        # behaviour). Per-machine ``cloud_init.manage_etc_hosts`` wins
+        # over this default.
+        manage_etc_hosts: true
 
     machines:
       - vm_name: salt.local

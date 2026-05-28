@@ -51,6 +51,12 @@ ProgressCallback = Callable[[int, int], None]
 
 VERIFIED_SUFFIX = ".verified"
 
+#: Default lvlab base directory used when the manifest's ``config_defaults``
+#: omits ``cloud_image_basedir`` / ``disk_image_basedir``. The cloud-image
+#: cache lands at ``<basedir>/cloud-images`` and per-VM disks under
+#: ``<basedir>/<env>/<vm>/``.
+DEFAULT_LVLAB_BASEDIR = "/var/lib/libvirt/images/lvlab"
+
 # Tolerant-download tuning. A cloud image is ~400 MB and lab hosts often pull
 # from flaky community mirrors, so a single connect timeout + no retry (the
 # pre-#87 behavior) turned a momentary mirror stall into a hard failure.
@@ -153,7 +159,7 @@ class CloudImage:  # pylint: disable=too-many-instance-attributes
         self.filename = os.path.basename(urlparse(self.image_url).path)
 
         configured_basedir = config_defaults.get(
-            "cloud_image_basedir", "/var/lib/libvirt/images/lvlab"
+            "cloud_image_basedir", DEFAULT_LVLAB_BASEDIR
         )
         # Idempotent ``/cloud-images`` suffix. The 2026-05-23 smoke test
         # set ``cloud_image_basedir: /var/lib/libvirt/images/cloud-images``
@@ -744,7 +750,7 @@ def resolve_cloud_image_dir(config_defaults: dict[str, Any]) -> str:
         The absolute (``~``-expanded) cache directory path.
     """
     configured_basedir = config_defaults.get(
-        "cloud_image_basedir", "/var/lib/libvirt/images/lvlab"
+        "cloud_image_basedir", DEFAULT_LVLAB_BASEDIR
     )
     if os.path.basename(configured_basedir.rstrip(os.sep)) == "cloud-images":
         image_dir = configured_basedir
@@ -829,7 +835,7 @@ def backing_files_in_use(
         directory. Empty when nothing on-disk references the cache.
     """
     disk_basedir = os.path.expanduser(
-        config_defaults.get("disk_image_basedir", "/var/lib/libvirt/images/lvlab")
+        config_defaults.get("disk_image_basedir", DEFAULT_LVLAB_BASEDIR)
     )
     cache_dir = resolve_cloud_image_dir(config_defaults)
 

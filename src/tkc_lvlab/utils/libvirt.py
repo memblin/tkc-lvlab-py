@@ -57,6 +57,10 @@ logger = get_logger(__name__)
 # Extracted to a module constant to satisfy SonarQube python:S1192 — keep the
 # wording in lockstep with the four call sites in this module.
 VM_DOES_NOT_EXIST_MSG = "The virtual machine %s does not exist in this Libvirt URI"
+#: ``logger.error`` format for a failed ``virsh list`` (args: uri, error).
+FAILED_LIST_DOMAINS_MSG = "Failed to list domains at %s: %s"
+#: ``logger.error`` format for a failed ``virsh domstate`` (args: vm_name, error).
+FAILED_QUERY_STATE_MSG = "Failed to query state of %s: %s"
 
 # Maps a ``hosts.{family}.tmpl`` filename to the lowercased ``machine.os``
 # prefixes that should select it. Used by
@@ -327,7 +331,7 @@ class _DomainDestroyer:
         try:
             current_vms = virsh_list_all_names(uri)
         except VirshError as e:
-            logger.error("Failed to list domains at %s: %s", uri, e)
+            logger.error(FAILED_LIST_DOMAINS_MSG, uri, e)
             return False
 
         if self.libvirt_vm_name not in current_vms:
@@ -337,7 +341,7 @@ class _DomainDestroyer:
         try:
             vm_state = virsh_domstate(uri, self.libvirt_vm_name)
         except VirshError as e:
-            logger.error("Failed to query state of %s: %s", self.vm_name, e)
+            logger.error(FAILED_QUERY_STATE_MSG, self.vm_name, e)
             return False
 
         vm_state = self._force_off_if_alive(uri, vm_state)
@@ -805,6 +809,105 @@ class _CloudInitComposer:
         raise ValueError(f"Could not find a template file for {self.machine.os}")
 
 
+def _apply_interface_defaults(
+    machine: dict[str, Any],
+    config_defaults: dict[str, Any],
+    networks: dict[str, NetworkDefaults],
+) -> None:
+    """Merge interface defaults, pin a per-NIC MAC, and fill the bridge gateway.
+
+    Mutates ``machine["interfaces"]`` in place: layers ``config_defaults``
+    under each interface, pins a deterministic MAC (unless the manifest
+    supplied one) so the ``virt-install --network ...,mac=`` arg and the
+    cloud-init ``match: macaddress`` agree, and inherits a bridge interface's
+    gateway from the layered ``networks:`` map (#138 Phase 3) when neither the
+    manifest nor defaults set ``ip4gw``.
+
+    Args:
+        machine: The machine dict; its ``interfaces`` list is mutated.
+        config_defaults: The manifest's ``config_defaults`` block.
+        networks: The layered ``networks:`` map.
+    """
+    for index, iface in enumerate(machine.get("interfaces", [])):
+        machine["interfaces"][index] = {
+            **config_defaults.get("interfaces", {}),
+            **iface,
+        }
+        machine["interfaces"][index].setdefault("macaddress", generate_mac())
+        # An explicit ``ip4gw`` always wins (setdefault); a static bridge
+        # interface otherwise inherits its network's configured gateway.
+        merged_iface = machine["interfaces"][index]
+        net_defaults = networks.get(merged_iface.get("network"))
+        if net_defaults and merged_iface.get("ip4") and net_defaults.gateway:
+            merged_iface.setdefault("ip4gw", net_defaults.gateway)
+
+
+def _validate_interfaces(machine: dict[str, Any]) -> None:
+    """Validate each interface's ``network_type`` and reject static-IP + user-mode.
+
+    Runs at construction time so an operator sees a clear error before any
+    state is created (cloud-init render, qcow2 disk, virt-install). Static IPs
+    under SLIRP/passt are silently ignored by virt-install; the combination is
+    refused loudly instead.
+
+    Args:
+        machine: The machine dict, after interface defaults are merged.
+
+    Raises:
+        ValueError: An interface declares an unknown ``network_type``, or pairs
+            a user-mode ``network_type`` with a static ``ip4``/``ip6``.
+    """
+    for iface in machine.get("interfaces", []):
+        network_type = iface.get("network_type", "network")
+        if network_type not in NETWORK_TYPES:
+            raise ValueError(
+                f"Invalid network_type {network_type!r} on interface "
+                f"{iface.get('name', '<unnamed>')!r}. "
+                f"Valid values: {', '.join(NETWORK_TYPES)}."
+            )
+        if network_type in USER_MODE_NETWORK_TYPES and (
+            iface.get("ip4") or iface.get("ip6")
+        ):
+            static_field = "ip4" if iface.get("ip4") else "ip6"
+            raise ValueError(
+                f"Interface {iface.get('name', '<unnamed>')!r} declares "
+                f"network_type={network_type!r} together with a static "
+                f"{static_field} ({iface[static_field]!r}). User-mode "
+                f"networking (SLIRP/passt) does not honour static IPs — "
+                f"remove the {static_field} field or switch to "
+                f"network_type='network'."
+            )
+
+
+def _merge_shared_directories(
+    machine: dict[str, Any], config_defaults: dict[str, Any]
+) -> None:
+    """Merge shared_directories defaults and expand ``~``/``$HOME`` source paths.
+
+    Defaults always apply; per-machine entries extend the list and override any
+    default sharing their ``mount_tag`` (result is keyed-by-mount_tag). Source
+    paths are then expanded so the manifest stays portable across users without
+    hardcoding a home dir (matching the ``disk_image_basedir`` expansion).
+
+    Args:
+        machine: The machine dict; its ``shared_directories`` is mutated.
+        config_defaults: The manifest's ``config_defaults`` block.
+    """
+    default_shared_dirs = config_defaults.get("shared_directories", []) or []
+    machine_shared_dirs = machine.get("shared_directories", []) or []
+    merged_shared_dirs = {sd["mount_tag"]: sd for sd in default_shared_dirs}
+    for sd in machine_shared_dirs:
+        merged_shared_dirs[sd["mount_tag"]] = {
+            **merged_shared_dirs.get(sd["mount_tag"], {}),
+            **sd,
+        }
+    machine["shared_directories"] = list(merged_shared_dirs.values())
+
+    for sd in machine["shared_directories"]:
+        if "source" in sd:
+            sd["source"] = os.path.expanduser(os.path.expandvars(sd["source"]))
+
+
 class Machine:
     """A libvirt-managed lab VM described by the ``Lvlab.yml`` manifest.
 
@@ -882,55 +985,11 @@ class Machine:
 
         networks = networks or {}
 
-        # Apply interface defaults, then pin a deterministic MAC per
-        # interface (unless the manifest supplied one). The same address
-        # feeds both the virt-install ``--network ...,mac=`` arg
-        # (_virt_install_network_arg) and the cloud-init network-config's
-        # ``match: macaddress`` (rendered in cloud_init()), so the guest
-        # config binds to the right NIC regardless of the distro-assigned
-        # device name — required for the NetworkManager renderer
-        # (Fedora/RHEL), which ignores match-by-driver.
-        for index, iface in enumerate(machine.get("interfaces", [])):
-            machine["interfaces"][index] = {
-                **config_defaults.get("interfaces", {}),
-                **iface,
-            }
-            machine["interfaces"][index].setdefault("macaddress", generate_mac())
-            # Fill the gateway for a static interface from the layered
-            # ``networks:`` map (#138 Phase 3) when the manifest/defaults
-            # didn't set one: a bridge interface (``network: vlan10``) inherits
-            # ``vlan10``'s configured gateway instead of repeating it per VM.
-            # An explicit ``ip4gw`` always wins (setdefault).
-            merged_iface = machine["interfaces"][index]
-            net_defaults = networks.get(merged_iface.get("network"))
-            if net_defaults and merged_iface.get("ip4") and net_defaults.gateway:
-                merged_iface.setdefault("ip4gw", net_defaults.gateway)
-
-        # Validate interface network_type and the ip4-with-user-mode
-        # combination at construction time so an operator sees a clear
-        # error before any state is created (cloud-init render, qcow2
-        # disk, virt-install). Static IPs under SLIRP/passt are silently
-        # ignored by virt-install; refuse the combination loudly instead.
-        for iface in machine.get("interfaces", []):
-            network_type = iface.get("network_type", "network")
-            if network_type not in NETWORK_TYPES:
-                raise ValueError(
-                    f"Invalid network_type {network_type!r} on interface "
-                    f"{iface.get('name', '<unnamed>')!r}. "
-                    f"Valid values: {', '.join(NETWORK_TYPES)}."
-                )
-            if network_type in USER_MODE_NETWORK_TYPES and (
-                iface.get("ip4") or iface.get("ip6")
-            ):
-                static_field = "ip4" if iface.get("ip4") else "ip6"
-                raise ValueError(
-                    f"Interface {iface.get('name', '<unnamed>')!r} declares "
-                    f"network_type={network_type!r} together with a static "
-                    f"{static_field} ({iface[static_field]!r}). User-mode "
-                    f"networking (SLIRP/passt) does not honour static IPs — "
-                    f"remove the {static_field} field or switch to "
-                    f"network_type='network'."
-                )
+        # Merge interface defaults + pin per-NIC MACs, then validate the
+        # network_type / static-IP combination before any state is created.
+        # (See the module-level helpers for the full MAC-matching rationale.)
+        _apply_interface_defaults(machine, config_defaults, networks)
+        _validate_interfaces(machine)
 
         # Apply disk defaults
         for index, disk in enumerate(machine.get("disks", [])):
@@ -944,26 +1003,9 @@ class Machine:
             )
             machine["disks"][index] = {**disk_defaults, **disk}
 
-        # Apply shared_directories defaults.
-        # Defaults always apply; per-machine entries extend the list and override any
-        # default whose mount_tag they share. Result is a list keyed-by-mount_tag.
-        default_shared_dirs = config_defaults.get("shared_directories", []) or []
-        machine_shared_dirs = machine.get("shared_directories", []) or []
-        merged_shared_dirs = {sd["mount_tag"]: sd for sd in default_shared_dirs}
-        for sd in machine_shared_dirs:
-            merged_shared_dirs[sd["mount_tag"]] = {
-                **merged_shared_dirs.get(sd["mount_tag"], {}),
-                **sd,
-            }
-        machine["shared_directories"] = list(merged_shared_dirs.values())
-
-        # Expand ``~`` and ``$HOME`` references in shared_directories source
-        # paths so the manifest can stay portable across users without
-        # hardcoding a specific home dir. Matches the expansion behavior
-        # already applied to ``disk_image_basedir`` further down.
-        for sd in machine["shared_directories"]:
-            if "source" in sd:
-                sd["source"] = os.path.expanduser(os.path.expandvars(sd["source"]))
+        # Merge shared_directories defaults and expand ``~``/``$HOME`` in
+        # source paths (keyed-by-mount_tag; see the module-level helper).
+        _merge_shared_directories(machine, config_defaults)
 
         # Apply machine defaults
         machine = {**config_defaults, **machine}
@@ -1430,7 +1472,7 @@ class Machine:
         try:
             current_vms = virsh_list_all_names(uri)
         except VirshError as e:
-            logger.error("Failed to list domains at %s: %s", uri, e)
+            logger.error(FAILED_LIST_DOMAINS_MSG, uri, e)
             return 1
 
         if self.libvirt_vm_name not in current_vms:
@@ -1443,7 +1485,7 @@ class Machine:
         try:
             vm_state = virsh_domstate(uri, self.libvirt_vm_name)
         except VirshError as e:
-            logger.error("Failed to query state of %s: %s", self.vm_name, e)
+            logger.error(FAILED_QUERY_STATE_MSG, self.vm_name, e)
             return 1
 
         if vm_state in DEAD_STATES:
@@ -1471,7 +1513,7 @@ class Machine:
         try:
             current_vms = virsh_list_all_names(uri)
         except VirshError as e:
-            logger.error("Failed to list domains at %s: %s", uri, e)
+            logger.error(FAILED_LIST_DOMAINS_MSG, uri, e)
             return 1
 
         if self.libvirt_vm_name not in current_vms:
@@ -1483,7 +1525,7 @@ class Machine:
         try:
             vm_state = virsh_domstate(uri, self.libvirt_vm_name)
         except VirshError as e:
-            logger.error("Failed to query state of %s: %s", self.vm_name, e)
+            logger.error(FAILED_QUERY_STATE_MSG, self.vm_name, e)
             return 1
 
         if vm_state in SHUTDOWNABLE_STATES:

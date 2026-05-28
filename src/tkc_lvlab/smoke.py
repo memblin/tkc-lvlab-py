@@ -88,6 +88,9 @@ MEMORY_CONFIRM_FRACTION = 0.5
 # instead of sprawling, and a small window still fits (issue #126).
 SMOKE_DISPLAY_WIDTH = 80
 
+#: Rich style for highlighted values in the host/packing plan header.
+_STYLE_PLAN_VALUE = "bold cyan"
+
 # Conservative fallbacks if `free`/`nproc` cannot be read on an unusual host —
 # enough to still produce a (small) one-or-two-at-a-time plan.
 _FALLBACK_MEMORY_MIB = 2048
@@ -543,7 +546,7 @@ def check_static_ips_free(
             f"  Free band:   {free_band_str}",
             "",
             "Two remedies (either resolves this):",
-            "  - Narrow the network's DHCP range so the static IPs sit " "outside it",
+            "  - Narrow the network's DHCP range so the static IPs sit outside it",
             "    (see docs-extra/host-validation.md).",
             "  - Move the static IPs in the manifest into the free band.",
         ]
@@ -943,14 +946,14 @@ def render_plan(console: Console, plan: SmokePlan) -> None:
     host.append(
         f"{res.vcpus} vCPU · {_gib(res.available_memory_mib)} available "
         f"of {_gib(res.total_memory_mib)}",
-        style="bold cyan",
+        style=_STYLE_PLAN_VALUE,
     )
     console.print(host)
 
     packing = Text("  packing   ")
     if plan.batch_size_override is not None:
         packing.append(
-            f"fixed --batch-size={plan.batch_size_override}", style="bold cyan"
+            f"fixed --batch-size={plan.batch_size_override}", style=_STYLE_PLAN_VALUE
         )
         packing.append(f"  (budget {_gib(plan.budget_mib)})")
     else:
@@ -959,7 +962,9 @@ def render_plan(console: Console, plan: SmokePlan) -> None:
             if res.available_memory_mib
             else 0
         )
-        packing.append(f"each batch <= {_gib(plan.budget_mib)}", style="bold cyan")
+        packing.append(
+            f"each batch <= {_gib(plan.budget_mib)}", style=_STYLE_PLAN_VALUE
+        )
         packing.append(f"  ({pct}% of available; {_gib(plan.reserve_mib)} reserved)")
     console.print(packing)
     console.print()

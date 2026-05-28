@@ -664,6 +664,28 @@ def _resolve_authorized_keys(public_key: Path | None) -> list[str]:
     return dedupe_public_keys(keys)
 
 
+def _net_default(flag: Any, net_defaults: NetworkDefaults | None, attr: str) -> Any:
+    """Resolve a value by precedence: CLI flag, then network entry, then ``None``.
+
+    Folds the resolved ``networks[<name>]`` host-config defaults under an
+    explicit CLI flag: the flag wins when set, otherwise the network entry's
+    attribute supplies the value, and a missing entry leaves it ``None`` for
+    ``resolve_network_settings``.
+
+    Args:
+        flag: The CLI flag value; wins when not ``None``.
+        net_defaults: The resolved ``networks[<name>]`` entry, or ``None``.
+        attr: The :class:`NetworkDefaults` attribute name to fall back to.
+
+    Returns:
+        ``flag`` when set; else ``getattr(net_defaults, attr)`` when a network
+        entry exists; else ``None``.
+    """
+    if flag is not None:
+        return flag
+    return getattr(net_defaults, attr) if net_defaults else None
+
+
 def _build_createvm_context(
     *,
     catalog: dict[str, dict[str, Any]],
@@ -747,21 +769,9 @@ def _build_createvm_context(
     # an explicit flag wins, otherwise the networks[<name>] entry supplies the
     # value (and a missing entry leaves it None for resolve_network_settings).
     net_defaults = (networks or {}).get(resolved_network)
-    eff_gateway = (
-        default_gateway
-        if default_gateway is not None
-        else (net_defaults.gateway if net_defaults else None)
-    )
-    eff_dns = (
-        default_dns
-        if default_dns is not None
-        else (net_defaults.dns if net_defaults else None)
-    )
-    eff_search = (
-        default_search
-        if default_search is not None
-        else (net_defaults.search if net_defaults else None)
-    )
+    eff_gateway = _net_default(default_gateway, net_defaults, "gateway")
+    eff_dns = _net_default(default_dns, net_defaults, "dns")
+    eff_search = _net_default(default_search, net_defaults, "search")
 
     network_info = get_network_info(_SYSTEM_URI, resolved_network)
     # A static address on a bridge needs DNS + gateway from a flag or a

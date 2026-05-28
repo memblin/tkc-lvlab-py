@@ -1286,6 +1286,42 @@ def _read_manifest_text(fpath: str = "Lvlab.yml") -> str:
         return ""
 
 
+def _echo_protected_survivors(
+    image_dir: str,
+    backing: set[str],
+    manifest_protected: set[str],
+    commented: set[str],
+) -> None:
+    """Print why each surviving cache file is protected, by precedence.
+
+    Precedence (most authoritative first): an in-use qcow2 backing file, then
+    an active manifest image entry, then a commented-out manifest mention. A
+    non-existent ``image_dir`` prints nothing.
+
+    Args:
+        image_dir: The cloud-image cache directory.
+        backing: Absolute paths in use as a qcow2 backing file.
+        manifest_protected: Absolute paths claimed by an active manifest entry.
+        commented: Absolute paths referenced only by a commented-out entry.
+    """
+    if not os.path.isdir(image_dir):
+        return
+    backing_abs = {os.path.abspath(p) for p in backing}
+    manifest_abs = {os.path.abspath(p) for p in manifest_protected}
+    commented_abs = {os.path.abspath(p) for p in commented}
+    for fname in sorted(os.listdir(image_dir)):
+        fpath = os.path.join(image_dir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        abspath = os.path.abspath(fpath)
+        if abspath in backing_abs:
+            typer.echo(f"Protected (in use as backing file): {fpath}")
+        elif abspath in manifest_abs:
+            typer.echo(f"Protected (defined in manifest): {fpath}")
+        elif abspath in commented_abs:
+            typer.echo(f"Protected (commented out in manifest): {fpath}")
+
+
 def _echo_clean_plan(candidates: list[CleanupCandidate], force: bool) -> None:
     """Print the per-candidate removal plan (dry-run preview or live action)."""
     verb = "Removing" if force else "Would remove"
@@ -1355,23 +1391,8 @@ def images_clean(
     candidates = find_cleanup_candidates(image_dir, protected)
 
     # Report what survives and why — manifest-protected vs. in-use backing vs.
-    # comment-referenced. Precedence (most authoritative first): an in-use
-    # backing file, then an active manifest entry, then a commented-out mention.
-    if os.path.isdir(image_dir):
-        backing_abs = {os.path.abspath(p) for p in backing}
-        manifest_abs = {os.path.abspath(p) for p in manifest_protected}
-        commented_abs = {os.path.abspath(p) for p in commented}
-        for fname in sorted(os.listdir(image_dir)):
-            fpath = os.path.join(image_dir, fname)
-            if not os.path.isfile(fpath):
-                continue
-            abspath = os.path.abspath(fpath)
-            if abspath in backing_abs:
-                typer.echo(f"Protected (in use as backing file): {fpath}")
-            elif abspath in manifest_abs:
-                typer.echo(f"Protected (defined in manifest): {fpath}")
-            elif abspath in commented_abs:
-                typer.echo(f"Protected (commented out in manifest): {fpath}")
+    # comment-referenced (most authoritative first).
+    _echo_protected_survivors(image_dir, backing, manifest_protected, commented)
 
     if not candidates:
         typer.echo("No unreferenced cloud-image files to remove.")

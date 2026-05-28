@@ -823,8 +823,15 @@ def _build_createvm_context(
             context={
                 "vm_name": vm_name,
                 "vm_hostname": vm_name.split(".")[0],
+                # createvm has no environment concept and treats the bare
+                # ``vm_name`` as the fully-qualified name (no env-namespacing
+                # like ``lvlab up`` does). #140 added ``fqdn``/``environment``
+                # to the shared placeholder set; createvm populates them with
+                # the closest equivalents.
+                "fqdn": vm_name,
                 "default_vm_username": username,
                 "password_hash": password_hash,
+                "environment": "",
             },
             authorized_keys=authorized_keys,
             runcmd_prefix=runcmd or [],

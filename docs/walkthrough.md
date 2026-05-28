@@ -583,6 +583,68 @@ are not in this cut. Bridges require the `--gateway6`/`--dns6` flags or
 v6 fields on every per-machine interface; a follow-up tracks adding the
 v6 keys to `networks:`.
 
+## `user_data` cloud-config override (#140)
+
+For machines that need a non-trivial cloud-config — multiple users,
+`write_files`, package installs, custom mounts, anything beyond the
+structured per-machine `cloud_init` keys — set
+`cloud_init.user_data` to a raw cloud-config mapping. The whole
+mapping replaces the structured `user-data` render for that machine
+(an existing parallel of the `createvm` flag added in 0.5.2).
+
+```yaml
+machines:
+  - vm_name: salt-master
+    hostname: salt-master
+    os: debian12
+    cloud_init:
+      pubkey: ~/.ssh/id_ed25519.pub
+      user_data:
+        users:
+          - name: "{default_vm_username}"
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            shell: /bin/bash
+            passwd: "{password_hash}"
+          - name: deploy
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            shell: /bin/bash
+            ssh_authorized_keys:
+              - ssh-ed25519 AAAA... ops@laptop
+        write_files:
+          - path: /etc/motd
+            content: |
+              {fqdn} — managed by lvlab ({environment})
+        package_update: true
+        packages: [vim, jq]
+        runcmd:
+          - systemctl enable --now salt-master
+```
+
+**Placeholders.** `{vm_name}`, `{vm_hostname}`, `{fqdn}`,
+`{default_vm_username}`, `{password_hash}`, `{environment}` are
+substituted from the per-machine resolved context. An override that
+references anything else raises a clean error rather than emitting a
+silent blank. The placeholder set is shared with `createvm` (which
+fills `fqdn` from `VM_NAME` and `environment` as the empty string).
+
+**SSH keys.** A literal `cloud_init.pubkey` (or path) is appended to
+every user's `ssh_authorized_keys` automatically — the same `pubkey`
+mechanism the structured path uses. An override that hard-codes its
+own `ssh_authorized_keys` is fine; the discovered keys are appended
+without duplication.
+
+**Layering.** A `cloud_init.user_data` set at the `config_defaults`
+level applies to every machine; a per-machine `cloud_init.user_data`
+replaces it wholesale (overriding two whole cloud-config documents
+has no clean merge semantics — the per-machine declaration owns the
+document).
+
+**`/etc/hosts` + runcmd.** When `cloud_init.manage_etc_hosts` is on
+(the default), lvlab's two manifest-wide `/etc/hosts` heredocs are
+still prepended to the override's `runcmd` — same composition rule
+`createvm` applies. Operators who want full control set
+`cloud_init.manage_etc_hosts: false` (#120).
+
 ## Where things live on disk
 
 Two paths are configurable in the manifest's `config_defaults`:

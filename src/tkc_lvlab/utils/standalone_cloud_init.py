@@ -37,14 +37,21 @@ from ..exceptions import CloudInitError
 _DEFAULT_SUDO = "ALL=(ALL) NOPASSWD:ALL"
 _DEFAULT_SHELL = "/bin/bash"
 
-# Placeholders a ``user_data:`` override may reference. ``createvm`` fills
-# these from the resolved create context; an override naming anything else is
-# a hard error (see ``render_user_data_override``) rather than a silent blank.
+# Placeholders a ``user_data:`` override may reference. ``createvm`` and
+# the manifest ``lvlab up`` path both fill these from their resolved per-VM
+# context; an override naming anything else is a hard error (see
+# ``render_user_data_override``) rather than a silent blank.
+#
+# ``fqdn`` and ``environment`` were added for #140 (lvlab up parity).
+# createvm has no environment concept and fills ``environment`` as the
+# empty string; its ``fqdn`` mirrors ``vm_name``.
 USER_DATA_PLACEHOLDERS: tuple[str, ...] = (
     "vm_name",
     "vm_hostname",
+    "fqdn",
     "default_vm_username",
     "password_hash",
+    "environment",
 )
 
 

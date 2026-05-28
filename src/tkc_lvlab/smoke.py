@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import dataclasses
+import ipaddress
 import json
 import os
 import platform
@@ -400,6 +401,77 @@ def check_images_cached(
     )
 
 
+def _compute_free_static_bands(
+    subnet: "ipaddress.IPv4Network",
+    dhcp_start: "ipaddress.IPv4Address | None",
+    dhcp_end: "ipaddress.IPv4Address | None",
+    gateway: "ipaddress.IPv4Address | None",
+) -> list[tuple["ipaddress.IPv4Address", "ipaddress.IPv4Address"]]:
+    """Return contiguous host-IP intervals outside DHCP and reserved addresses.
+
+    Reserved addresses excluded from every band: the subnet's network
+    address, broadcast address, and gateway (when supplied). DHCP-range
+    addresses are also excluded. Iteration is bounded by the subnet size
+    — fine for /24 (256 iterations) and adequate for the /16-ish range
+    typical of lab networks.
+
+    Args:
+        subnet: The network's IPv4 subnet.
+        dhcp_start: First DHCP-range address, or ``None`` if no DHCP range.
+        dhcp_end: Last DHCP-range address, or ``None`` if no DHCP range.
+        gateway: The network's gateway, or ``None`` if not declared.
+
+    Returns:
+        A list of ``(start, end)`` IPv4-address tuples covering every
+        host address neither in the DHCP range nor reserved. Inclusive
+        on both ends. Empty list when no free address exists.
+    """
+    net_int = int(subnet.network_address)
+    bcast_int = int(subnet.broadcast_address)
+    reserved: set[int] = {net_int, bcast_int}
+    if gateway is not None:
+        reserved.add(int(gateway))
+    dhcp_lo = int(dhcp_start) if dhcp_start is not None else None
+    dhcp_hi = int(dhcp_end) if dhcp_end is not None else None
+
+    bands: list[tuple[ipaddress.IPv4Address, ipaddress.IPv4Address]] = []
+    cur_start: int | None = None
+    for ip in range(net_int, bcast_int + 1):
+        in_dhcp = dhcp_lo is not None and dhcp_lo <= ip <= dhcp_hi
+        if ip in reserved or in_dhcp:
+            if cur_start is not None:
+                bands.append(
+                    (ipaddress.IPv4Address(cur_start), ipaddress.IPv4Address(ip - 1))
+                )
+                cur_start = None
+        elif cur_start is None:
+            cur_start = ip
+    if cur_start is not None:
+        bands.append(
+            (ipaddress.IPv4Address(cur_start), ipaddress.IPv4Address(bcast_int - 1))
+        )
+    return bands
+
+
+def _format_free_bands(
+    bands: Sequence[tuple["ipaddress.IPv4Address", "ipaddress.IPv4Address"]],
+) -> str:
+    """Render free-address bands for the failure message.
+
+    Args:
+        bands: ``(start, end)`` tuples from
+            :func:`_compute_free_static_bands`.
+
+    Returns:
+        A human-scannable string: ``"<none>"`` when empty, a single
+        ``start-end`` token for one band, or comma-joined tokens for
+        multiple bands.
+    """
+    if not bands:
+        return "<none>"
+    return ", ".join(f"{start}-{end}" for start, end in bands)
+
+
 def check_static_ips_free(
     cases: Sequence[SmokeCase],
     network_info: LibvirtNetworkInfo | None,
@@ -407,7 +479,11 @@ def check_static_ips_free(
     """Verify the manifest's static IPs sit outside the network's DHCP range.
 
     A static address inside the libvirt ``default`` DHCP pool races the DHCP
-    server on every boot, so the runner refuses before booting.
+    server on every boot, so the runner refuses before booting. When the
+    guard fails, the message is structured for fast scanning (network,
+    subnet, DHCP range, clashing addresses, free band) and names **both**
+    remedies — narrow the DHCP range OR move the static IPs into the free
+    band — since both are equally valid (issue #128).
 
     Args:
         cases: The resolved cases (static ones carry ``static_ip``).
@@ -417,7 +493,8 @@ def check_static_ips_free(
 
     Returns:
         A :class:`PreflightCheck`. Failing when any static IP falls in
-        ``[dhcp_start, dhcp_end]``; the message lists the offending IPs.
+        ``[dhcp_start, dhcp_end]``; the message lists the offending IPs
+        plus the free address band(s).
     """
     static_ips = [c.static_ip for c in cases if c.mode == "static" and c.static_ip]
     if not static_ips:
@@ -436,24 +513,44 @@ def check_static_ips_free(
             ),
         )
 
-    import ipaddress
-
     dhcp_start = ipaddress.ip_address(network_info.dhcp_start)
     dhcp_end = ipaddress.ip_address(network_info.dhcp_end)
     clashes = [
         ip for ip in static_ips if dhcp_start <= ipaddress.ip_address(ip) <= dhcp_end
     ]
     if clashes:
+        subnet = network_info.subnet
+        gateway = (
+            ipaddress.ip_address(network_info.gateway_ip)
+            if network_info.gateway_ip
+            else None
+        )
+        if subnet is not None:
+            bands = _compute_free_static_bands(subnet, dhcp_start, dhcp_end, gateway)
+            subnet_str = str(subnet)
+            free_band_str = _format_free_bands(bands)
+        else:
+            subnet_str = "<unknown — gateway/netmask not declared>"
+            free_band_str = "<unknown — cannot compute without subnet>"
+
+        message_lines = [
+            f"Static IP(s) fall inside the DHCP range of network "
+            f"'{network_info.name}'.",
+            f"  Network:     {network_info.name}",
+            f"  Subnet:      {subnet_str}",
+            f"  DHCP range:  {dhcp_start}-{dhcp_end}",
+            f"  Conflicts:   {', '.join(clashes)}",
+            f"  Free band:   {free_band_str}",
+            "",
+            "Two remedies (either resolves this):",
+            "  - Narrow the network's DHCP range so the static IPs sit " "outside it",
+            "    (see docs-extra/host-validation.md).",
+            "  - Move the static IPs in the manifest into the free band.",
+        ]
         return PreflightCheck(
             name="static-ips-free",
             ok=False,
-            message=(
-                "Static IP(s) fall inside the DHCP range "
-                f"[{dhcp_start}-{dhcp_end}] of network "
-                f"'{network_info.name}': {', '.join(clashes)}. Narrow the "
-                "network's DHCP range (see docs-extra/host-validation.md) so "
-                "these addresses are free."
-            ),
+            message="\n".join(message_lines),
         )
     return PreflightCheck(
         name="static-ips-free",

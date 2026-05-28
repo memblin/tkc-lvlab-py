@@ -443,6 +443,152 @@ def test_check_static_ips_free_noop_for_dhcp_only():
     assert check.ok
 
 
+# --- #128-A: structured failure message + free-band computation ---------------
+
+
+def test_compute_free_static_bands_dhcp_at_top_yields_one_band_below():
+    """/24 with DHCP 150-254 + gateway .1 → one band .2-.149 (#128-A)."""
+    import ipaddress
+
+    bands = smoke._compute_free_static_bands(
+        ipaddress.IPv4Network("192.168.122.0/24"),
+        ipaddress.IPv4Address("192.168.122.150"),
+        ipaddress.IPv4Address("192.168.122.254"),
+        ipaddress.IPv4Address("192.168.122.1"),
+    )
+    assert bands == [
+        (
+            ipaddress.IPv4Address("192.168.122.2"),
+            ipaddress.IPv4Address("192.168.122.149"),
+        )
+    ]
+
+
+def test_compute_free_static_bands_dhcp_in_middle_yields_two_bands():
+    """/24 with DHCP 100-150 + gateway .1 → bands .2-.99 and .151-.254 (#128-A)."""
+    import ipaddress
+
+    bands = smoke._compute_free_static_bands(
+        ipaddress.IPv4Network("192.168.122.0/24"),
+        ipaddress.IPv4Address("192.168.122.100"),
+        ipaddress.IPv4Address("192.168.122.150"),
+        ipaddress.IPv4Address("192.168.122.1"),
+    )
+    assert bands == [
+        (
+            ipaddress.IPv4Address("192.168.122.2"),
+            ipaddress.IPv4Address("192.168.122.99"),
+        ),
+        (
+            ipaddress.IPv4Address("192.168.122.151"),
+            ipaddress.IPv4Address("192.168.122.254"),
+        ),
+    ]
+
+
+def test_compute_free_static_bands_no_dhcp_yields_full_host_range():
+    """No DHCP range → one band of all usable hosts excluding gateway (#128-A)."""
+    import ipaddress
+
+    bands = smoke._compute_free_static_bands(
+        ipaddress.IPv4Network("192.168.122.0/24"),
+        None,
+        None,
+        ipaddress.IPv4Address("192.168.122.1"),
+    )
+    assert bands == [
+        (
+            ipaddress.IPv4Address("192.168.122.2"),
+            ipaddress.IPv4Address("192.168.122.254"),
+        )
+    ]
+
+
+def test_compute_free_static_bands_dhcp_starts_at_gateway_plus_one():
+    """/24, DHCP 2-100, gateway .1 → single band .101-.254 (#128-A)."""
+    import ipaddress
+
+    bands = smoke._compute_free_static_bands(
+        ipaddress.IPv4Network("192.168.122.0/24"),
+        ipaddress.IPv4Address("192.168.122.2"),
+        ipaddress.IPv4Address("192.168.122.100"),
+        ipaddress.IPv4Address("192.168.122.1"),
+    )
+    assert bands == [
+        (
+            ipaddress.IPv4Address("192.168.122.101"),
+            ipaddress.IPv4Address("192.168.122.254"),
+        )
+    ]
+
+
+def test_compute_free_static_bands_no_gateway_includes_host_one():
+    """No gateway → .1 isn't reserved (band starts at .1) (#128-A)."""
+    import ipaddress
+
+    bands = smoke._compute_free_static_bands(
+        ipaddress.IPv4Network("192.168.122.0/24"),
+        ipaddress.IPv4Address("192.168.122.100"),
+        ipaddress.IPv4Address("192.168.122.254"),
+        None,
+    )
+    assert bands == [
+        (
+            ipaddress.IPv4Address("192.168.122.1"),
+            ipaddress.IPv4Address("192.168.122.99"),
+        )
+    ]
+
+
+def test_check_static_ips_free_failure_message_lists_subnet_and_dhcp_and_free_band():
+    """Failure message names subnet, DHCP range, conflicts, and free band (#128-A)."""
+    cases = [
+        _case("a", mode="static", static_ip="192.168.122.190"),
+        _case("b", mode="static", static_ip="192.168.122.191"),
+    ]
+    check = check_static_ips_free(cases, _net("192.168.122.150", "192.168.122.254"))
+    assert not check.ok
+    msg = check.message
+    # network + subnet identified
+    assert "default" in msg
+    assert "192.168.122.0/24" in msg
+    # dhcp range identified
+    assert "192.168.122.150" in msg
+    assert "192.168.122.254" in msg
+    # conflicting IPs listed (both)
+    assert "192.168.122.190" in msg
+    assert "192.168.122.191" in msg
+    # free band identified (.2-.149 with .1 = gateway)
+    assert "192.168.122.2" in msg
+    assert "192.168.122.149" in msg
+
+
+def test_check_static_ips_free_failure_message_offers_both_remedies():
+    """Failure message names both remedies (narrow DHCP / move static IPs) (#128-A)."""
+    cases = [_case("a", mode="static", static_ip="192.168.122.190")]
+    check = check_static_ips_free(cases, _net("192.168.122.150", "192.168.122.254"))
+    assert not check.ok
+    msg = check.message.lower()
+    # both remedies discoverable in the message
+    assert "narrow" in msg, msg
+    assert "move" in msg, msg
+
+
+def test_check_static_ips_free_message_handles_two_free_bands():
+    """DHCP in the middle → both free bands listed in the message (#128-A)."""
+    cases = [_case("a", mode="static", static_ip="192.168.122.120")]
+    check = check_static_ips_free(cases, _net("192.168.122.100", "192.168.122.150"))
+    assert not check.ok
+    msg = check.message
+    # both free bands present
+    assert "192.168.122.2-192.168.122.99" in msg or (
+        "192.168.122.2" in msg and "192.168.122.99" in msg
+    )
+    assert "192.168.122.151-192.168.122.254" in msg or (
+        "192.168.122.151" in msg and "192.168.122.254" in msg
+    )
+
+
 def test_check_ssh_key_present_fails_when_path_missing():
     check = check_ssh_key_present(
         {"cloud_init": {"pubkey": "~/.ssh/id_ed25519.pub"}}, exists=lambda _p: False

@@ -63,7 +63,7 @@ from .config import (
     parse_hosts_file,
 )
 from .exceptions import ConfigError, LvlabError, PasswordHashError
-from .smoke import OutputFormat, SmokeError, run_smoke
+from .smoke import OutputFormat, SmokeError, build_cases, run_smoke
 from .utils.cloud_init import CloudInitIso
 from .utils.libvirt import (
     get_machine_by_vm_name,
@@ -1472,6 +1472,15 @@ def smoke(
         "-y",
         help="Skip the memory-heavy confirmation prompt (use in CI / scripts).",
     ),
+    list_only: bool = typer.Option(
+        False,
+        "--list",
+        help=(
+            "Resolve the manifest into the case list and print a preview "
+            "table (vm_name / os / mode / IP / memory / vCPUs / ssh_user); "
+            "exit 0 WITHOUT booting any VMs. Useful before a real run."
+        ),
+    ),
 ) -> None:
     """Boot every manifest VM, SSH-verify it, then tear it down (manual only).
 
@@ -1489,6 +1498,10 @@ def smoke(
     only on a libvirt host with no developer VMs at risk. Exit code is 0 when
     every machine passes, 1 on any failure (for every output format).
     """
+    if list_only:
+        _smoke_print_case_list(config)
+        raise typer.Exit(code=0)
+
     try:
         code = run_smoke(
             config,
@@ -1503,6 +1516,55 @@ def smoke(
         secho(f"smoke: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
     raise typer.Exit(code=code)
+
+
+def _smoke_print_case_list(config_path: str) -> None:
+    """Render and print the smoke preview table for ``--list``.
+
+    Reads the manifest, resolves cases via :func:`build_cases` (same path
+    the runner takes), and emits a styled Rich table to stdout. Empty
+    manifest -> plain "no machines" line, still exit 0.
+    """
+    try:
+        parsed = parse_config(config_path)
+    except (ConfigError, TypeError):
+        secho(
+            f"smoke --list: could not parse '{config_path}'.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if parsed is None:
+        typer.echo(f"smoke --list: no manifest at '{config_path}'.")
+        raise typer.Exit(code=1)
+    environment, images, config_defaults, machines = parsed
+    if not machines:
+        typer.echo("smoke --list: no machines in manifest.")
+        return
+
+    cases = build_cases(environment, images, config_defaults, machines)
+    table = styled_table(
+        title=f"lvlab smoke --list — {environment.get('name', 'default')} · "
+        f"{len(cases)} machine(s)"
+    )
+    table.add_column("vm_name", style="bold")
+    table.add_column("os")
+    table.add_column("mode")
+    table.add_column("ip")
+    table.add_column("memory", justify="right")
+    table.add_column("vcpus", justify="right")
+    table.add_column("ssh_user")
+    for case in cases:
+        table.add_row(
+            case.vm_name,
+            case.os,
+            case.mode,
+            case.static_ip or "—",
+            f"{case.memory_mib} MiB",
+            str(case.vcpus),
+            case.ssh_user,
+        )
+    get_console().print(table)
 
 
 def _up_start_existing(

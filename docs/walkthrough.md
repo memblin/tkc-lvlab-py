@@ -207,6 +207,20 @@ Output is two tables (the shared CLI table style — see
 When stdout is piped or redirected the tables render as plain text
 (no ANSI), widened so long image URLs aren't clipped.
 
+### Without a manifest (#149)
+
+`lvlab status` is also the friendly first-run landing: run it from a
+directory with no `Lvlab.yml` and it prints a "no manifest here"
+hint, the **built-in cloud-images table** (so you see what's
+downloadable out of the box), a pointer that `createvm` is the right
+tool for one-off VMs without writing a manifest, and a link to the
+project documentation site for the manifest-driven workflow. Exit 0
+— a missing manifest is missing-context, not a misconfiguration.
+
+A *malformed* `Lvlab.yml` (file exists but is structurally invalid)
+still exits 1 with the strict `Could not parse config file` error;
+only the genuine file-absent case routes to the landing.
+
 ## ssh-config
 
 Print SSH config snippets you can append to `~/.ssh/config`.

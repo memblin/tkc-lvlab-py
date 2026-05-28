@@ -11,9 +11,11 @@ out the gotchas that bite first-time users.
     as the libvirt URI.
 - **`config_defaults`** that apply to every machine — CPU, memory,
     one default disk, one default interface, cloud-init credentials.
-- **Six machines** exercising a representative spread: Debian 12
+- **Seven machines** exercising a representative spread: Debian 12
     (static), Debian 13 (static and DHCP), AlmaLinux 10 (static),
-    Fedora 44 (static), and one user-mode VM.
+    Fedora 44 (static), one user-mode VM, and a **dual-stack IPv4 + IPv6**
+    machine (`dual01`) that pairs `ip4`/`ip4gw` with `ip6`/`ip6gw` on
+    the same NIC.
 - **An `images:` block cataloguing all eight supported cloud images** —
     Debian 11/12/13, AlmaLinux 9/10, Ubuntu 22.04/24.04, and Fedora 44 —
     plus two custom intranet examples. A machine only needs an entry for

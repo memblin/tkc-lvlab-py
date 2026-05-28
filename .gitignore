@@ -170,6 +170,7 @@ cython_debug/
 
 # Custom
 .sonar
+.scannerwork/
 .envrc
 
 # Local working manifest. The canonical, tracked example lives at

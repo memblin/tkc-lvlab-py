@@ -1495,8 +1495,29 @@ def status() -> None:
     manifest's ``images:`` — labelling each image's source (``manifest``
     vs ``default``) and whether it's cached on disk — so defaults show
     up even when the manifest doesn't reference them.
+
+    Issue #149: when no ``Lvlab.yml`` is present in the current
+    directory, ``status`` renders a friendly landing (built-in images
+    table + ``createvm`` pointer + docs URL) instead of erroring — this
+    is the most common first-run command and a missing manifest is a
+    missing-context signal, not a misconfiguration. A *malformed*
+    manifest still exits 1 loudly through :func:`_load_config`.
     """
-    environment, images, config_defaults, machines = _load_config().as_tuple()
+    # Detect the genuine "no Lvlab.yml" case directly via parse_config so
+    # the landing only triggers on file-absent. Anything else (structural
+    # invalid → ConfigError; missing-file-as-TypeError some tests still
+    # simulate) routes through _load_config and keeps the loud exit-1.
+    try:
+        parsed = parse_config()
+    except (ConfigError, TypeError):
+        logger.error(CONFIG_PARSE_ERROR_MSG)
+        raise typer.Exit(code=1)
+    if parsed is None:
+        _render_no_manifest_landing()
+        return
+    environment, images, config_defaults, machines = ConfigManager.from_parsed(
+        parsed
+    ).as_tuple()
 
     uri = environment.get("libvirt_uri", DEFAULT_LIBVIRT_URI)
     env_name = environment.get("name", "no-name-lvlab")
@@ -1530,6 +1551,46 @@ def status() -> None:
 
     console.print()
     console.print(_build_images_table(images, environment, config_defaults))
+    console.print()
+
+
+_DOCS_URL = "https://github.com/memblin/tkc-lvlab-py"
+
+
+def _render_no_manifest_landing() -> None:
+    """Render the friendly landing for ``lvlab status`` without a manifest (#149).
+
+    Triggered when ``parse_config()`` returns ``None`` (the file is
+    genuinely absent — distinct from a parse error). Prints:
+
+    1. A short "no manifest here" line — informational, not an error.
+    2. The built-in cloud-images table (same shape as the happy-path
+        Images table, just with ``images=None`` so only built-ins land).
+    3. A ``createvm`` pointer with a concrete usage hint for the
+        no-manifest one-off path.
+    4. A link to the project docs for the manifest-authoring workflow.
+
+    Exits cleanly (returns to the caller, which returns to Typer with
+    exit 0). A *malformed* manifest still routes through the strict
+    error path in :func:`status`.
+    """
+    console = get_console()
+    console.print()
+    console.print("No Lvlab.yml in this directory. Showing built-in cloud images.")
+    console.print()
+    console.print(_build_images_table(images=None, environment={}, config_defaults={}))
+    console.print()
+    console.print(
+        "Need a one-off VM? Use [bold]createvm[/bold] — no manifest required:"
+    )
+    console.print()
+    console.print("    createvm web01.example debian13 --ip4 192.168.122.50")
+    console.print()
+    console.print(
+        "For the manifest-driven workflow (multi-VM environments, snapshots, "
+        "runcmd composition, IPv6 dual-stack, user_data overrides, ...) see:"
+    )
+    console.print(f"    {_DOCS_URL}")
     console.print()
 
 

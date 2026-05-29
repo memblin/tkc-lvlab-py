@@ -63,6 +63,10 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Put ``scripts/`` on sys.path so the validation harness (``scripts/validate``,
+# a dev-only tool, not shipped in the wheel) is importable as ``validate.*``
+# from its unit tests in ``tests/``.
+pythonpath = ["scripts"]
 # Coverage flags are intentionally NOT in addopts. pytest-cov's
 # default collector doesn't follow subprocess.run-spawned children,
 # so enabling --cov for the integration suite produces a misleading

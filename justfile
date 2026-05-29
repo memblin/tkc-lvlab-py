@@ -74,3 +74,11 @@ integration-createvm:
 # `just smoke ARGS="--format json --batch-size 4"`.
 smoke args="":
     cd docs-extra/smoke && uv run lvlab smoke {{args}}
+
+# CLI conformance harness: drives the installed lvlab/createvm/deletevm binaries
+# through the declarative scenario registry. `--dry-run` (cheap lane, no VMs) is
+# safe anywhere; a full run boots real prefix-scoped qemu:///system guests and
+# reaps only prefixed resources. Manual only, never in CI. Pass flags via ARGS,
+# e.g. `just validate ARGS="--yes --only cvm-deb13-dhcp"`.
+validate args="--dry-run":
+    PYTHONPATH=scripts uv run python -m validate {{args}}

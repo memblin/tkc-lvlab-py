@@ -63,7 +63,8 @@ The dual-stack scenario is meant to observe the issue **#148** extra DHCPv6
 key createvm has injected; pass `--ssh-key <path>` to enable in-guest checks.
 Without it, the harness records `in-guest checks skipped (no --ssh-key)` and the
 #148 observation is not captured. Wiring reliable key injection for the one-off
-`createvm` path (so `--ssh-key` works out of the box) is the natural next step.
+`createvm` path (so `--ssh-key` works out of the box) is tracked in
+[#150](https://github.com/memblin/tkc-lvlab-py/issues/150).
 
 ## Architecture
 

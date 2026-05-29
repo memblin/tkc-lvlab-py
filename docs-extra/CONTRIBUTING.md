@@ -373,3 +373,25 @@ lvlab destroy salt.local
 # Check that status agrees
 lvlab status
 ```
+
+### CLI conformance harness
+
+A third validation layer sits alongside the unit suite and the `lvlab smoke`
+lifecycle: the declarative **CLI conformance harness** under `scripts/validate/`
+(maintainer tool, not shipped in the wheel). It drives the installed
+`lvlab` / `createvm` / `deletevm` binaries through a scenario registry across
+two lanes — a cheap lane that asserts CLI contracts (exit codes, `--version`,
+help, error panels, the no-manifest landing) with no VMs, and a stateful lane
+that provisions real prefix-scoped `qemu:///system` guests and checks the
+`createvm` DHCP / static / dual-stack / NAT-flag matrix. Like the integration
+suite it only ever touches resources carrying its own session-unique prefix.
+
+```bash
+just validate                       # cheap lane (dry-run default) — safe anywhere
+just validate ARGS="--yes"          # full run: provisions real prefixed guests
+```
+
+It is **manual only, never wired to CI**. See
+[`scripts/validate/README.md`](../scripts/validate/README.md) for the lane
+breakdown (what each scenario proves and what it doesn't), the safety model, and
+the in-guest `--ssh-key` gap.

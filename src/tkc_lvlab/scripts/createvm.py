@@ -41,7 +41,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import click
 import typer
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
@@ -1392,6 +1391,7 @@ def _manifest_path_used(config_path: Path | None) -> Path | None:
 
 @app.command()
 def createvm(  # pylint: disable=too-many-arguments,too-many-locals
+    ctx: typer.Context,
     vm_name: str | None = typer.Argument(None, help="FQDN for the VM."),
     vm_distro: str | None = typer.Argument(None, help="Configured distro key."),
     ip4: str | None = typer.Option(
@@ -1504,15 +1504,23 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
     has_vm_args = vm_name is not None or vm_distro is not None
     has_all_vm_args = vm_name is not None and vm_distro is not None
 
-    # Argument-shape errors render through Typer/Click's boxed Error panel
-    # (#147) so ``createvm`` aligns with every other lvlab CLI surface
+    # Argument-shape errors render through Typer's boxed Error panel (#147)
+    # so ``createvm`` aligns with every other lvlab CLI surface
     # (``deletevm``, the manifest commands) instead of dropping out as a
     # plain red one-liner. ``_fail`` is reserved for operator-facing
     # errors deeper in the flow (image download, virt-install, etc.).
+    #
+    # Use ``ctx.fail()`` rather than raising ``click.UsageError`` directly:
+    # Typer >=0.27 vendors Click as ``typer._click``, and its error renderer
+    # only catches ``typer._click.exceptions.ClickException``. An exception
+    # from the top-level ``click`` package is a different class hierarchy,
+    # so it escapes unrendered (empty output, exit 1 instead of 2).
+    # ``Context.fail()`` raises from whichever hierarchy the context came
+    # from, which keeps this correct without importing Typer internals.
     if has_vm_args and not has_all_vm_args:
-        raise click.UsageError("VM_NAME and VM_DISTRO must be provided together.")
+        ctx.fail("VM_NAME and VM_DISTRO must be provided together.")
     if not init_cloud_images and not has_all_vm_args:
-        raise click.UsageError("Missing required arguments: VM_NAME and VM_DISTRO.")
+        ctx.fail("Missing required arguments: VM_NAME and VM_DISTRO.")
 
     try:
         host_config: HostConfig = load_host_config(config_path)

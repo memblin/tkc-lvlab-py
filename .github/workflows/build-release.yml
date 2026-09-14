@@ -30,7 +30,7 @@ jobs:
       contents: write
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         ref: ${{ github.ref_name }}
         # Full history + tags so uv-dynamic-versioning can resolve the
@@ -95,7 +95,7 @@ jobs:
       contents: write
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         ref: ${{ inputs.build_tag }}
         # Full history + tags so uv-dynamic-versioning can resolve the

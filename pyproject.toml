@@ -57,7 +57,7 @@ dev = [
     # `uv run black` / `uv run pylint` match the hook behavior locally
     # (black version tracks .pre-commit-config.yaml; pylint reads .pylintrc).
     # black >=26.3.1 also clears GHSA cache-filename arbitrary-write (#28).
-    "black==26.5.1",
+    "black==26.10.0",
     "pylint>=3",
 ]
 

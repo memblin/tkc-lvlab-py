@@ -592,6 +592,26 @@ def test_pinned_mac_threads_into_virt_install_and_network_config(
     assert parsed["network"]["ethernets"]["eth0"]["match"] == {"macaddress": pinned}
 
 
+def test_v1_network_config_names_the_real_guest_device(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """A v1 (ENI) image gets the in-guest device name ``enp1s0``, not ``eth0``.
+
+    Unlike the v2 ``ethernets`` key (a label), the v1 ``name`` is the
+    device ifupdown brings up. Debian 11's virtio NIC is ``enp1s0``; naming
+    it ``eth0`` relies on cloud-init renaming the NIC, and when that rename
+    doesn't happen ``ifup eth0`` targets a device that doesn't exist.
+    """
+    import yaml
+
+    result = _invoke(["testvm.local", "debian11", "--ip4", "192.168.122.50"], tmp_path)
+    assert result.exit_code == 0, result.output
+
+    parsed = yaml.safe_load((tmp_path / "testvm.local" / "network-config").read_text())
+    physical = [c for c in parsed["network"]["config"] if c["type"] == "physical"]
+    assert [c["name"] for c in physical] == ["enp1s0"]
+
+
 def test_ip4_in_dhcp_range_errors(all_external_mocked: dict, tmp_path: Path) -> None:
     """A ValueError from validate_static_ip surfaces as a clean CLI error."""
     all_external_mocked["validate_static_ip"].side_effect = ValueError(

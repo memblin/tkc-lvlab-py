@@ -919,7 +919,12 @@ def _render_cloud_init(*, vm_dir: Path, vm_name: str, ctx: _CreateVmContext) -> 
         runcmd=ctx.runcmd,
     )
 
-    iface: dict[str, Any] = {"name": "eth0", "macaddress": ctx.mac}
+    # v2's ``ethernets`` key is only a netplan label, but v1's ``name`` is
+    # the device ifupdown brings up — so v1 (Debian 11) must use the real
+    # virtio NIC name. ``eth0`` there depends on cloud-init renaming
+    # ``enp1s0``, and when it doesn't, ``ifup eth0`` finds no device.
+    iface_name = "enp1s0" if ctx.entry.network_version == 1 else "eth0"
+    iface: dict[str, Any] = {"name": iface_name, "macaddress": ctx.mac}
     nameservers: dict[str, Any] = {}
     if ctx.vm_ip is not None:
         iface["ip4"] = ctx.vm_ip

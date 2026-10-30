@@ -141,16 +141,16 @@ images:
     network_version: 2
 
   debian12:
-    image_url: https://cloud.debian.org/images/cloud/bookworm/20260518-2482/debian-12-generic-amd64-20260518-2482.qcow2
-    checksum_url: https://cloud.debian.org/images/cloud/bookworm/20260518-2482/SHA512SUMS
+    image_url: https://cloud.debian.org/images/cloud/bookworm/20261026-2643/debian-12-generic-amd64-20261026-2643.qcow2
+    checksum_url: https://cloud.debian.org/images/cloud/bookworm/20261026-2643/SHA512SUMS
     checksum_type: sha512
     network_version: 2
 
   # Debian 11 stays on network-config v1 (ENI): the v2/netplan path
   # stalls networking.service ~5 min via the ifupdown DHCPv6 hang.
   debian11:
-    image_url: https://cloud.debian.org/images/cloud/bullseye/20260518-2482/debian-11-generic-amd64-20260518-2482.qcow2
-    checksum_url: https://cloud.debian.org/images/cloud/bullseye/20260518-2482/SHA512SUMS
+    image_url: https://cloud.debian.org/images/cloud/bullseye/20260821-2577/debian-11-generic-amd64-20260821-2577.qcow2
+    checksum_url: https://cloud.debian.org/images/cloud/bullseye/20260821-2577/SHA512SUMS
     checksum_type: sha512
     network_version: 1
 
@@ -184,6 +184,13 @@ images:
     checksum_type: sha256
     network_version: 2
     os_variant: ubuntu24.04
+
+  ubuntu2604:
+    image_url: https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img
+    checksum_url: https://cloud-images.ubuntu.com/resolute/current/SHA256SUMS
+    checksum_type: sha256
+    network_version: 2
+    os_variant: ubuntu26.04
 
   fedora44:
     image_url: https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2

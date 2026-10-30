@@ -24,7 +24,7 @@ cloud-init network-config (MAC-matched NIC selection across distros).
     this directory once (or pre-seed
     `/var/lib/libvirt/images/lvlab/cloud-images/`).
 - The `default` NAT network's DHCP range narrowed to free the static
-    addresses `192.168.122.190-197` (e.g. range `.200-.254`). See
+    addresses `192.168.122.190-198` (e.g. range `.200-.254`). See
     `docs-extra/host-validation.md`.
 - An SSH keypair at `~/.ssh/id_ed25519` (its public key is referenced by
     `Lvlab.yml`'s `cloud_init.pubkey`).
@@ -115,7 +115,7 @@ unconditional `lvlab destroy --force`. The graceful wait is **bounded to
 ~14s** (issue #132): smoke VMs are ephemeral and force-destroyed
 regardless, so once that grace window elapses the `--force` step powers
 off any guest still running. This keeps a slow-to-poweroff distro from
-stalling the run — **Ubuntu cloud images** (22.04 / 24.04) effectively
+stalling the run — **Ubuntu cloud images** (22.04 / 24.04 / 26.04) effectively
 ignore the ACPI poweroff signal without a guest agent and would
 otherwise wait out a much longer window every case, while Debian /
 Fedora / AlmaLinux power off within a few seconds and are caught

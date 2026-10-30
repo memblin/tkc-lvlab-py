@@ -6,12 +6,12 @@ network:
     - type: physical
       name: {{ iface.name }}
       {%- if iface.macaddress %}
-      # Match the NIC by MAC (lvlab pins one per interface), not by the
-      # ``name`` label: the guest device is enp1s0/ens3/eth0 depending on
-      # the distro, so a name-only match silently fails to apply the
-      # static config when the device isn't literally ``eth0`` (Debian 11
-      # cloud images use enp1s0). cloud-init's v1 renderer binds the
-      # config to the device carrying this MAC.
+      # Match the NIC by MAC (lvlab pins one per interface). Unlike v2,
+      # v1's ``name`` is the in-guest device ifupdown brings up, not a
+      # label: if it differs from the kernel name (Debian 11 cloud images
+      # use enp1s0) cloud-init must rename the NIC, and when that rename
+      # doesn't happen ``ifup <name>`` finds no device. Callers therefore
+      # pass the real device name (createvm uses enp1s0 for v1 images).
       mac_address: {{ iface.macaddress }}
       {%- endif %}
       subnets:

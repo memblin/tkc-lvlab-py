@@ -261,11 +261,11 @@ def build_image_entry(key: str, cfg: dict[str, Any]) -> ImageEntry:
 BUILTIN_IMAGES: dict[str, dict[str, Any]] = {
     "debian12": {
         "image_url": (
-            "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/"
-            "debian-12-generic-amd64-20260518-2482.qcow2"
+            "https://cloud.debian.org/images/cloud/bookworm/20261026-2643/"
+            "debian-12-generic-amd64-20261026-2643.qcow2"
         ),
         "checksum_url": (
-            "https://cloud.debian.org/images/cloud/bookworm/20260518-2482/SHA512SUMS"
+            "https://cloud.debian.org/images/cloud/bookworm/20261026-2643/SHA512SUMS"
         ),
         "checksum_type": "sha512",
         "checksum_url_gpg": None,
@@ -320,11 +320,11 @@ BUILTIN_IMAGES: dict[str, dict[str, Any]] = {
     },
     "debian11": {
         "image_url": (
-            "https://cloud.debian.org/images/cloud/bullseye/20260518-2482/"
-            "debian-11-generic-amd64-20260518-2482.qcow2"
+            "https://cloud.debian.org/images/cloud/bullseye/20260821-2577/"
+            "debian-11-generic-amd64-20260821-2577.qcow2"
         ),
         "checksum_url": (
-            "https://cloud.debian.org/images/cloud/bullseye/20260518-2482/SHA512SUMS"
+            "https://cloud.debian.org/images/cloud/bullseye/20260821-2577/SHA512SUMS"
         ),
         "checksum_type": "sha512",
         "checksum_url_gpg": None,
@@ -358,6 +358,17 @@ BUILTIN_IMAGES: dict[str, dict[str, Any]] = {
         "checksum_url_gpg": None,
         "network_version": 2,
         "os_variant": "ubuntu24.04",
+    },
+    "ubuntu2604": {
+        "image_url": (
+            "https://cloud-images.ubuntu.com/resolute/current/"
+            "resolute-server-cloudimg-amd64.img"
+        ),
+        "checksum_url": "https://cloud-images.ubuntu.com/resolute/current/SHA256SUMS",
+        "checksum_type": "sha256",
+        "checksum_url_gpg": None,
+        "network_version": 2,
+        "os_variant": "ubuntu26.04",
     },
 }
 

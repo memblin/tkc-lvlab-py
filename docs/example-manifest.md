@@ -16,8 +16,8 @@ out the gotchas that bite first-time users.
     Fedora 44 (static), one user-mode VM, and a **dual-stack IPv4 + IPv6**
     machine (`dual01`) that pairs `ip4`/`ip4gw` with `ip6`/`ip6gw` on
     the same NIC.
-- **An `images:` block cataloguing all eight supported cloud images** —
-    Debian 11/12/13, AlmaLinux 9/10, Ubuntu 22.04/24.04, and Fedora 44 —
+- **An `images:` block cataloguing all nine supported cloud images** —
+    Debian 11/12/13, AlmaLinux 9/10, Ubuntu 22.04/24.04/26.04, and Fedora 44 —
     plus two custom intranet examples. A machine only needs an entry for
     the image its `os:` names; the rest are there to copy from.
 - **Cross-distro interface matching.** Each interface is keyed `eth0` (a

@@ -19,7 +19,7 @@
 # Keep the CASES table below in sync with Lvlab.yml when the default
 # image set changes (the refresh-cloud-images skill updates the images:
 # section; the machine list is maintained here + in Lvlab.yml). Concurrent
-# cases are safe because every static IP is distinct (.190-.197) and each
+# cases are safe because every static IP is distinct (.190-.198) and each
 # DHCP guest gets its own lease — no two cases contend for an address.
 set -u
 
@@ -55,6 +55,8 @@ CASES=(
   "ubuntu2204-dhcp    dhcp    -                  ubuntu"
   "ubuntu2404-static  static  192.168.122.197    ubuntu"
   "ubuntu2404-dhcp    dhcp    -                  ubuntu"
+  "ubuntu2604-static  static  192.168.122.198    ubuntu"
+  "ubuntu2604-dhcp    dhcp    -                  ubuntu"
 )
 
 lease_ip() { virsh -c "$URI" domifaddr "$1" --source lease 2>/dev/null \

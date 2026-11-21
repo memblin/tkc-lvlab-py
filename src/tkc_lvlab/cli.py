@@ -18,13 +18,14 @@ C extension is imported (Phase 2 removed that dependency).
 Phase 9 ported this surface from Click to Typer. The UX contract is
 preserved: ``-h``/``--help`` both work at every level, ``-v`` is a
 count flag (``-v`` = INFO, ``-vv`` = DEBUG), command + option names
-and defaults match the Click implementation. Typer's underlying Click
-runtime keeps the test surface (``click.testing.CliRunner`` on the
-``app`` Typer instance) working unchanged.
+and defaults match the Click implementation. Tests drive the ``app``
+Typer instance with ``typer.testing.CliRunner``. Since typer 0.29 the
+Click runtime is vendored inside typer (``typer._click``); lvlab does not
+depend on or import the ``click`` package.
 
 The standalone one-off workflow (``createvm`` / ``deletevm`` console
-scripts in :mod:`tkc_lvlab.scripts`) still uses Click directly — this
-module does not flow through them.
+scripts in :mod:`tkc_lvlab.scripts`) is also pure Typer — this module
+does not flow through them.
 """
 
 from __future__ import annotations

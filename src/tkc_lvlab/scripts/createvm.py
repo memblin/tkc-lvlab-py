@@ -110,7 +110,11 @@ _DHCP_SENTINELS = frozenset({"dhcp", "default", "auto"})
 DEFAULT_DISK_SIZE = "35G"
 DEFAULT_CPU = "2"
 DEFAULT_MEMORY = "2048"
-NAT_DHCP_LEASE_WAIT_SECONDS = 20
+# How long to wait for a NAT DHCP lease before giving up on the SSH hint.
+# The wait returns as soon as the lease appears, so a generous default costs
+# nothing on a healthy host; 20s was too short for nested/slow hosts (#169).
+# Overridable per run (``--lease-timeout``) or per host (``dhcp_lease_timeout``).
+NAT_DHCP_LEASE_WAIT_SECONDS = 120
 
 # Shared with ``lvlab up`` — CloudImage appends ``/cloud-images``.
 _CLOUD_IMAGE_BASEDIR = Path("/var/lib/libvirt/images/lvlab")
@@ -1287,7 +1291,21 @@ def _extract_lease_ip(
 def _wait_for_dhcp_lease(
     vm_hostname: str, network_name: str, *, vm_mac: str | None, timeout_seconds: int
 ) -> str | None:
-    """Poll ``virsh net-dhcp-leases`` and return the VM IPv4 CIDR when it appears."""
+    """Poll ``virsh net-dhcp-leases`` and return the VM IPv4 CIDR when it appears.
+
+    The wait is bounded by elapsed wall-clock time, not by a poll count, so a
+    slow ``virsh`` call can't stretch it past ``timeout_seconds``.
+
+    Args:
+        vm_hostname: Short hostname, used only when ``vm_mac`` is ``None``.
+        network_name: The libvirt network to query.
+        vm_mac: The pinned NIC MAC; the authoritative lease selector.
+        timeout_seconds: Maximum seconds to wait.
+
+    Returns:
+        The lease's IPv4 CIDR (e.g. ``192.168.122.5/24``), or ``None`` on timeout.
+    """
+    deadline = time.monotonic() + timeout_seconds
     with Progress(
         TextColumn("Waiting for DHCP lease"),
         BarColumn(),
@@ -1296,7 +1314,7 @@ def _wait_for_dhcp_lease(
         transient=True,
     ) as progress:
         task_id = progress.add_task("dhcp-wait", total=timeout_seconds)
-        for _ in range(timeout_seconds):
+        while True:
             try:
                 result = run_virsh(
                     _SYSTEM_URI, ["net-dhcp-leases", network_name], check=False
@@ -1308,13 +1326,19 @@ def _wait_for_dhcp_lease(
                 if lease_ip is not None:
                     progress.update(task_id, completed=timeout_seconds)
                     return lease_ip
-            time.sleep(1)
-            progress.advance(task_id)
-    return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            progress.update(task_id, completed=timeout_seconds - remaining)
+            time.sleep(min(1.0, remaining))
 
 
 def _print_completion_details(
-    *, ctx: _CreateVmContext, vm_name: str, manifest_path: Path | None
+    *,
+    ctx: _CreateVmContext,
+    vm_name: str,
+    manifest_path: Path | None,
+    lease_timeout: int = NAT_DHCP_LEASE_WAIT_SECONDS,
 ) -> None:
     """Print the password, config note, and an SSH hint (lease-aware for NAT)."""
     vm_hostname = vm_name.split(".")[0]
@@ -1352,6 +1376,15 @@ def _print_completion_details(
         typer.echo()
         return
 
+    manual_check = (
+        f"You can check manually with: sudo virsh net-dhcp-leases {ctx.network_name}"
+    )
+    if lease_timeout == 0:
+        secho("Skipping DHCP lease wait (--lease-timeout 0).", fg=typer.colors.BLUE)
+        secho(manual_check, fg=typer.colors.YELLOW)
+        typer.echo()
+        return
+
     # The MAC is pinned by createvm (ctx.mac) and passed verbatim to
     # virt-install, so it's authoritative — no need to read it back from
     # domiflist.
@@ -1359,7 +1392,7 @@ def _print_completion_details(
         vm_hostname,
         ctx.network_name,
         vm_mac=ctx.mac,
-        timeout_seconds=NAT_DHCP_LEASE_WAIT_SECONDS,
+        timeout_seconds=lease_timeout,
     )
     if lease_ip is not None:
         secho(
@@ -1371,13 +1404,12 @@ def _print_completion_details(
 
     secho(
         f"No DHCP lease was found for '{vm_hostname}' on network "
-        f"'{ctx.network_name}' within {NAT_DHCP_LEASE_WAIT_SECONDS} seconds.",
+        f"'{ctx.network_name}' within {lease_timeout} seconds. The VM may still be "
+        "booting; slow or nested hosts can need longer (--lease-timeout, or "
+        "dhcp_lease_timeout in Lvlab.yml).",
         fg=typer.colors.YELLOW,
     )
-    secho(
-        f"You can check manually with: sudo virsh net-dhcp-leases {ctx.network_name}",
-        fg=typer.colors.YELLOW,
-    )
+    secho(manual_check, fg=typer.colors.YELLOW)
     typer.echo()
 
 
@@ -1468,6 +1500,17 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
         None,
         "--public-key",
         help="Path to an additional SSH public key to append.",
+    ),
+    lease_timeout: int | None = typer.Option(
+        None,
+        "--lease-timeout",
+        min=0,
+        metavar="SECONDS",
+        help=(
+            "Seconds to wait for a NAT DHCP lease before printing the SSH hint "
+            "(0 skips the wait). Defaults to dhcp_lease_timeout from Lvlab.yml, "
+            f"else {NAT_DHCP_LEASE_WAIT_SECONDS}."
+        ),
     ),
     init_cloud_images: bool = typer.Option(
         False,
@@ -1612,8 +1655,19 @@ def createvm(  # pylint: disable=too-many-arguments,too-many-locals
             f"VM creation failed and cleanup completed: {exc}{_command_error_details(exc)}"
         )
 
+    # Precedence: --lease-timeout, then the layered dhcp_lease_timeout, then
+    # the built-in default. ``is not None`` so an explicit 0 ("don't wait")
+    # isn't mistaken for "unset".
+    if lease_timeout is None:
+        lease_timeout = host_config.dhcp_lease_timeout
+    if lease_timeout is None:
+        lease_timeout = NAT_DHCP_LEASE_WAIT_SECONDS
+
     _print_completion_details(
-        ctx=ctx, vm_name=vm_name, manifest_path=_manifest_path_used(config_path)
+        ctx=ctx,
+        vm_name=vm_name,
+        manifest_path=_manifest_path_used(config_path),
+        lease_timeout=lease_timeout,
     )
 
 

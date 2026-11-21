@@ -84,6 +84,7 @@ and must be given together.
 | `--dns`                  | Comma-separated DNS server(s) for a static `--ip4` on a **bridge** network. Required (with `--gateway`) for a bridge unless a `networks:` entry supplies it; ignored for NAT.                                                                                                                          |
 | `--search-domain`        | Comma-separated DNS search domain(s). Honored on both NAT and bridge.                                                                                                                                                                                                                                  |
 | `--public-key`           | Optional extra SSH public key file (appended after discovered defaults).                                                                                                                                                                                                                               |
+| `--lease-timeout`        | Seconds to wait for a NAT DHCP lease before printing the SSH hint (default 120; `0` skips the wait). The wait ends as soon as the lease appears. Overrides `dhcp_lease_timeout` from the config layers.                                                                                                |
 | `--init-cloud-images`    | **Deprecated** — prefer `lvlab init` (the single image-init path; it initializes the built-in defaults with no `Lvlab.yml`). Still works: downloads every catalog image that isn't cached. With no positional args, exits after; with them, pre-fetches then creates.                                  |
 | `--config`               | Path to a specific `Lvlab.yml` layered on top of the cwd `./Lvlab.yml`, the per-user `~/.Lvlab.yml`, and host-wide `/etc/Lvlab.yml` (see *Host-wide config* below). Its `images:`, `networks:`, and `default_network` win on a clash.                                                                  |
 | `--no-color`             | Disable colored output. Also honors the `NO_COLOR` environment variable. Useful on terminals that render ANSI poorly, or to keep captured logs clean.                                                                                                                                                  |
@@ -94,8 +95,12 @@ and must be given together.
 `default`, with spice graphics on the loopback. With `--ip4` (and/or
 `--ip6`) it renders the static address(es) — plus the NAT gateway(s) as
 resolver — into the guest's network-config. Without static flags the
-guest uses DHCP and `createvm` waits up to 20s for the NAT lease, then
-prints the discovered SSH target. The DHCP-lease wait remains v4-only:
+guest uses DHCP and `createvm` waits up to 120s (`--lease-timeout`) for
+the NAT lease, then prints the discovered SSH target. If no lease shows up in
+time the VM is still fine — `createvm` exits 0 and prints the
+`virsh net-dhcp-leases` command to check by hand. Slow or nested-virtualization
+hosts can take a minute or more to boot a guest; raise the wait there with
+`dhcp_lease_timeout` in `~/.Lvlab.yml` (see below). The DHCP-lease wait remains v4-only:
 `lvlab`'s SSH/lookup paths target v4, so a v6-only assignment would
 boot but the lease wait would still need a v4 address to report.
 
@@ -116,6 +121,7 @@ project override in the directory you run from.
 # (the same schema works in ~/.Lvlab.yml and a project ./Lvlab.yml)
 default_network: vlan10            # used when --network / --ip4 NETWORK is omitted
 default_vm_username: labadmin      # first-boot account when an image doesn't pin one
+dhcp_lease_timeout: 300           # seconds to wait for a NAT DHCP lease (0 = don't wait)
 networks:
   vlan10:
     gateway: 100.64.10.1
@@ -148,6 +154,8 @@ Resolution precedence per value:
     entry) → config `default_vm_username` → the key-derived family name (e.g.
     `debian`, `fedora`). So `default_vm_username` gives every VM one login
     account unless a specific image pins its own.
+- **DHCP lease wait** — `--lease-timeout` → config `dhcp_lease_timeout` → 120
+    seconds. `0` skips the wait.
 - **`runcmd`** — cloud-init commands run at first boot. The highest layer that
     sets `runcmd` wins **wholesale** (lists replace, they don't concatenate), so
     putting the same commands in both `/etc` and `~/.Lvlab.yml` won't run them

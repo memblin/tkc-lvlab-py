@@ -411,7 +411,7 @@ class NetworkDefaults:
 
 
 @dataclass(frozen=True)
-class HostConfig:
+class HostConfig:  # pylint: disable=too-many-instance-attributes
     """The layered ``Lvlab.yml`` view that ``createvm`` consumes.
 
     Built by :func:`load_host_config` from the ``/etc`` -> CWD -> ``--config``
@@ -438,6 +438,10 @@ class HostConfig:
             prepended ahead of its own ``runcmd`` — instead of the structured
             one-off template. ``None`` when no layer sets it. See
             :func:`tkc_lvlab.utils.standalone_cloud_init.render_user_data_override`.
+        dhcp_lease_timeout: Seconds ``createvm`` waits for a NAT DHCP lease
+            before giving up on the SSH hint (``0`` skips the wait), or
+            ``None`` to use the built-in default. ``--lease-timeout`` overrides
+            it.
         sources: The config files that contributed, lowest precedence first.
     """
 
@@ -447,6 +451,7 @@ class HostConfig:
     default_vm_username: str | None = None
     runcmd: list[str] = field(default_factory=list)
     user_data: dict[str, Any] | None = None
+    dhcp_lease_timeout: int | None = None
     sources: list[Path] = field(default_factory=list)
 
     def network_defaults(self, name: str) -> NetworkDefaults | None:
@@ -656,8 +661,8 @@ def load_host_config(
     ``./Lvlab.yml`` (CWD) -> an explicit ``--config`` path and deep-merges them
     (higher precedence wins per key), then extracts the ``images:`` map, the
     ``networks:`` per-network defaults, ``default_network``,
-    ``default_vm_username``, ``runcmd``, and the ``user_data`` cloud-config
-    override.
+    ``default_vm_username``, ``runcmd``, the ``user_data`` cloud-config
+    override, and ``dhcp_lease_timeout``.
 
     Args:
         config_path: An explicit ``--config`` path, or ``None`` to use only
@@ -704,6 +709,18 @@ def load_host_config(
     if user_data is not None and not isinstance(user_data, dict):
         raise ValueError("The 'user_data' value must be a mapping (cloud-config).")
 
+    # YAML booleans are ``int`` subclasses, so reject them explicitly or
+    # ``dhcp_lease_timeout: true`` would silently mean 1 second.
+    dhcp_lease_timeout = merged.get("dhcp_lease_timeout")
+    if dhcp_lease_timeout is not None and (
+        isinstance(dhcp_lease_timeout, bool)
+        or not isinstance(dhcp_lease_timeout, int)
+        or dhcp_lease_timeout < 0
+    ):
+        raise ValueError(
+            "The 'dhcp_lease_timeout' value must be a whole number of seconds >= 0."
+        )
+
     return HostConfig(
         images=images,
         networks=parse_networks(merged.get("networks")),
@@ -711,6 +728,7 @@ def load_host_config(
         default_vm_username=default_vm_username,
         runcmd=parse_runcmd(merged.get("runcmd")),
         user_data=user_data,
+        dhcp_lease_timeout=dhcp_lease_timeout,
         sources=layers,
     )
 

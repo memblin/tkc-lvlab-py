@@ -507,6 +507,38 @@ def test_load_host_config_rejects_empty_default_vm_username(tmp_path: Path) -> N
         load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
 
 
+def test_load_host_config_dhcp_lease_timeout_layers(tmp_path: Path) -> None:
+    """``dhcp_lease_timeout`` parses as int seconds; a higher layer wins (#169)."""
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    assert (
+        load_host_config(
+            system_dir=system_dir, home_dir=home_dir, cwd=cwd
+        ).dhcp_lease_timeout
+        is None
+    )
+
+    (system_dir / "Lvlab.yml").write_text("dhcp_lease_timeout: 300\n")
+    (home_dir / ".Lvlab.yml").write_text("dhcp_lease_timeout: 0\n")
+    config = load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+    # 0 is a real value ("don't wait"), not "unset" — it must beat /etc's 300.
+    assert config.dhcp_lease_timeout == 0
+
+
+@pytest.mark.parametrize("bad", ["-5", "true", "'90'", "1.5"])
+def test_load_host_config_rejects_bad_dhcp_lease_timeout(
+    tmp_path: Path, bad: str
+) -> None:
+    """Negative, boolean, string, or float timeouts are a clean ValueError.
+
+    ``true`` matters: YAML booleans are ``int`` subclasses in Python, so a naive
+    ``isinstance(v, int)`` check would accept ``dhcp_lease_timeout: true`` as 1.
+    """
+    system_dir, home_dir, cwd = _layered_dirs(tmp_path)
+    (cwd / "Lvlab.yml").write_text(f"dhcp_lease_timeout: {bad}\n")
+    with pytest.raises(ValueError, match="dhcp_lease_timeout"):
+        load_host_config(system_dir=system_dir, home_dir=home_dir, cwd=cwd)
+
+
 def test_parse_runcmd_accepts_string_list_rejects_others() -> None:
     """``runcmd`` is a list of command strings; anything else is a ValueError."""
     assert parse_runcmd(None) == []

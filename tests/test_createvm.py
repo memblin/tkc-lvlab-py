@@ -1401,3 +1401,131 @@ def test_ip6_on_bridge_with_gateway6_dns6_passes_through(
     network_config = (tmp_path / "testvm.local" / "network-config").read_text()
     assert "2001:db8:10::50/64" in network_config
     assert "2001:db8:10::1" in network_config  # gateway/DNS
+
+
+# ---------------------------------------------------------------------------
+# DHCP lease wait timeout (#169)
+# ---------------------------------------------------------------------------
+
+
+def _lease_timeout_used(mocks: dict) -> int:
+    """Return the ``timeout_seconds`` createvm passed to the lease wait."""
+    mocks["wait_for_dhcp_lease"].assert_called_once()
+    return mocks["wait_for_dhcp_lease"].call_args.kwargs["timeout_seconds"]
+
+
+def test_lease_timeout_defaults_to_120(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """No flag and no config: wait the (raised) default, not the old 20s (#169)."""
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code == 0, result.output
+    assert _lease_timeout_used(all_external_mocked) == 120
+
+
+def test_lease_timeout_flag_overrides_host_config(
+    all_external_mocked: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--lease-timeout`` beats ``dhcp_lease_timeout``, which beats the default."""
+    monkeypatch.setattr(
+        cv_mod,
+        "load_host_config",
+        lambda config_path=None: HostConfig(dhcp_lease_timeout=300),
+    )
+    result = _invoke(["testvm.local", "debian12"], tmp_path)
+    assert result.exit_code == 0, result.output
+    assert _lease_timeout_used(all_external_mocked) == 300
+
+    all_external_mocked["wait_for_dhcp_lease"].reset_mock()
+    result = _invoke(["testvm2.local", "debian12", "--lease-timeout", "45"], tmp_path)
+    assert result.exit_code == 0, result.output
+    assert _lease_timeout_used(all_external_mocked) == 45
+
+
+def test_lease_timeout_zero_skips_wait(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """``--lease-timeout 0`` never polls virsh but still says how to find the IP."""
+    result = _invoke(["testvm.local", "debian12", "--lease-timeout", "0"], tmp_path)
+    assert result.exit_code == 0, result.output
+    all_external_mocked["wait_for_dhcp_lease"].assert_not_called()
+    out = _plain(result.output)
+    assert "No DHCP lease was found" not in out
+    assert "virsh net-dhcp-leases default" in out
+
+
+def test_lease_timeout_rejects_negative(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """A negative timeout is a usage error before any VM state is created."""
+    result = _invoke(["testvm.local", "debian12", "--lease-timeout", "-1"], tmp_path)
+    assert result.exit_code == 2, result.output
+    assert not (tmp_path / "testvm.local").exists()
+
+
+def test_lease_timeout_message_names_timeout_and_flag(
+    all_external_mocked: dict, tmp_path: Path
+) -> None:
+    """On timeout, report the real wait and point at ``--lease-timeout``."""
+    result = _invoke(["testvm.local", "debian12", "--lease-timeout", "7"], tmp_path)
+    assert result.exit_code == 0, result.output
+    out = " ".join(_plain(result.output).split())
+    assert "within 7 seconds" in out
+    assert "--lease-timeout" in out
+
+
+def test_wait_for_dhcp_lease_is_bounded_by_wall_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slow ``virsh`` calls count against the timeout (#169).
+
+    The old loop ran ``timeout_seconds`` iterations of (virsh call + 1s sleep),
+    so each slow virsh call stretched the real wait past the advertised limit.
+    Here every virsh call costs 5s of fake clock: a 10s timeout must give up
+    after a couple of polls, not ten.
+    """
+    clock = {"now": 1000.0}
+    calls = {"virsh": 0}
+
+    def fake_run_virsh(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        calls["virsh"] += 1
+        clock["now"] += 5.0
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    def fake_sleep(seconds: float) -> None:
+        clock["now"] += seconds
+
+    monkeypatch.setattr(cv_mod, "run_virsh", fake_run_virsh)
+    monkeypatch.setattr(cv_mod.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(cv_mod.time, "sleep", fake_sleep)
+
+    lease = cv_mod._wait_for_dhcp_lease(
+        "testvm", "default", vm_mac="52:54:00:aa:bb:cc", timeout_seconds=10
+    )
+    assert lease is None
+    assert calls["virsh"] <= 2
+    assert clock["now"] - 1000.0 <= 10 + 5  # at most one poll past the deadline
+
+
+def test_wait_for_dhcp_lease_returns_lease_when_it_appears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lease that shows up mid-wait is returned (matched by pinned MAC)."""
+    leases = (
+        " Expiry Time   MAC address   Protocol   IP address   Hostname   Client ID\n"
+        "-----------------------------------------------------------------------\n"
+        " 2026-11-21 16:31:11   52:54:00:73:14:29   ipv4   192.168.122.127/24"
+        "   testvm   ff:56:50\n"
+    )
+    outputs = iter(["", "", leases])
+    monkeypatch.setattr(
+        cv_mod,
+        "run_virsh",
+        lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout=next(outputs)),
+    )
+    monkeypatch.setattr(cv_mod.time, "sleep", lambda s: None)
+
+    lease = cv_mod._wait_for_dhcp_lease(
+        "testvm", "default", vm_mac="52:54:00:73:14:29", timeout_seconds=60
+    )
+    assert lease == "192.168.122.127/24"
